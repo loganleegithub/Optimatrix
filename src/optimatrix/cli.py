@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 
 from optimatrix.channels import CHANNELS
+from optimatrix.decision import schedule_decision_windows
 from optimatrix.deribit_snapshot import (
     DEFAULT_DERIBIT_API,
     DeribitHttpClient,
     DeribitSourceError,
     evaluate_live_btc_snapshot,
+    preflight_public_clock,
 )
 from optimatrix.market import EventState
 from optimatrix.policy import (
@@ -24,6 +25,7 @@ from optimatrix.runtime import (
     DeribitPublicRuntimeSource,
 )
 from optimatrix.scenarios import run_all_scenarios
+from optimatrix.session import current_deribit_session
 from optimatrix.workbench import write_workbench
 
 _AUTHORIZED_WORKBENCH_PORT = 8765
@@ -179,13 +181,39 @@ def _snapshot(
         timeout_seconds=timeout_seconds,
     )
     try:
+        preflight_public_clock(client)
+        clock = client.clock.read()
+        session = current_deribit_session(
+            clock.earliest_at,
+            phase_policy=policy.session,
+        )
+        latest_session = current_deribit_session(
+            clock.latest_at,
+            phase_policy=policy.session,
+        )
+        windows = schedule_decision_windows(
+            session=session,
+            channel_id=policy.channel_id,
+            policy=policy.window,
+        )
+        target_window = next(
+            window for window in windows if window.starts_at <= clock.earliest_at < window.ends_at
+        )
+        if (
+            latest_session.session_id != session.session_id
+            or not target_window.starts_at <= clock.latest_at < target_window.ends_at
+        ):
+            raise DeribitSourceError(
+                "Deribit clock uncertainty crosses a Session or DecisionWindow boundary"
+            )
         evaluation = evaluate_live_btc_snapshot(
             client=client,
             policy=policy,
-            now=datetime.now(UTC),
+            now=clock.earliest_at,
             event_state=event_state,
             maximum_books=maximum_books,
             depth=depth,
+            target_window=target_window,
         )
     except DeribitSourceError as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False))
@@ -270,7 +298,6 @@ def _runtime(
             policy=policy,
             source=source,
             event_state=event_state,
-            now=datetime.now(UTC),
         )
         print(
             json.dumps(

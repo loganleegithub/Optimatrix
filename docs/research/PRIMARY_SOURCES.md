@@ -1,9 +1,10 @@
-# Primary exchange sources
+# Primary sources
 
 This file is an evidence index, not Authority or permission. Each source supports only the stated
-exchange fact; none validates Optimatrix thresholds, proxies, Edge, or profitability.
+mechanism or exchange fact; none validates Optimatrix thresholds, BTC 0DTE transferability, Edge,
+or profitability.
 
-**Last checked:** 2026-08-13
+**Last checked:** 2026-08-14
 
 ## Public mechanics
 
@@ -17,6 +18,35 @@ exchange fact; none validates Optimatrix thresholds, proxies, Edge, or profitabi
   — option, delivery, account-specific, and buy-versus-sell Combo fee rules.
 - [Option Combo Order](https://support.deribit.com/hc/en-us/articles/25944794271261-Option-Combo-Order)
   — one simultaneous multi-instrument limit order, RFQ non-execution meaning, TIF, and reduce-only.
+- [Combo Books](https://support.deribit.com/hc/en-us/articles/31424954956061-Combo-Books)
+  — Combo-book lifecycle and the distinction between a created Combo instrument and resting
+  counterparty liquidity.
+
+## Strategy-mechanism research
+
+- [Cboe S&P 500 Iron Condor Index methodology v4.1](https://cdn.cboe.com/api/global/us_indices/governance/CNDR_Methodology.pdf)
+  — a mature monthly SPX benchmark sells approximately 20-delta Call/Put legs, buys approximately
+  5-delta wings, and defines worst option payoff from the wider wing. It supports the bounded
+  four-leg mechanism, not BTC 0DTE or the current Optimatrix delta, sigma, width, or timing values.
+- [Bakshi and Kapadia, *Review of Financial Studies* 2003](https://doi.org/10.1093/rfs/16.2.527)
+  — supports a negative volatility-risk-premium mechanism in S&P 500 options; it does not establish
+  a BTC 0DTE entry threshold.
+- [Carr and Wu, *Review of Financial Studies* 2009](https://doi.org/10.1093/rfs/hhn038)
+  — estimates variance risk premia from model-free variance-swap replication. This bounds the
+  current nearest-ATM mark-IV versus trailing-RV measure to the name `VRP proxy`.
+- [Todorov, *Review of Financial Studies* 2010](https://doi.org/10.1093/rfs/hhp035)
+  — supports separating jump risk from diffusive variance risk; it does not establish the current
+  jump-share or exit thresholds.
+- [Hoang and Baur, *Journal of Futures Markets* 2020](https://doi.org/10.1002/fut.22144)
+  — Deribit BTC implied volatility was less accurate than ARMA/HAR at a one-day forecast horizon
+  but added information at longer horizons and in combined forecasts. It is direct evidence that
+  the current 0DTE `VRP proxy` levels remain hypotheses.
+- [Cboe 0DTE market study](https://www.cboe.com/insights/posts/0-dt-es-decoded-positioning-trends-and-market-impact)
+  — documents extensive use of limited-risk spreads in SPX 0DTE. It supports defined-risk structure
+  as a mechanism, not the transfer of SPX parameters or observed performance to BTC.
+- [Cboe practitioner note on an SPX 0DTE iron condor](https://www.cboe.com/insights/posts/henry-schwartzs-zero-day-spx-iron-condor-strategy-a-deep-dive/)
+  — expert practice favors avoiding scheduled event windows and managing late-expiry Gamma; this is
+  practitioner evidence, not a controlled study or authority for a numeric gate.
 
 ## Public market-data API
 

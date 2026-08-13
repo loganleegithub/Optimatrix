@@ -800,31 +800,48 @@ def monitor_shadow_position(
             case.exit_intent,
             None,
         )
+    latest_exit_due = (
+        _structure_expiry(case) - observation.observed_at
+    ).total_seconds() <= policy.lifecycle.latest_exit_minutes_to_expiry * 60
     if observation.data_health_blockers:
-        updated = _advance_observation(case, observation, gap=True)
+        intent = _latest_exit_intent(case, observation, policy) if latest_exit_due else None
+        updated = replace(
+            _advance_observation(case, observation, gap=True),
+            exit_intent=intent,
+            position_state=(
+                PositionState.EXIT_INTENT_FROZEN if intent is not None else PositionState.MONITORING
+            ),
+        )
         evaluation = ShadowMonitorEvaluation(
             ObservationStatus.UNKNOWN,
             observation.identity,
             observation.observed_at,
+            PositionAction.EXIT_WHOLE_PRODUCT if intent is not None else None,
+            ("LATEST_EXIT",) if intent is not None else (),
             None,
-            (),
-            None,
-            case.exit_intent,
+            intent,
             observation.data_health_blockers[0],
         )
         return updated, evaluation
 
     legs = _selected_quotes(case, observation)
     if legs is None:
-        updated = _advance_observation(case, observation, gap=True)
+        intent = _latest_exit_intent(case, observation, policy) if latest_exit_due else None
+        updated = replace(
+            _advance_observation(case, observation, gap=True),
+            exit_intent=intent,
+            position_state=(
+                PositionState.EXIT_INTENT_FROZEN if intent is not None else PositionState.MONITORING
+            ),
+        )
         return updated, ShadowMonitorEvaluation(
             ObservationStatus.UNKNOWN,
             observation.identity,
             observation.observed_at,
+            PositionAction.EXIT_WHOLE_PRODUCT if intent is not None else None,
+            ("LATEST_EXIT",) if intent is not None else (),
             None,
-            (),
-            None,
-            case.exit_intent,
+            intent,
             "SELECTED_STRUCTURE_QUOTES_MISSING",
         )
     close = _close_projection(case, observation, legs) if legs is not None else None
@@ -879,6 +896,24 @@ def monitor_shadow_position(
     )
 
 
+def _latest_exit_intent(
+    case: TradeCase,
+    observation: MarketObservation,
+    policy: BtcShortVolPolicy,
+) -> ExitIntent:
+    if case.exit_intent is not None:
+        return case.exit_intent
+    return ExitIntent(
+        category=_trigger_category("LATEST_EXIT"),
+        reason="LATEST_EXIT",
+        observation_id=observation.identity,
+        observed_at=observation.observed_at,
+        known_at=observation.known_at,
+        source="DERIBIT_TIME_BOUNDARY",
+        policy_id=policy.identity,
+    )
+
+
 def evaluate_shadow_exit(
     case: TradeCase,
     *,
@@ -894,7 +929,7 @@ def evaluate_shadow_exit(
         raise ValueError("Shadow exit known-at must be strictly later than its trigger")
     if observation.observed_at >= _structure_expiry(case):
         raise ValueError("at or after expiry, only settlement can terminalize a Position")
-    _require_next_observation(case, observation, policy, enforce_cadence=False)
+    _require_next_observation(case, observation, policy)
     legs = None if observation.data_health_blockers else _selected_quotes(case, observation)
     if legs is not None and not _quotes_strictly_after(legs, case.exit_intent.known_at):
         legs = None
@@ -1221,8 +1256,6 @@ def _require_next_observation(
     case: TradeCase,
     observation: MarketObservation,
     policy: BtcShortVolPolicy,
-    *,
-    enforce_cadence: bool = True,
 ) -> None:
     if observation.channel_id is not case.channel_id:
         raise ValueError("Position observation Channel mismatch")
@@ -1231,10 +1264,6 @@ def _require_next_observation(
     last = case.last_observed_at or case.entry_observed_at
     if last is None or observation.observed_at <= last:
         raise ValueError("Position observation must be strictly later")
-    if enforce_cadence and observation.observed_at < last + timedelta(
-        seconds=policy.lifecycle.monitoring_cadence_seconds
-    ):
-        raise ValueError("Position observation precedes Policy cadence")
 
 
 def _require_case_policy(case: TradeCase, policy: BtcShortVolPolicy) -> None:

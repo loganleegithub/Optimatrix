@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from optimatrix.decision import DecisionResult
+from optimatrix.decision import DecisionRecord, DecisionResult
 from optimatrix.engine import Btc0DteShortVolEngine
 from optimatrix.market import MarketContextEvidence
 from optimatrix.observation_ledger import ObservationLedger
@@ -65,6 +65,37 @@ def test_healthy_whole_product_with_capacity_is_candidate(policy, tmp_path) -> N
     )
     restored = ObservationLedger(tmp_path).read()
     assert restored == (assessment.record,)
+
+
+def test_embedded_observation_replays_same_policy_to_same_decision(policy, tmp_path) -> None:
+    at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    original = _assessment(
+        policy,
+        tmp_path / "original",
+        context=market_context(at),
+        quotes=base_chain(expiry=current_expiry(at), observed_at=at),
+    )
+    restored = DecisionRecord.from_object(original.record.as_object())
+    assert restored.observation is not None
+
+    engine = Btc0DteShortVolEngine(policy=policy)
+    replay = engine.assess_window(
+        ledger=ObservationLedger(tmp_path / "replay"),
+        window=restored.window,
+        observation=restored.observation,
+        capacity=ShadowCapacity.empty(
+            channel_id=policy.channel_id,
+            market_session_id=restored.window.market_session_id,
+            known_at=restored.window.input_deadline,
+        ),
+        known_at=restored.window.input_deadline,
+    )
+
+    assert replay.record.result is original.record.result
+    assert replay.record.blockers == original.record.blockers
+    assert replay.record.selected_structure == original.record.selected_structure
+    assert replay.record.risk_allocation == original.record.risk_allocation
+    assert replay.record.identity == original.record.identity
 
 
 def test_delivery_stress_uses_actual_inverse_condor_payoff(policy, tmp_path) -> None:

@@ -22,20 +22,30 @@ Stage is the permission ceiling; a future active task may only narrow it.
 active task
 
 **Stable ObservationLedger root:** `/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1`
-for the active task only
+for one process-exclusive, cross-Session append history during the active task only
 
 **Disposable offline ObservationLedger:** authorized only under caller-supplied ignored roots
 
-**Stable CaseJournal root:** the same active-task root, isolated from every legacy or foreign root
+**Stable CaseJournal root:** the same cross-Session active-task root, isolated from every legacy or
+foreign root
 
-**Continuous runtime:** one local Python process and one loopback-only Workbench authorized by the
-active task
+**Continuous runtime:** one local Python process that rolls the active Deribit Session in place at
+each `08:00 UTC` boundary, plus one loopback-only Workbench, authorized by the active task
+
+**Backend time authority:** validated Deribit UTC only for every absolute business boundary;
+monotonic process time only for elapsed waits, and browser-local time only for presentation
 
 **Private read-only account permission:** `NONE`
 
 **Orders, capital, and deployment:** `NONE`
 
 **Policy qualification / Edge claim:** `NONE`
+
+**B3 Policy correction:** current numeric filters and trigger thresholds are provisional research
+hypotheses, not Authority. The active task may correct a value only when primary-source mechanism
+evidence or a causal-market falsification shows the current value is internally inconsistent or
+unsafe; every correction must preserve the prior value in Git, rerun the same tape before and after,
+and may not be tuned to manufacture Candidates, Outcomes, win rate, or an Edge claim.
 
 ## Current implementation truth
 
@@ -46,10 +56,18 @@ active task
 - `MarketObservation` binds one bounded universe, causal timestamps, DataHealth Policy, public
   facts, and named proxies. `ObservationLedger` appends at most one DecisionRecord and one distinct
   WindowOutcome per Window under a caller-supplied root.
+- Deribit UTC is the backend clock authority. Session rollover is anchored at `08:00 UTC`;
+  source/observed and causal-known boundaries retain separate meanings in that one domain. Host
+  wall time cannot select or advance business state, monotonic time measures only durations, and
+  the Workbench browser owns local-time display conversion.
 - BTC selection directly evaluates whole same-Session four-leg structures. It separately reports
   legal, price-evaluable, and Policy-eligible populations, freezes bounded comparable alternatives,
   uses standard Combo fee projection, and treats current close depth as a diagnostic rather than an
   Entry veto.
+- Current environment, leg-selection, underwriting, allocation, and exit numerics are unqualified
+  B3 hypotheses. Their identities are frozen per Decision/Case for causal comparison, but the active
+  implementation may replace an obviously incoherent value under the correction rule above; no
+  present value is called optimal, portable across markets, or profitable.
 - A Candidate requires one `AVAILABLE` ShadowRiskAllocation with explicit USD contractual-payoff
   budget, native-BTC economics, inverse delivery-price stresses, capacity boundary, expiry, and
   release rule.
@@ -62,13 +80,16 @@ active task
 - `CaseJournal` stores an append-only accepted TradeCase prefix under a caller-supplied root and can
   discard only an unterminated final write. `ShadowCaseOutcome` keeps terminal economics separate
   from enrolled-Window future-path truth and exposes eight independent eligibility facts.
-- `runtime.py` implements one production-public, manifest-bound BTC Session process. It resumes the
-  manifest Session, recovers every accepted unresolved Case, reconstructs Shadow capacity, records
-  missed or interrupted causal cuts as `UNKNOWN`/Gap, obtains official settlement and future paths,
-  and continuously rewrites a loopback-only Workbench. A new empty root binds the Session active at
-  process start and observes its current Window immediately; missed earlier Windows remain absent
-  rather than being backfilled, and do not delay the live runtime. Its public method allowlist,
-  exact stable root, Policy identity, bounds, and port are fail-closed to the active task.
+- `runtime.py` implements one production-public BTC process whose root manifest preserves immutable
+  first-enrollment provenance rather than binding the root forever to one Session. A new empty root
+  records the Session, current Window, and boundary first encountered at process start; earlier
+  Windows remain absent rather than being backfilled. The same process rolls to the next Session at
+  each `08:00 UTC` boundary, appends that Session's Window facts to the same Ledger, recovers every
+  accepted unresolved Case across prior Sessions, and continues monitoring or official settlement
+  alongside the current Session. Restart preserves first-enrollment provenance, resumes the Session
+  then active without inventing missed facts, reconstructs only that Session's Shadow capacity, and
+  continuously rewrites one loopback-only Workbench. Its public method allowlist, exact stable root,
+  Policy identity, bounds, and port are fail-closed to the active task.
 - The deterministic acceptance population contains `96/96` DecisionRecords and `96/96`
   WindowOutcomes. In addition to fault-injected restart recovery, an append-only causal tape of raw
   Deribit-shaped responses now drives every Window through the production public translator. It

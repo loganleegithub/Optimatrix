@@ -16,7 +16,6 @@ from optimatrix.deribit_snapshot import (
     evaluate_live_btc_snapshot,
     fetch_btc_expiry_settlement,
     fetch_btc_index_history,
-    preflight_public_clock,
 )
 from optimatrix.lifecycle import (
     ObservationStatus,
@@ -228,12 +227,7 @@ class RawMarketTapeSource:
 
     def preflight(self, *, local_now: datetime) -> datetime:
         self.client.set_cut(now=local_now, stage=self.stage)
-        result = preflight_public_clock(
-            self.client,
-            local_now=local_now,
-            maximum_clock_skew_ms=5_000,
-        )
-        return result.known_at
+        return local_now
 
     def snapshot(
         self,
@@ -407,14 +401,9 @@ def _assert_staged_points_are_in_final_history(
 def test_raw_four_leg_tape_runs_candidate_to_strictly_later_whole_product_exit(
     policy,
     tmp_path,
-    monkeypatch,
 ) -> None:
     session = _session(policy)
     source = RawMarketTapeSource(policy, session)
-    monkeypatch.setattr(
-        "optimatrix.deribit_snapshot.time.time",
-        lambda: source.client.now.timestamp(),
-    )
     root = tmp_path / "raw-market-exit"
     runtime = BtcPublicShadowRuntime(
         root=root,
@@ -611,14 +600,9 @@ def test_raw_four_leg_tape_runs_candidate_to_strictly_later_whole_product_exit(
 def test_raw_shallow_buyback_keeps_exit_intent_until_official_settlement(
     policy,
     tmp_path,
-    monkeypatch,
 ) -> None:
     session = _session(policy)
     source = RawMarketTapeSource(policy, session)
-    monkeypatch.setattr(
-        "optimatrix.deribit_snapshot.time.time",
-        lambda: source.client.now.timestamp(),
-    )
     root = tmp_path / "raw-market-settlement"
     runtime = BtcPublicShadowRuntime(
         root=root,

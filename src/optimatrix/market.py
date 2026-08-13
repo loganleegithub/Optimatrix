@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
 
@@ -457,7 +457,23 @@ class MarketContext:
 
     @property
     def evidence_blockers(self) -> tuple[str, ...]:
-        return self.evidence.blockers_at(known_at_ms=int(self.now.timestamp() * 1000))
+        return self.evidence_blockers_at(self.now)
+
+    def evidence_blockers_at(self, known_at: datetime) -> tuple[str, ...]:
+        """Evaluate evidence against one causal boundary in Deribit UTC."""
+
+        if known_at.tzinfo is None:
+            raise ValueError("market context known_at must be timezone-aware")
+        normalized = known_at.astimezone(UTC)
+        known_at_ms = int(normalized.timestamp()) * 1000 + normalized.microsecond // 1000
+        return self.evidence.blockers_at(known_at_ms=known_at_ms)
+
+    def knowledge_at(self, known_at: datetime) -> MarketContextKnowledge:
+        return (
+            MarketContextKnowledge.KNOWN
+            if not self.evidence_blockers_at(known_at)
+            else MarketContextKnowledge.UNKNOWN
+        )
 
     @property
     def knowledge(self) -> MarketContextKnowledge:

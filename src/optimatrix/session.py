@@ -82,11 +82,13 @@ def current_deribit_session(
         else same_day_settlement + timedelta(days=1)
     )
     start = end - timedelta(days=1)
-    elapsed = int((normalized - start).total_seconds() // 60)
-    remaining = int((end - normalized).total_seconds() // 60)
-    phase = classify_session_phase(
-        elapsed_minutes=elapsed,
-        minutes_to_expiry=remaining,
+    elapsed_seconds = (normalized - start).total_seconds()
+    remaining_seconds = (end - normalized).total_seconds()
+    elapsed = int(elapsed_seconds // 60)
+    remaining = int(remaining_seconds // 60)
+    phase = _classify_session_phase_seconds(
+        elapsed_seconds=elapsed_seconds,
+        seconds_to_expiry=remaining_seconds,
         policy=phase_policy,
     )
     return DeribitSession(
@@ -112,13 +114,28 @@ def classify_session_phase(
 ) -> SessionPhase:
     if elapsed_minutes < 0 or minutes_to_expiry < 0:
         raise ValueError("session timing must be non-negative")
-    if minutes_to_expiry <= policy.delivery_twap_minutes_to_expiry:
+    return _classify_session_phase_seconds(
+        elapsed_seconds=elapsed_minutes * 60,
+        seconds_to_expiry=minutes_to_expiry * 60,
+        policy=policy,
+    )
+
+
+def _classify_session_phase_seconds(
+    *,
+    elapsed_seconds: float,
+    seconds_to_expiry: float,
+    policy: SessionPhasePolicy,
+) -> SessionPhase:
+    if elapsed_seconds < 0 or seconds_to_expiry < 0:
+        raise ValueError("session timing must be non-negative")
+    if seconds_to_expiry <= policy.delivery_twap_minutes_to_expiry * 60:
         return SessionPhase.DELIVERY_TWAP
-    if minutes_to_expiry <= policy.exit_only_minutes_to_expiry:
+    if seconds_to_expiry <= policy.exit_only_minutes_to_expiry * 60:
         return SessionPhase.EXIT_ONLY
-    if minutes_to_expiry <= policy.late_theta_start_minutes_to_expiry:
+    if seconds_to_expiry <= policy.late_theta_start_minutes_to_expiry * 60:
         return SessionPhase.LATE_THETA
-    if elapsed_minutes < policy.roll_reprice_minutes:
+    if elapsed_seconds < policy.roll_reprice_minutes * 60:
         return SessionPhase.ROLL_REPRICE
     return SessionPhase.CORE_CARRY
 

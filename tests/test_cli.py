@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -9,7 +10,13 @@ import pytest
 from test_workbench import _snapshot
 
 import optimatrix.cli as cli
+from optimatrix.decision import DecisionWindow
+from optimatrix.deribit_snapshot import (
+    DeribitClockReading,
+    PublicClockPreflight,
+)
 from optimatrix.policy import DEFAULT_BTC_SHORT_VOL_POLICY_PATH
+from optimatrix.session import current_deribit_session
 
 
 def _runtime_command(
@@ -190,3 +197,117 @@ def test_runtime_accepts_an_alternate_path_with_the_frozen_policy_identity_witho
     assert cast(dict[str, object], observed["runtime"])["root"] == authorized_root
     output = json.loads(capsys.readouterr().out)
     assert output["root"] == str(authorized_root)
+
+
+def _clock_reading(at: datetime) -> DeribitClockReading:
+    return DeribitClockReading(
+        earliest_at=at - timedelta(milliseconds=1),
+        estimate_at=at,
+        latest_at=at + timedelta(milliseconds=1),
+        monotonic_ns=1_000_000_000,
+    )
+
+
+def test_runtime_cli_delegates_time_authority_without_reading_host_wall(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    authorized_root = tmp_path / "authorized"
+    deribit_now = datetime(2026, 8, 14, 9, 2, tzinfo=UTC)
+    reading = _clock_reading(deribit_now)
+    events: list[str] = []
+
+    class FakeSource:
+        def __init__(self, **_kwargs: object) -> None:
+            events.append("SOURCE_CONSTRUCTED")
+
+        def clock_reading(self) -> DeribitClockReading:
+            return reading
+
+    class FakeRuntime:
+        def __init__(self, **kwargs: object) -> None:
+            events.append("RUNTIME_CONSTRUCTED")
+            assert events == [
+                "SOURCE_CONSTRUCTED",
+                "RUNTIME_CONSTRUCTED",
+            ]
+            assert kwargs["root"] == authorized_root
+            assert "now" not in kwargs
+            source = cast(FakeSource, kwargs["source"])
+            self.session = current_deribit_session(source.clock_reading().estimate_at)
+
+        def run_forever(self, *, port: int) -> int:
+            assert port == 8765
+            return 0
+
+    monkeypatch.setattr(cli, "AUTHORIZED_RUNTIME_ROOT", authorized_root)
+    monkeypatch.setattr(cli, "DeribitPublicRuntimeSource", FakeSource)
+    monkeypatch.setattr(cli, "BtcPublicShadowRuntime", FakeRuntime)
+
+    assert not hasattr(cli, "datetime")
+
+    assert cli.main(_runtime_command(authorized_root)) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["session_id"] == "2026-08-15T08:00:00Z"
+
+
+def test_snapshot_cli_projects_post_preflight_clock_and_binds_explicit_window(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stale = datetime(2026, 8, 14, 9, 1, 59, tzinfo=UTC)
+    earliest = datetime(2026, 8, 14, 9, 2, tzinfo=UTC)
+    projected = DeribitClockReading(
+        earliest_at=earliest,
+        estimate_at=earliest + timedelta(milliseconds=500),
+        latest_at=earliest + timedelta(seconds=1),
+        monotonic_ns=2_000_000_000,
+    )
+    events: list[str] = []
+    observed: dict[str, object] = {}
+
+    class FakeClock:
+        def read(self) -> DeribitClockReading:
+            events.append("CLOCK_READ")
+            return projected
+
+    class FakeClient:
+        def __init__(self, **_kwargs: object) -> None:
+            self.clock = FakeClock()
+
+    def fake_preflight(client: object) -> PublicClockPreflight:
+        assert isinstance(client, FakeClient)
+        events.append("PREFLIGHT")
+        stale_reading = DeribitClockReading(
+            earliest_at=stale,
+            estimate_at=stale,
+            latest_at=stale,
+            monotonic_ns=1_000_000_000,
+        )
+        return PublicClockPreflight(
+            server_time_ms=int(stale.timestamp() * 1000),
+            request_round_trip_ms=1,
+            known_at=stale,
+            clock_reading=stale_reading,
+        )
+
+    def fake_evaluate(**kwargs: object) -> object:
+        events.append("EVALUATE")
+        observed.update(kwargs)
+        return SimpleNamespace(as_object=lambda: {"projection": "captured"})
+
+    monkeypatch.setattr(cli, "DeribitHttpClient", FakeClient)
+    monkeypatch.setattr(cli, "preflight_public_clock", fake_preflight)
+    monkeypatch.setattr(cli, "evaluate_live_btc_snapshot", fake_evaluate)
+
+    assert cli.main(["snapshot", "--event-state", "NONE"]) == 0
+
+    assert events.index("PREFLIGHT") < events.index("CLOCK_READ") < events.index("EVALUATE")
+    assert observed["now"] == earliest
+    target_window = cast(DecisionWindow, observed["target_window"])
+    assert target_window.starts_at == datetime(2026, 8, 14, 9, tzinfo=UTC)
+    assert target_window.ends_at == datetime(2026, 8, 14, 9, 15, tzinfo=UTC)
+    assert target_window.starts_at <= earliest < target_window.ends_at
+    assert json.loads(capsys.readouterr().out) == {"projection": "captured"}

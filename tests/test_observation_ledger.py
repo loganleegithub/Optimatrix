@@ -76,12 +76,14 @@ def test_all_windows_are_counted_once_and_duplicate_is_idempotent(policy, tmp_pa
         "SHADOW_CAPACITY_UNKNOWN": 1,
         "NO_OBSERVATION": 95,
     }
+    restored = next(item for item in ledger.read() if item.window == observed_window)
+    assert restored.observation == observation
     ledger_text = ledger.path.read_text(encoding="utf-8")
-    assert '"source_timestamp_ms"' not in ledger_text
-    assert '"bid"' not in ledger_text
-    assert '"ask"' not in ledger_text
-    assert '"levels"' not in ledger_text
-    assert "trailing_realized_variance" not in ledger_text
+    assert '"source_timestamp_ms"' in ledger_text
+    assert '"received_timestamp_ms"' in ledger_text
+    assert '"bid"' in ledger_text
+    assert '"ask"' in ledger_text
+    assert "trailing_realized_variance_proxy" in ledger_text
 
 
 def test_same_window_with_different_record_conflicts(policy, tmp_path) -> None:

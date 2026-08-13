@@ -33,6 +33,18 @@ def test_session_phases_are_business_windows_not_rolling_dte_labels() -> None:
     assert twap.phase is SessionPhase.DELIVERY_TWAP
 
 
+def test_session_phase_does_not_start_early_during_the_last_partial_minute() -> None:
+    before_twap = current_deribit_session(datetime(2026, 8, 13, 7, 29, 59, 999000, tzinfo=UTC))
+    at_twap = current_deribit_session(datetime(2026, 8, 13, 7, 30, tzinfo=UTC))
+    before_exit = current_deribit_session(datetime(2026, 8, 13, 6, 29, 59, 999000, tzinfo=UTC))
+    at_exit = current_deribit_session(datetime(2026, 8, 13, 6, 30, tzinfo=UTC))
+
+    assert before_twap.phase is SessionPhase.EXIT_ONLY
+    assert at_twap.phase is SessionPhase.DELIVERY_TWAP
+    assert before_exit.phase is SessionPhase.LATE_THETA
+    assert at_exit.phase is SessionPhase.EXIT_ONLY
+
+
 def test_non_current_expiry_is_not_zero_dte_even_if_nearby() -> None:
     now = datetime(2026, 8, 12, 10, 0, tzinfo=UTC)
     session = current_deribit_session(now)

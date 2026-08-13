@@ -53,6 +53,10 @@ parts. A Gap, restart, unavailable market, or failed observation never erases th
 ## Continuous monitoring
 
 Monitoring evaluates the frozen Position at Policy cadence against a causal observation stream.
+All absolute lifecycle boundaries use the same Deribit UTC domain as the owning Window and frozen
+expiry. `observed_at` and `known_at` retain their distinct causal meanings within that one domain;
+host wall time and browser-local display time cannot advance Entry, monitoring, trigger, exit, or
+settlement state. Monotonic process time may wake the runtime but cannot establish a lifecycle fact.
 Every trigger or observation separates these categories:
 
 ```text
@@ -67,7 +71,10 @@ HUMAN       explicit authorized intervention
 
 Only categories available to the Position's truth layer may be evaluated. DataHealth failure keeps
 the observation `UNKNOWN`, preserves the Position and existing exit intent, and blocks a new
-market-risk conclusion. It is not itself proof that the market moved or that a close occurred.
+market-risk conclusion. It is not itself proof that the market moved or that a close occurred. A
+deterministic `LATEST_EXIT` boundary depends only on the frozen expiry and validated Deribit UTC;
+when that boundary is known, missing or invalid market prices must still freeze the whole-product
+ExitIntent while keeping the exit estimate `UNKNOWN`.
 
 The first known trigger freezes one `ExitIntent` with category, reason, observed-at and known-at
 boundaries, source, Policy identity, and full-product scope. If several triggers share one

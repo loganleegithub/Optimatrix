@@ -14,7 +14,14 @@ An option is `0DTE` only when its expiry is the end of the current Deribit `08:0
 Session. A rolling `TTE < 24h` label is insufficient. A Session partitions expiry and evidence; it
 is not one exclusive trading opportunity.
 
-`MarketObservationId` identifies one immutable causal market cut with source and receive
+Deribit UTC is the only absolute backend business-time domain. Session and Window ownership use
+validated Deribit time, never the host wall clock. A market source timestamp and `observed_at`
+describe when the public market fact occurred; `known_at` describes when the complete causal cut
+became available, mapped from validated Deribit response timing into that same UTC domain. They
+remain separate because a fact may occur before it can legally be used. Monotonic process time may
+measure transport and sleep durations but cannot appear in a Decision identity or market fact.
+
+`MarketObservationId` identifies one immutable causal market cut with source and causal-known
 boundaries, continuity identity, universe scope, values, method identities, and DataHealth. It may
 contain many instruments without becoming many opportunities.
 
@@ -133,8 +140,11 @@ state. It belongs to private stages and cannot be inferred from Shadow allocatio
 ## Decision result and TradeCase boundary
 
 The BTC contract owns each enrolled-Window `DecisionRecord`: it freezes DecisionWindow, Base Policy,
-known-at boundary, input and proxy identities, DataHealth, result, blockers, risk-allocation result,
-and selected structure or exact non-selection reason. One Window produces exactly one Base result:
+known-at boundary, the complete immutable causal MarketObservation input, DataHealth, result,
+blockers, risk-allocation result, and selected structure or exact non-selection reason. The retained
+observation includes its context, method and source boundaries, and full bounded quote/depth input
+so the same Window can later be replayed against a Challenger without reconstructing or changing
+the Base fact. One Window produces exactly one Base result:
 
 ```text
 UNKNOWN     required fact or calculation is unresolved

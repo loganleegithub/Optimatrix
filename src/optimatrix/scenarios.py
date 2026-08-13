@@ -36,6 +36,7 @@ from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.products import BTC
 from optimatrix.radar import BtcWindowAssessment
 from optimatrix.risk import AllocationResult, ShadowCapacity
+from optimatrix.session import current_deribit_session
 from optimatrix.structure import select_btc_0dte_condor
 
 BASE_CHAIN_INSTRUMENTS = (
@@ -424,8 +425,7 @@ def _candidate_assessment(
 
 
 def current_expiry(now: datetime) -> datetime:
-    settlement = now.astimezone(UTC).replace(hour=8, minute=0, second=0, microsecond=0)
-    return settlement if now < settlement else settlement + timedelta(days=1)
+    return current_deribit_session(now).end
 
 
 def market_context(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from optimatrix.decision import (
@@ -66,28 +66,21 @@ def evaluate_btc_short_vol_window(
             selection=None,
             allocation=None,
             session_phase=current_deribit_session(
-                window.ends_at, phase_policy=policy.session
+                window.ends_at - timedelta(microseconds=1),
+                phase_policy=policy.session,
             ).phase,
             vrp_proxy_ratio=None,
         )
-    if not window.starts_at <= observation.observed_at < window.ends_at:
-        record = _record(
+    if (
+        observation.channel_id is not window.channel_id
+        or not window.starts_at <= observation.observed_at < window.ends_at
+        or observation.known_at > window.input_deadline
+    ):
+        record = unassessed_decision_record(
             window=window,
+            decision_policy_id=policy.identity,
+            known_at=known_at,
             observation=observation,
-            policy=policy,
-            result=DecisionResult.UNKNOWN,
-            blockers=("OBSERVATION_OUTSIDE_WINDOW",),
-            known_at=decision_boundary,
-        )
-        return BtcWindowAssessment(record, None, None, session.phase, None)
-    if observation.known_at > window.input_deadline:
-        record = _record(
-            window=window,
-            observation=observation,
-            policy=policy,
-            result=DecisionResult.UNKNOWN,
-            blockers=("OBSERVATION_AFTER_INPUT_DEADLINE",),
-            known_at=decision_boundary,
         )
         return BtcWindowAssessment(record, None, None, session.phase, None)
     observed_session = current_deribit_session(
@@ -223,6 +216,7 @@ def _record(
         decision_policy_id=policy.identity,
         known_at=known_at,
         observation_id=observation.identity,
+        observation=observation,
         result=result,
         blockers=blockers,
         selected_structure_id=selected_structure_id,

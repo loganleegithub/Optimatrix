@@ -21,8 +21,10 @@ from optimatrix.deribit_snapshot import (
     DERIBIT_DELIVERY_PRICE_SOURCE_ID,
     DERIBIT_INDEX_PATH_METHOD_ID,
     DERIBIT_INDEX_PATH_SOURCE_ID,
+    DeribitClockReading,
     DeribitHttpClient,
     DeribitSourceError,
+    PublicClockPreflight,
     PublicSnapshotEvaluation,
     evaluate_live_btc_snapshot,
     fetch_btc_expiry_settlement,
@@ -53,21 +55,23 @@ AUTHORIZED_RUNTIME_ROOT = Path(
 AUTHORIZED_RUNTIME_POLICY_IDENTITY = (
     "sha256:2e9fa566556b6223fc406ca4dd0577261c04817621fc4837b568435b6e44b21e"
 )
+AUTHORIZED_WORKBENCH_PORT = 8765
 ROOT_SCHEMA_VERSION = 1
-RUNTIME_SCHEMA_VERSION = 1
+RUNTIME_SCHEMA_VERSION = 2
 PREFLIGHT_LEAD = timedelta(minutes=5)
 SETTLEMENT_DELAY = timedelta(minutes=5)
-MAXIMUM_CLOCK_SKEW_MS = 5_000
 _RUNTIME_ALLOWED_ROOT_MEMBERS = {
     "cases",
     "decision-records.jsonl",
     "future-index-path.json",
+    "future-index-paths.jsonl",
     "latest-snapshot.json",
     "manifest.json",
     "runtime-events.jsonl",
     "runtime-lock",
     "runtime-state.json",
     "settlement.json",
+    "settlements.jsonl",
     "window-outcomes.jsonl",
     "workbench",
 }
@@ -85,7 +89,13 @@ _WORKBENCH_TEMP_MEMBERS = {f".{name}.optimatrix-tmp" for name in _WORKBENCH_ALLO
 
 
 class BtcPublicRuntimeSource(Protocol):
-    def preflight(self, *, local_now: datetime) -> datetime: ...
+    def preflight(
+        self,
+        *,
+        local_now: datetime | None = None,
+    ) -> PublicClockPreflight | datetime: ...
+
+    def clock_reading(self) -> DeribitClockReading: ...
 
     def snapshot(
         self,
@@ -129,14 +139,16 @@ class DeribitPublicRuntimeSource:
         self.depth = depth
         self.client = DeribitHttpClient(timeout_seconds=timeout_seconds)
 
-    def preflight(self, *, local_now: datetime) -> datetime:
-        request_boundary = max(_utc(local_now), datetime.now(UTC))
-        result = preflight_public_clock(
-            self.client,
-            local_now=request_boundary,
-            maximum_clock_skew_ms=MAXIMUM_CLOCK_SKEW_MS,
-        )
-        return result.known_at
+    def preflight(
+        self,
+        *,
+        local_now: datetime | None = None,
+    ) -> PublicClockPreflight:
+        del local_now
+        return preflight_public_clock(self.client)
+
+    def clock_reading(self) -> DeribitClockReading:
+        return self.client.clock.read()
 
     def snapshot(
         self,
@@ -160,7 +172,7 @@ class DeribitPublicRuntimeSource:
         points = fetch_btc_index_history(self.client, known_at=known_at)
         return IndexHistoryCapture(
             points=points,
-            known_at=max(_utc(known_at), datetime.now(UTC)),
+            known_at=self.clock_reading().latest_at,
             error=None,
         )
 
@@ -313,10 +325,11 @@ class RuntimeProgress:
     restart_count: int
     recovered_case_count: int
     attempted_decision_window_ids: tuple[str, ...]
+    active_session_id: str
     preflight_attempt_count: int
     preflight_complete: bool
-    settlement_attempt_count: int
-    history_attempt_count: int
+    settlement_attempt_counts: tuple[tuple[str, int], ...]
+    history_attempt_counts: tuple[tuple[str, int], ...]
     case_attempted_at: tuple[tuple[str, datetime], ...]
     status: str
     last_error: str | None
@@ -329,17 +342,24 @@ class RuntimeProgress:
             "restart_count": self.restart_count,
             "recovered_case_count": self.recovered_case_count,
             "attempted_decision_window_ids": list(self.attempted_decision_window_ids),
+            "active_session_id": self.active_session_id,
             "preflight_attempt_count": self.preflight_attempt_count,
             "preflight_complete": self.preflight_complete,
-            "settlement_attempt_count": self.settlement_attempt_count,
-            "history_attempt_count": self.history_attempt_count,
+            "settlement_attempt_counts": dict(self.settlement_attempt_counts),
+            "history_attempt_counts": dict(self.history_attempt_counts),
             "case_attempted_at": {case_id: _iso(at) for case_id, at in self.case_attempted_at},
             "status": self.status,
             "last_error": self.last_error,
         }
 
     @classmethod
-    def from_object(cls, value: object) -> RuntimeProgress:
+    def from_object(
+        cls,
+        value: object,
+        *,
+        first_session_id: str,
+        active_session_id: str,
+    ) -> RuntimeProgress:
         item = _mapping(value, "runtime progress")
         attempted = item.get("attempted_decision_window_ids")
         if not isinstance(attempted, list) or not all(
@@ -349,8 +369,38 @@ class RuntimeProgress:
         last_error = item.get("last_error")
         if last_error is not None and not isinstance(last_error, str):
             raise ValueError("runtime last_error must be text or null")
-        if item.get("schema_version") != RUNTIME_SCHEMA_VERSION:
+        schema_version = item.get("schema_version")
+        if schema_version not in {1, RUNTIME_SCHEMA_VERSION}:
             raise ValueError("runtime progress schema is foreign")
+        settlement_attempt_counts: tuple[tuple[str, int], ...]
+        history_attempt_counts: tuple[tuple[str, int], ...]
+        if schema_version == 1:
+            legacy_expected = {
+                "schema_version",
+                "started_at",
+                "updated_at",
+                "restart_count",
+                "recovered_case_count",
+                "attempted_decision_window_ids",
+                "preflight_attempt_count",
+                "preflight_complete",
+                "settlement_attempt_count",
+                "history_attempt_count",
+                "case_attempted_at",
+                "status",
+                "last_error",
+            }
+            if set(item) != legacy_expected:
+                raise ValueError("runtime progress has foreign fields")
+            settlement_count = _integer(item, "settlement_attempt_count")
+            history_count = _integer(item, "history_attempt_count")
+            settlement_attempt_counts = (
+                ((first_session_id, settlement_count),) if settlement_count else ()
+            )
+            history_attempt_counts = ((first_session_id, history_count),) if history_count else ()
+        else:
+            settlement_attempt_counts = _attempt_counts(item, "settlement_attempt_counts")
+            history_attempt_counts = _attempt_counts(item, "history_attempt_counts")
         expected = {
             "schema_version",
             "started_at",
@@ -358,15 +408,16 @@ class RuntimeProgress:
             "restart_count",
             "recovered_case_count",
             "attempted_decision_window_ids",
+            "active_session_id",
             "preflight_attempt_count",
             "preflight_complete",
-            "settlement_attempt_count",
-            "history_attempt_count",
+            "settlement_attempt_counts",
+            "history_attempt_counts",
             "case_attempted_at",
             "status",
             "last_error",
         }
-        if set(item) != expected:
+        if schema_version == RUNTIME_SCHEMA_VERSION and set(item) != expected:
             raise ValueError("runtime progress has foreign fields")
         case_attempted_at = item.get("case_attempted_at")
         if not isinstance(case_attempted_at, dict) or not all(
@@ -380,10 +431,15 @@ class RuntimeProgress:
             restart_count=_integer(item, "restart_count"),
             recovered_case_count=_integer(item, "recovered_case_count"),
             attempted_decision_window_ids=tuple(attempted),
+            active_session_id=(
+                _text(item, "active_session_id")
+                if schema_version == RUNTIME_SCHEMA_VERSION
+                else active_session_id
+            ),
             preflight_attempt_count=_integer(item, "preflight_attempt_count"),
             preflight_complete=_boolean(item, "preflight_complete"),
-            settlement_attempt_count=_integer(item, "settlement_attempt_count"),
-            history_attempt_count=_integer(item, "history_attempt_count"),
+            settlement_attempt_counts=settlement_attempt_counts,
+            history_attempt_counts=history_attempt_counts,
             case_attempted_at=tuple(
                 sorted(
                     (
@@ -534,7 +590,7 @@ class StableRuntimeRoot:
 
 
 class BtcPublicShadowRuntime:
-    """One Session-specific process driving the existing BTC Engine and records."""
+    """One continuous process driving the current BTC Session and all accepted Cases."""
 
     def __init__(
         self,
@@ -543,16 +599,40 @@ class BtcPublicShadowRuntime:
         policy: BtcShortVolPolicy,
         source: BtcPublicRuntimeSource,
         event_state: EventState,
-        now: datetime,
+        now: datetime | None = None,
         target_session: DeribitSession | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
-        boundary = _utc(now)
+        requested_root = Path(os.path.abspath(os.fspath(root.expanduser())))
+        self._authorized_runtime_root = requested_root == AUTHORIZED_RUNTIME_ROOT
+        if self._authorized_runtime_root:
+            if now is not None or target_session is not None:
+                raise ValueError("authorized runtime root requires the Deribit UTC clock")
+            if policy.identity != AUTHORIZED_RUNTIME_POLICY_IDENTITY:
+                raise ValueError("authorized runtime root requires the authorized frozen Policy")
+            if event_state is not EventState.NONE:
+                raise ValueError("authorized runtime root requires the NONE event state")
+            if type(source) is not DeribitPublicRuntimeSource:
+                raise ValueError("authorized runtime root requires the production public source")
         self.policy = policy
         self.source = source
         self.event_state = event_state
         self.sleep = sleep
+        self._uses_deribit_clock = now is None
+        startup_preflight: PublicClockPreflight | None = None
+        startup_preflight_attempt_count = 0
+        if now is None:
+            startup_preflight, startup_preflight_attempt_count = self._establish_startup_clock()
+            boundary = _unambiguous_clock_boundary(
+                startup_preflight.clock_reading,
+                policy=policy,
+            )
+        else:
+            boundary = _utc(now)
+        self._fixed_session = target_session is not None
         self._audit_lock = Lock()
+        self._last_audit_at: datetime | None = None
+        self._business_time_floor = boundary
         candidate_session = target_session or current_deribit_session(
             boundary,
             phase_policy=policy.session,
@@ -566,15 +646,24 @@ class BtcPublicShadowRuntime:
         )
         self.manifest = self.root_owner.acquire()
         try:
-            self.session = _manifest_session(self.manifest, policy)
+            first_enrollment_session = _manifest_session(self.manifest, policy)
             self.engine = Btc0DteShortVolEngine(policy=policy)
-            self.windows = self.engine.decision_windows(at=self.session.start)
-            if (
-                len(self.windows) != 96
-                or tuple(window.market_session_id for window in self.windows)
-                != (self.session.session_id,) * 96
-            ):
-                raise ValueError("runtime target Session does not produce the expected 96 Windows")
+            active_session = current_deribit_session(
+                boundary,
+                phase_policy=policy.session,
+            )
+            self.session = (
+                first_enrollment_session
+                if self._fixed_session
+                else current_deribit_session(
+                    active_session.start,
+                    phase_policy=policy.session,
+                )
+            )
+            self._sessions: dict[str, DeribitSession] = {}
+            self._windows_by_session: dict[str, tuple[DecisionWindow, ...]] = {}
+            self._register_sessions(first_enrollment_session, self.session)
+            self.windows = self._windows_by_session[self.session.session_id]
             self.ledger = ObservationLedger(self.root_owner.root)
             self.journal = CaseJournal(self.root_owner.root)
             recovered_records, recovered_outcomes = self.ledger.recover()
@@ -591,24 +680,70 @@ class BtcPublicShadowRuntime:
             self.cases = {case.identity: case for case in recovered}
             self.pending_observations: dict[str, PublicSnapshotEvaluation] = {}
             self.latest_snapshot = self._read_latest_snapshot(boundary)
-            self.settlement_fact = self._read_settlement()
-            self.history_capture = self._read_history_capture()
+            self.settlement_facts = self._read_settlements()
+            self.history_captures = self._read_history_captures()
             recovered_unresolved = sum(case.outcome is None for case in recovered)
             self.progress = self._start_progress(boundary, recovered_unresolved)
+            durable_floor = max(
+                self.progress.updated_at,
+                self._last_audit_at or self.progress.updated_at,
+            )
+            self._business_time_floor = max(self._business_time_floor, durable_floor)
+            if startup_preflight is not None:
+                if startup_preflight.clock_reading.latest_at < self._business_time_floor:
+                    raise DeribitSourceError(
+                        "Deribit UTC preflight is behind durable runtime business time"
+                    )
+                self.progress = replace(
+                    self.progress,
+                    preflight_attempt_count=startup_preflight_attempt_count,
+                    preflight_complete=True,
+                    updated_at=max(startup_preflight.known_at, self._business_time_floor),
+                    status="PREFLIGHT_COMPLETE",
+                    last_error=None,
+                )
             self._validate_durable_population()
             self._validate_progress()
             self._write_progress(self.progress)
             bind_audit = getattr(self.source, "bind_audit", None)
             if callable(bind_audit):
                 bind_audit(self._audit_public_call)
+            if startup_preflight is not None:
+                self._audit(
+                    "DERIBIT_PUBLIC_CALL",
+                    startup_preflight.known_at,
+                    json.dumps(
+                        {
+                            "method": "public/get_time",
+                            "params": {},
+                            "timeout_seconds": 10.0,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
+                )
+                self._audit(
+                    "PUBLIC_PREFLIGHT_COMPLETE",
+                    startup_preflight.known_at,
+                    "Deribit UTC clock established before stable-root ownership",
+                )
             self._reconcile_candidate_cases(boundary)
             self._reconcile_inflight_gaps(boundary)
             self._reconcile_expired_entries(boundary)
             self._reconcile_monitoring_gaps(boundary)
-            self._reconcile_settlement(boundary)
+            for session in self._sessions.values():
+                self._reconcile_settlement(session, boundary)
             self._validate_durable_population()
-            self._audit("RUNTIME_STARTED", boundary, f"restart_count={self.progress.restart_count}")
-            self.publish(boundary)
+            startup_known_at = (
+                startup_preflight.known_at if startup_preflight is not None else boundary
+            )
+            self._audit(
+                "RUNTIME_STARTED",
+                startup_known_at,
+                f"restart_count={self.progress.restart_count}",
+            )
+            self.publish(startup_known_at)
         except BaseException:
             self.root_owner.release()
             raise
@@ -620,8 +755,16 @@ class BtcPublicShadowRuntime:
         self.close()
 
     @property
+    def settlement_fact(self) -> ExpirySettlementFact | None:
+        return self.settlement_facts.get(self.session.session_id)
+
+    @property
+    def history_capture(self) -> IndexHistoryCapture | None:
+        return self.history_captures.get(self.session.session_id)
+
+    @property
     def finalization_at(self) -> datetime:
-        return max(self._outcome_horizon(window)[1] for window in self.windows)
+        return self._session_finalization_at(self.session)
 
     @property
     def complete(self) -> bool:
@@ -631,11 +774,37 @@ class BtcPublicShadowRuntime:
             decisions.complete
             and outcomes.complete
             and self.settlement_fact is not None
-            and all(case.outcome is not None for case in self.cases.values())
+            and all(
+                case.outcome is not None
+                for case in self.cases.values()
+                if self._case_session(case).session_id == self.session.session_id
+            )
         )
 
-    def tick(self, now: datetime) -> None:
-        boundary = _utc(now)
+    def tick(self, now: datetime | None = None) -> None:
+        try:
+            reading = self._tick_clock_reading(now)
+        except DeribitSourceError as initial_error:
+            try:
+                reading = self._reanchor_clock(initial_error)
+            except DeribitSourceError as exc:
+                boundary = self._business_time_floor
+                detail = _safe_error(exc)
+                self._set_status("CLOCK_UNVERIFIED", boundary, detail)
+                self._audit("DERIBIT_CLOCK_UNVERIFIED", boundary, detail)
+                self.publish(boundary)
+                raise RuntimeError(
+                    "bounded Deribit clock re-anchor failed; runtime stopped"
+                ) from exc
+        if self._clock_reading_is_ambiguous(reading):
+            self._set_status(
+                "CLOCK_BOUNDARY_UNCERTAIN",
+                reading.earliest_at,
+                "Deribit UTC uncertainty crosses a Session or DecisionWindow boundary",
+            )
+            self.publish(reading.earliest_at)
+            return
+        boundary = reading.earliest_at
         if boundary < self.session.start - PREFLIGHT_LEAD:
             self._set_status("WAITING_FOR_PREFLIGHT", boundary)
             self.publish(boundary)
@@ -646,6 +815,9 @@ class BtcPublicShadowRuntime:
             self._set_status("WAITING_FOR_SESSION", boundary)
             self.publish(boundary)
             return
+
+        if not self._fixed_session and boundary >= self.session.end:
+            self._roll_session(boundary)
 
         self._finalize_due_windows(boundary)
         self._reconcile_candidate_cases(boundary)
@@ -682,18 +854,13 @@ class BtcPublicShadowRuntime:
                     self.pending_observations[current_window.identity] = evaluation
         if due_cases:
             self._advance_cases(due_cases, evaluation, boundary)
-        if boundary >= self.session.end + SETTLEMENT_DELAY:
-            self._capture_settlement(boundary)
-            if self.settlement_fact is not None:
-                effective_known_at = max(effective_known_at, self.settlement_fact.known_at)
-            self._reconcile_settlement(effective_known_at)
-        self._finalize_due_windows(effective_known_at)
-        self._reconcile_candidate_cases(effective_known_at)
-        if effective_known_at >= self.finalization_at and self._settlement_resolved:
-            self._finalize_outcomes(effective_known_at)
-            if self.history_capture is not None:
-                effective_known_at = max(effective_known_at, self.history_capture.known_at)
-        if self.complete:
+        self._finalize_due_windows(boundary)
+        self._reconcile_candidate_cases(boundary)
+        effective_known_at = max(
+            effective_known_at,
+            self._process_expired_sessions(boundary),
+        )
+        if self._fixed_session and self.complete:
             self._set_status("COMPLETE_PENDING_TRADER_ACCEPTANCE", effective_known_at)
         elif self.progress.status not in {
             "MARKET_GAP",
@@ -705,26 +872,27 @@ class BtcPublicShadowRuntime:
         self.publish(effective_known_at)
 
     def run_forever(self, *, port: int) -> int:
+        if self._authorized_runtime_root and port != AUTHORIZED_WORKBENCH_PORT:
+            raise ValueError("authorized runtime root requires the authorized Workbench port")
         server = _WorkbenchServer(self.root_owner.root / "workbench", port)
         server.start()
-        self._audit("WORKBENCH_LISTENING", datetime.now(UTC), f"http://127.0.0.1:{port}/")
+        boundary = self._current_clock_boundary()
+        self._audit("WORKBENCH_LISTENING", boundary, f"http://127.0.0.1:{port}/")
         try:
-            while not self.complete:
-                self.tick(datetime.now(UTC))
-                self.sleep(1.0 if datetime.now(UTC) >= self.session.start else 30.0)
-            self.tick(datetime.now(UTC))
             while True:
-                self.sleep(30.0)
+                self.tick()
+                self.sleep(1.0)
         except KeyboardInterrupt:
-            self._set_status("STOPPED_FOR_RESTART", datetime.now(UTC))
-            self.publish(datetime.now(UTC))
+            boundary = self._current_clock_boundary()
+            self._set_status("STOPPED_FOR_RESTART", boundary)
+            self.publish(boundary)
             return 0
         finally:
             server.stop()
             self.close()
 
     def publish(self, now: datetime) -> None:
-        boundary = _utc(now)
+        boundary = max(_utc(now), self.progress.updated_at)
         decisions = self.ledger.summarize(expected_windows=self.windows).as_object()
         outcomes = self.ledger.summarize_outcomes(expected_windows=self.windows).as_object()
         current_window = next(
@@ -741,7 +909,10 @@ class BtcPublicShadowRuntime:
             "recovered_case_count": self.progress.recovered_case_count,
             "restart_count": self.progress.restart_count,
             "current_window_id": current_window.identity if current_window is not None else None,
-            "attempted_window_count": len(self.progress.attempted_decision_window_ids),
+            "attempted_window_count": len(
+                set(self.progress.attempted_decision_window_ids)
+                & {window.identity for window in self.windows}
+            ),
             "last_error": self.progress.last_error,
         }
         write_workbench(
@@ -756,6 +927,198 @@ class BtcPublicShadowRuntime:
     def close(self) -> None:
         self.root_owner.release()
 
+    def _establish_startup_clock(self) -> tuple[PublicClockPreflight, int]:
+        """Calibrate Deribit UTC before the stable root can be touched."""
+
+        error: DeribitSourceError | None = None
+        for attempt in range(1, 4):
+            try:
+                result = self.source.preflight()
+            except DeribitSourceError as exc:
+                error = exc
+                if attempt < 3:
+                    self.sleep(float(2 ** (attempt - 1)))
+                continue
+            if not isinstance(result, PublicClockPreflight):
+                raise DeribitSourceError(
+                    "production startup requires a validated Deribit clock preflight"
+                )
+            projected = self.source.clock_reading()
+            if not isinstance(projected, DeribitClockReading):
+                raise DeribitSourceError(
+                    "production startup requires a projected Deribit clock reading"
+                )
+            return (
+                replace(
+                    result,
+                    clock_reading=projected,
+                    known_at=projected.latest_at,
+                ),
+                attempt,
+            )
+        detail = str(error) if error is not None else "Deribit clock preflight failed"
+        raise DeribitSourceError(
+            f"bounded Deribit clock preflight exhausted three attempts: {detail}"
+        )
+
+    def _tick_clock_reading(self, now: datetime | None) -> DeribitClockReading:
+        if now is not None:
+            if self._uses_deribit_clock:
+                raise ValueError("production runtime time cannot be overridden by host wall time")
+            boundary = _utc(now)
+            return DeribitClockReading(
+                earliest_at=boundary,
+                estimate_at=boundary,
+                latest_at=boundary,
+                monotonic_ns=0,
+            )
+        if not self._uses_deribit_clock:
+            boundary = self.progress.updated_at
+            return DeribitClockReading(
+                earliest_at=boundary,
+                estimate_at=boundary,
+                latest_at=boundary,
+                monotonic_ns=0,
+            )
+        reading = self.source.clock_reading()
+        if not isinstance(reading, DeribitClockReading):
+            raise DeribitSourceError("runtime source returned a foreign Deribit clock reading")
+        if reading.latest_at < self._business_time_floor:
+            raise DeribitSourceError(
+                "Deribit UTC reading is behind the committed runtime business boundary"
+            )
+        earliest_at = max(reading.earliest_at, self._business_time_floor)
+        normalized = DeribitClockReading(
+            earliest_at=earliest_at,
+            estimate_at=max(earliest_at, reading.estimate_at),
+            latest_at=reading.latest_at,
+            monotonic_ns=reading.monotonic_ns,
+        )
+        self._business_time_floor = normalized.earliest_at
+        return normalized
+
+    def _reanchor_clock(self, initial_error: DeribitSourceError) -> DeribitClockReading:
+        if not self._uses_deribit_clock:
+            raise initial_error
+        error = initial_error
+        for attempt in range(1, 4):
+            try:
+                result = self.source.preflight()
+                if not isinstance(result, PublicClockPreflight):
+                    raise DeribitSourceError(
+                        "runtime clock re-anchor requires a validated Deribit preflight"
+                    )
+                reading = self._tick_clock_reading(None)
+            except DeribitSourceError as exc:
+                error = exc
+                self._audit(
+                    "DERIBIT_CLOCK_REANCHOR_ATTEMPT_FAILED",
+                    self._business_time_floor,
+                    f"attempt={attempt}:{_safe_error(exc)}",
+                )
+                if attempt < 3:
+                    self.sleep(float(2 ** (attempt - 1)))
+                continue
+            self._audit(
+                "DERIBIT_CLOCK_REANCHORED",
+                reading.latest_at,
+                f"attempt={attempt}:initial={_safe_error(initial_error)}",
+            )
+            return reading
+        raise error
+
+    def _current_clock_boundary(self) -> datetime:
+        try:
+            return self._tick_clock_reading(None).earliest_at
+        except DeribitSourceError:
+            return self._business_time_floor
+
+    def _clock_reading_is_ambiguous(self, reading: DeribitClockReading) -> bool:
+        return _clock_scope(reading.earliest_at, self.policy) != _clock_scope(
+            reading.latest_at,
+            self.policy,
+        )
+
+    def _roll_session(self, now: datetime) -> None:
+        next_session = current_deribit_session(now, phase_policy=self.policy.session)
+        if next_session.session_id == self.session.session_id:
+            return
+        prior_session = self.session
+        self._register_sessions(prior_session, next_session)
+        self.session = next_session
+        self.windows = self._windows_by_session[next_session.session_id]
+        self.latest_snapshot = _waiting_snapshot(next_session, now)
+        self.progress = replace(
+            self.progress,
+            active_session_id=next_session.session_id,
+            updated_at=now,
+            status="SESSION_ROLLED",
+            last_error=None,
+        )
+        self._write_progress(self.progress)
+        self._audit(
+            "SESSION_ROLLED",
+            now,
+            f"prior={prior_session.session_id}:current={next_session.session_id}",
+            session=next_session,
+        )
+
+    def _register_sessions(
+        self,
+        first: DeribitSession,
+        last: DeribitSession,
+    ) -> None:
+        if last.end < first.end:
+            raise ValueError("active Session cannot precede first runtime enrollment")
+        cursor = first
+        while cursor.end <= last.end:
+            if cursor.session_id not in self._sessions:
+                windows = self.engine.decision_windows(at=cursor.start)
+                if (
+                    len(windows) != 96
+                    or tuple(window.market_session_id for window in windows)
+                    != (cursor.session_id,) * 96
+                ):
+                    raise ValueError(
+                        "runtime Session does not produce the expected 96 calendar Windows"
+                    )
+                self._sessions[cursor.session_id] = cursor
+                self._windows_by_session[cursor.session_id] = windows
+            if cursor.session_id == last.session_id:
+                return
+            cursor = current_deribit_session(
+                cursor.end,
+                phase_policy=self.policy.session,
+            )
+        raise ValueError("active Session is not reachable from first runtime enrollment")
+
+    def _window_index(self) -> dict[str, DecisionWindow]:
+        return {
+            window.identity: window
+            for windows in self._windows_by_session.values()
+            for window in windows
+        }
+
+    def _session_for_window(self, window: DecisionWindow) -> DeribitSession:
+        session = self._sessions.get(window.market_session_id)
+        if session is None:
+            raise ValueError("DecisionWindow belongs to an unenrolled runtime Session")
+        return session
+
+    def _case_session(self, case: TradeCase) -> DeribitSession:
+        allocation = case.risk_allocation
+        session_id = _text(allocation, "market_session_id")
+        session = self._sessions.get(session_id)
+        if session is None:
+            raise ValueError("TradeCase belongs to an unenrolled runtime Session")
+        return session
+
+    def _session_finalization_at(self, session: DeribitSession) -> datetime:
+        return max(
+            self._outcome_horizon(window, session)[1]
+            for window in self._windows_by_session[session.session_id]
+        )
+
     def _start_progress(self, now: datetime, recovered_count: int) -> RuntimeProgress:
         if not self.root_owner.state_path.exists():
             return RuntimeProgress(
@@ -764,18 +1127,26 @@ class BtcPublicShadowRuntime:
                 restart_count=0,
                 recovered_case_count=recovered_count,
                 attempted_decision_window_ids=(),
+                active_session_id=self.session.session_id,
                 preflight_attempt_count=0,
                 preflight_complete=False,
-                settlement_attempt_count=0,
-                history_attempt_count=0,
+                settlement_attempt_counts=(),
+                history_attempt_counts=(),
                 case_attempted_at=(),
                 status="STARTING",
                 last_error=None,
             )
-        prior = RuntimeProgress.from_object(_read_json(self.root_owner.state_path))
+        prior = RuntimeProgress.from_object(
+            _read_json(self.root_owner.state_path),
+            first_session_id=self.manifest.target_session_id,
+            active_session_id=self.session.session_id,
+        )
+        if prior.active_session_id not in self._sessions:
+            raise ValueError("runtime progress contains a foreign active Session")
         return replace(
             prior,
-            updated_at=now,
+            active_session_id=self.session.session_id,
+            updated_at=max(prior.updated_at, now),
             restart_count=prior.restart_count + 1,
             recovered_case_count=recovered_count,
             status="RECOVERED",
@@ -783,6 +1154,8 @@ class BtcPublicShadowRuntime:
         )
 
     def _write_progress(self, progress: RuntimeProgress) -> None:
+        if hasattr(self, "progress") and progress.updated_at < self.progress.updated_at:
+            progress = replace(progress, updated_at=self.progress.updated_at)
         self.progress = progress
         _atomic_json(self.root_owner.state_path, progress.as_object())
 
@@ -805,7 +1178,7 @@ class BtcPublicShadowRuntime:
                 )
             )
             try:
-                completed_at = self.source.preflight(local_now=now)
+                completed = self.source.preflight(local_now=now)
             except DeribitSourceError as exc:
                 error = exc
                 self._audit(
@@ -816,7 +1189,9 @@ class BtcPublicShadowRuntime:
                 if attempt < 3:
                     self.sleep(float(2 ** (attempt - 1)))
                 continue
-            effective_known_at = _utc(completed_at) if isinstance(completed_at, datetime) else now
+            effective_known_at = (
+                _utc(completed) if isinstance(completed, datetime) else _utc(completed.known_at)
+            )
             self._write_progress(
                 replace(
                     self.progress,
@@ -878,18 +1253,19 @@ class BtcPublicShadowRuntime:
                 ),
                 now,
             )
+            completed_at = evaluation.observation.known_at
             self._audit(
                 "PUBLIC_MARKET_CUT_COMPLETE",
-                now,
+                completed_at,
                 f"observation={evaluation.observation.identity}",
             )
-            self._set_status("RUNNING", now)
+            self._set_status("RUNNING", completed_at)
             return evaluation
         except DeribitSourceError as exc:
             self._set_status("MARKET_GAP", now, str(exc))
             self._audit("PUBLIC_MARKET_GAP", now, _safe_error(exc))
             self.latest_snapshot = _gap_snapshot(
-                self.session,
+                self._session_for_window(window),
                 window,
                 now,
                 _safe_error(exc),
@@ -912,7 +1288,7 @@ class BtcPublicShadowRuntime:
     def _finalize_due_windows(self, now: datetime) -> None:
         recorded = {record.window.identity for record in self.ledger.read()}
         attempted = set(self.progress.attempted_decision_window_ids)
-        for window in self.windows:
+        for window in sorted(self._window_index().values(), key=lambda item: item.starts_at):
             if (
                 window.identity in recorded
                 or window.identity not in attempted
@@ -920,6 +1296,17 @@ class BtcPublicShadowRuntime:
             ):
                 continue
             evaluation = self.pending_observations.pop(window.identity, None)
+            finalization_cadence = timedelta(
+                seconds=self.policy.lifecycle.monitoring_cadence_seconds
+            )
+            if now > window.input_deadline + finalization_cadence:
+                evaluation = None
+                self._audit(
+                    "DECISION_FINALIZATION_CADENCE_MISSED",
+                    now,
+                    f"window={window.identity}",
+                    session=self._session_for_window(window),
+                )
             capacity = self._capacity(window, window.input_deadline)
             assessment = self.engine.assess_window(
                 ledger=self.ledger,
@@ -937,6 +1324,7 @@ class BtcPublicShadowRuntime:
                 "DECISION_WINDOW_RECORDED",
                 now,
                 f"window={window.identity}:result={assessment.record.result.value}",
+                session=self._session_for_window(window),
             )
             if assessment.record.result is DecisionResult.CANDIDATE:
                 self._open_candidate_case(assessment.record, now)
@@ -968,6 +1356,9 @@ class BtcPublicShadowRuntime:
         for case in self.cases.values():
             if case.outcome is not None:
                 continue
+            case_session = self._case_session(case)
+            if case_session.session_id != self.session.session_id or now >= case_session.end:
+                continue
             last = case.last_observed_at or case.decision_boundary
             if case.identity in attempts:
                 last = max(last, attempts[case.identity])
@@ -981,16 +1372,23 @@ class BtcPublicShadowRuntime:
         for case_id, case in tuple(self.cases.items()):
             if case.outcome is not None:
                 continue
+            case_session = self._case_session(case)
+            gap_boundary = min(now, case_session.end)
             boundary = max(
                 case.last_observed_at or case.decision_boundary,
                 attempts.get(case_id, case.decision_boundary),
             )
-            if now <= boundary + cadence * 2 or case.gap_observed:
+            if gap_boundary <= boundary + cadence * 2 or case.gap_observed:
                 continue
             gapped = replace(case, gap_observed=True)
             self.journal.append(gapped)
             self.cases[case_id] = gapped
-            self._audit("LIFECYCLE_CADENCE_GAP", now, f"case={case_id}")
+            self._audit(
+                "LIFECYCLE_CADENCE_GAP",
+                now,
+                f"case={case_id}",
+                session=case_session,
+            )
 
     def _reconcile_inflight_gaps(self, now: datetime) -> None:
         recorded = {record.window.identity for record in self.ledger.read()}
@@ -1034,10 +1432,9 @@ class BtcPublicShadowRuntime:
             self._audit("RESTART_CAUSAL_GAP", now, detail)
 
     def _reconcile_expired_entries(self, now: datetime) -> None:
-        if now < self.session.end:
-            return
         for case_id, case in tuple(self.cases.items()):
-            if case.entry_final:
+            case_session = self._case_session(case)
+            if case.entry_final or now < case_session.end:
                 continue
             if not case.gap_observed:
                 case = replace(case, gap_observed=True)
@@ -1051,7 +1448,12 @@ class BtcPublicShadowRuntime:
                 known_at=known_at,
             )
             self.cases[case_id] = terminal
-            self._audit("EXPIRED_ENTRY_TERMINALIZED", known_at, f"case={case_id}")
+            self._audit(
+                "EXPIRED_ENTRY_TERMINALIZED",
+                known_at,
+                f"case={case_id}",
+                session=case_session,
+            )
 
     def _required_instruments(self, cases: Sequence[TradeCase]) -> tuple[str, ...]:
         names: set[str] = set()
@@ -1070,12 +1472,34 @@ class BtcPublicShadowRuntime:
         observation = evaluation.observation if evaluation is not None else None
         for prior in cases:
             case = self.cases[prior.identity]
+            case_session = self._case_session(case)
             if case.outcome is not None:
                 continue
+            if observation is not None and any(
+                quote.expiry != case_session.end for quote in observation.quotes
+            ):
+                raise ValueError("market cut expiry does not match the frozen TradeCase Session")
             if observation is None and not case.gap_observed:
                 case = replace(case, gap_observed=True)
                 self.journal.append(case)
                 self.cases[case.identity] = case
+            last_observed_at = case.last_observed_at or case.entry_observed_at
+            if (
+                observation is not None
+                and last_observed_at is not None
+                and observation.observed_at <= last_observed_at
+            ):
+                if not case.gap_observed:
+                    case = replace(case, gap_observed=True)
+                    self.journal.append(case)
+                    self.cases[case.identity] = case
+                self._audit(
+                    "LIFECYCLE_MARKET_BOUNDARY_NOT_ADVANCING",
+                    observation.known_at,
+                    f"case={case.identity}",
+                    session=case_session,
+                )
+                continue
             if not case.entry_final:
                 evaluation_known_at = (
                     max(now, observation.known_at) if observation is not None else now
@@ -1091,7 +1515,7 @@ class BtcPublicShadowRuntime:
             elif case.position_id is not None:
                 if observation is None:
                     continue
-                elif observation.observed_at >= self.session.end:
+                elif observation.observed_at >= case_session.end:
                     if not case.gap_observed:
                         case = replace(case, gap_observed=True)
                         self.journal.append(case)
@@ -1112,28 +1536,106 @@ class BtcPublicShadowRuntime:
             else:
                 continue
             self.cases[case.identity] = updated
-            self._audit("TRADE_CASE_ADVANCED", now, f"case={case.identity}")
+            self._audit(
+                "TRADE_CASE_ADVANCED",
+                observation.known_at if observation is not None else now,
+                f"case={case.identity}",
+                session=case_session,
+            )
 
-    def _capture_settlement(self, now: datetime) -> None:
-        if self.settlement_fact is not None:
+    def _process_expired_sessions(self, now: datetime) -> datetime:
+        effective_known_at = now
+        records = self.ledger.read()
+        sessions_with_records = {record.window.market_session_id for record in records}
+        sessions_with_cases = {
+            self._case_session(case).session_id
+            for case in self.cases.values()
+            if case.outcome is None
+        }
+        for session in sorted(self._sessions.values(), key=lambda item: item.end):
+            if (
+                now < session.end + SETTLEMENT_DELAY
+                or session.session_id not in sessions_with_records | sessions_with_cases
+            ):
+                continue
+            self._capture_settlement(session, now)
+            fact = self.settlement_facts.get(session.session_id)
+            if fact is not None:
+                effective_known_at = max(effective_known_at, fact.known_at)
+            self._reconcile_settlement(session, effective_known_at)
+            if now >= self._session_finalization_at(session) and self._settlement_resolved(session):
+                self._finalize_outcomes(session, now)
+                capture = self.history_captures.get(session.session_id)
+                if capture is not None:
+                    effective_known_at = max(effective_known_at, capture.known_at)
+        return effective_known_at
+
+    def _attempt_count(self, field: str, session: DeribitSession) -> int:
+        values = (
+            self.progress.settlement_attempt_counts
+            if field == "settlement"
+            else self.progress.history_attempt_counts
+        )
+        return dict(values).get(session.session_id, 0)
+
+    def _set_attempt_count(
+        self,
+        field: str,
+        session: DeribitSession,
+        count: int,
+        now: datetime,
+    ) -> None:
+        if field == "settlement":
+            values = dict(self.progress.settlement_attempt_counts)
+            values[session.session_id] = count
+            updated = replace(
+                self.progress,
+                settlement_attempt_counts=tuple(sorted(values.items())),
+                updated_at=now,
+            )
+        else:
+            values = dict(self.progress.history_attempt_counts)
+            values[session.session_id] = count
+            updated = replace(
+                self.progress,
+                history_attempt_counts=tuple(sorted(values.items())),
+                updated_at=now,
+            )
+        self._write_progress(updated)
+
+    def _capture_settlement(self, session: DeribitSession, now: datetime) -> None:
+        if session.session_id in self.settlement_facts:
+            return
+        attempts_per_boundary = 3
+        prior_attempts = self._attempt_count("settlement", session)
+        retry_boundary = (
+            session.end
+            + SETTLEMENT_DELAY
+            + timedelta(
+                seconds=(prior_attempts // attempts_per_boundary)
+                * self.policy.lifecycle.monitoring_cadence_seconds
+            )
+        )
+        if now < retry_boundary:
             return
         error: DeribitSourceError | None = None
-        while self.progress.settlement_attempt_count < 3:
-            attempt = self.progress.settlement_attempt_count + 1
-            self._write_progress(
-                replace(self.progress, settlement_attempt_count=attempt, updated_at=now)
-            )
+        boundary_attempts = 0
+        while boundary_attempts < attempts_per_boundary:
+            attempt = self._attempt_count("settlement", session) + 1
+            self._set_attempt_count("settlement", session, attempt, now)
+            boundary_attempts += 1
             try:
-                fact = self.source.settlement(expiry=self.session.end, known_at=now)
+                fact = self.source.settlement(expiry=session.end, known_at=now)
             except DeribitSourceError as exc:
                 error = exc
                 self._audit(
                     "OFFICIAL_SETTLEMENT_ATTEMPT_FAILED",
                     now,
                     f"attempt={attempt}:{_safe_error(exc)}",
+                    session=session,
                 )
-                if attempt < 3:
-                    self.sleep(float(2 ** (attempt - 1)))
+                if boundary_attempts < attempts_per_boundary:
+                    self.sleep(float(2 ** (boundary_attempts - 1)))
                 continue
             if fact is None:
                 error = DeribitSourceError("OFFICIAL_DELIVERY_PRICE_NOT_FOUND")
@@ -1141,14 +1643,20 @@ class BtcPublicShadowRuntime:
                     "OFFICIAL_SETTLEMENT_ATTEMPT_FAILED",
                     now,
                     f"attempt={attempt}:{_safe_error(error)}",
+                    session=session,
                 )
-                if attempt < 3:
-                    self.sleep(float(2 ** (attempt - 1)))
+                if boundary_attempts < attempts_per_boundary:
+                    self.sleep(float(2 ** (boundary_attempts - 1)))
                 continue
-            self._validate_settlement_fact(fact)
-            self.settlement_fact = fact
-            _atomic_json(self.root_owner.root / "settlement.json", fact.as_object())
-            self._audit("OFFICIAL_SETTLEMENT_RECORDED", fact.known_at, f"fact={fact.identity}")
+            self._validate_settlement_fact(fact, session)
+            self.settlement_facts[session.session_id] = fact
+            _append_jsonl(self.root_owner.root / "settlements.jsonl", fact.as_object())
+            self._audit(
+                "OFFICIAL_SETTLEMENT_RECORDED",
+                fact.known_at,
+                f"fact={fact.identity}",
+                session=session,
+            )
             return
         self._set_status(
             "SETTLEMENT_UNVERIFIED",
@@ -1156,12 +1664,16 @@ class BtcPublicShadowRuntime:
             str(error) if error is not None else "settlement interrupted before completion",
         )
 
-    def _reconcile_settlement(self, now: datetime) -> None:
-        fact = self.settlement_fact
+    def _reconcile_settlement(self, session: DeribitSession, now: datetime) -> None:
+        fact = self.settlement_facts.get(session.session_id)
         if fact is None:
             return
         for case_id, case in tuple(self.cases.items()):
-            if case.outcome is None and case.position_id is not None:
+            if (
+                self._case_session(case).session_id == session.session_id
+                and case.outcome is None
+                and case.position_id is not None
+            ):
                 terminal = self.engine.settle_position(
                     journal=self.journal,
                     case=case,
@@ -1169,18 +1681,16 @@ class BtcPublicShadowRuntime:
                 )
                 self.cases[case_id] = terminal
 
-    @property
-    def _settlement_resolved(self) -> bool:
-        return self.settlement_fact is not None or self.progress.settlement_attempt_count >= 3
+    def _settlement_resolved(self, session: DeribitSession) -> bool:
+        return session.session_id in self.settlement_facts
 
-    def _finalize_outcomes(self, now: datetime) -> None:
-        if self.history_capture is None:
+    def _finalize_outcomes(self, session: DeribitSession, now: datetime) -> None:
+        capture = self.history_captures.get(session.session_id)
+        if capture is None:
             error: DeribitSourceError | None = None
-            while self.progress.history_attempt_count < 3:
-                attempt = self.progress.history_attempt_count + 1
-                self._write_progress(
-                    replace(self.progress, history_attempt_count=attempt, updated_at=now)
-                )
+            while self._attempt_count("history", session) < 3:
+                attempt = self._attempt_count("history", session) + 1
+                self._set_attempt_count("history", session, attempt, now)
                 try:
                     result = self.source.history(known_at=now)
                 except DeribitSourceError as exc:
@@ -1189,11 +1699,12 @@ class BtcPublicShadowRuntime:
                         "PUBLIC_FUTURE_PATH_ATTEMPT_FAILED",
                         now,
                         f"attempt={attempt}:{_safe_error(exc)}",
+                        session=session,
                     )
                     if attempt < 3:
                         self.sleep(float(2 ** (attempt - 1)))
                     continue
-                self.history_capture = (
+                capture = (
                     result
                     if isinstance(result, IndexHistoryCapture)
                     else IndexHistoryCapture(
@@ -1205,32 +1716,28 @@ class BtcPublicShadowRuntime:
                     )
                 )
                 break
-            if self.history_capture is None:
+            if capture is None:
                 detail = (
                     str(error) if error is not None else "history interrupted before completion"
                 )
-                self.history_capture = IndexHistoryCapture(
-                    points=None,
-                    known_at=now,
-                    error=detail,
-                )
+                capture = IndexHistoryCapture(points=None, known_at=now, error=detail)
                 self._set_status("FUTURE_PATH_UNVERIFIED", now, detail)
-            _atomic_json(
-                self.root_owner.root / "future-index-path.json",
-                self.history_capture.as_object(self.session.session_id),
+            self.history_captures[session.session_id] = capture
+            _append_jsonl(
+                self.root_owner.root / "future-index-paths.jsonl",
+                capture.as_object(session.session_id),
             )
-        history = self.history_capture.points or ()
-        known_at = self.history_capture.known_at
-        if self.settlement_fact is not None:
-            known_at = max(known_at, self.settlement_fact.known_at)
+        history = capture.points or ()
+        fact = self.settlement_facts.get(session.session_id)
+        known_at = max(capture.known_at, fact.known_at) if fact is not None else capture.known_at
         existing = {outcome.decision_window_id for outcome in self.ledger.read_outcomes()}
         records = {record.window.identity: record for record in self.ledger.read()}
         appended = 0
-        for window in self.windows:
+        for window in self._windows_by_session[session.session_id]:
             record = records.get(window.identity)
             if window.identity in existing or record is None:
                 continue
-            start, end = self._outcome_horizon(window)
+            start, end = self._outcome_horizon(window, session)
             path = (
                 summarize_btc_index_path(history, starts_at=start, ends_at=end) if history else None
             )
@@ -1242,11 +1749,9 @@ class BtcPublicShadowRuntime:
                 known_at=known_at,
                 future_path_known=path_known,
                 future_path_continuous=True if path_known else None,
-                expiry_settlement=self.settlement_fact,
+                expiry_settlement=fact,
                 future_path=path,
-                regime_labels=(
-                    ("OFFICIAL_DELIVERY_PRICE_UNAVAILABLE",) if self.settlement_fact is None else ()
-                ),
+                regime_labels=(("OFFICIAL_DELIVERY_PRICE_UNAVAILABLE",) if fact is None else ()),
                 reason=None if path_known else "PUBLIC_INDEX_PATH_INCOMPLETE_OR_UNAVAILABLE",
                 eligibility=window_outcome_eligibility(
                     decision_evaluable=record.result is not DecisionResult.UNKNOWN,
@@ -1257,52 +1762,106 @@ class BtcPublicShadowRuntime:
             self.ledger.append_outcome(outcome)
             appended += 1
         if appended:
+            session_outcomes = {
+                item.decision_window_id
+                for item in self.ledger.read_outcomes()
+                if item.decision_window_id
+                in {window.identity for window in self._windows_by_session[session.session_id]}
+            }
             self._audit(
                 "WINDOW_OUTCOME_POPULATION_RECORDED",
                 known_at,
-                f"count={len(self.ledger.read_outcomes())}",
+                f"count={len(session_outcomes)}",
+                session=session,
             )
 
-    def _outcome_horizon(self, window: DecisionWindow) -> tuple[datetime, datetime]:
+    def _outcome_horizon(
+        self,
+        window: DecisionWindow,
+        session: DeribitSession | None = None,
+    ) -> tuple[datetime, datetime]:
+        owning_session = session or self._session_for_window(window)
         start = window.ends_at
         minimum_end = start + timedelta(minutes=self.policy.window.cadence_minutes)
-        return start, max(self.session.end, minimum_end)
+        return start, max(owning_session.end, minimum_end)
 
-    def _read_settlement(self) -> ExpirySettlementFact | None:
-        path = self.root_owner.root / "settlement.json"
-        if not path.exists():
-            return None
-        fact = ExpirySettlementFact.from_object(_read_json(path))
-        self._validate_settlement_fact(fact)
-        return fact
+    def _read_settlements(self) -> dict[str, ExpirySettlementFact]:
+        facts: dict[str, ExpirySettlementFact] = {}
+        legacy = self.root_owner.root / "settlement.json"
+        if legacy.exists():
+            fact = ExpirySettlementFact.from_object(_read_json(legacy))
+            session = self._sessions.get(_iso(fact.expiry))
+            if session is None:
+                raise ValueError("settlement fact does not match the runtime Session and source")
+            self._validate_settlement_fact(fact, session)
+            facts[session.session_id] = fact
+        path = self.root_owner.root / "settlements.jsonl"
+        for value in _read_jsonl(path, field="runtime settlement"):
+            fact = ExpirySettlementFact.from_object(value)
+            session = self._sessions.get(_iso(fact.expiry))
+            if session is None:
+                raise ValueError("settlement fact belongs to an unenrolled runtime Session")
+            self._validate_settlement_fact(fact, session)
+            prior = facts.get(session.session_id)
+            if prior is not None and prior != fact:
+                raise ValueError("runtime contains conflicting settlement facts")
+            facts[session.session_id] = fact
+        return facts
 
-    def _validate_settlement_fact(self, fact: ExpirySettlementFact) -> None:
+    def _validate_settlement_fact(
+        self,
+        fact: ExpirySettlementFact,
+        session: DeribitSession,
+    ) -> None:
         if (
             fact.product_id is not BTC.product_id
-            or fact.expiry != self.session.end
+            or fact.expiry != session.end
             or fact.evidence_kind is not SettlementEvidenceKind.OFFICIAL_EXCHANGE
             or fact.source_id != DERIBIT_DELIVERY_PRICE_SOURCE_ID
             or fact.method_id != DERIBIT_DELIVERY_PRICE_METHOD_ID
         ):
             raise ValueError("settlement fact does not match the runtime Session and source")
 
-    def _read_history_capture(self) -> IndexHistoryCapture | None:
-        path = self.root_owner.root / "future-index-path.json"
-        return (
-            IndexHistoryCapture.from_object(
-                _read_json(path),
-                session_id=self.session.session_id,
+    def _read_history_captures(self) -> dict[str, IndexHistoryCapture]:
+        captures: dict[str, IndexHistoryCapture] = {}
+        legacy = self.root_owner.root / "future-index-path.json"
+        if legacy.exists():
+            capture = IndexHistoryCapture.from_object(
+                _read_json(legacy),
+                session_id=self.manifest.target_session_id,
             )
-            if path.exists()
-            else None
-        )
+            captures[self.manifest.target_session_id] = capture
+        path = self.root_owner.root / "future-index-paths.jsonl"
+        for value in _read_jsonl(path, field="runtime future index path"):
+            item = _mapping(value, "future index path capture")
+            session_id = _text(item, "session_id")
+            if session_id not in self._sessions:
+                raise ValueError("future index path belongs to an unenrolled runtime Session")
+            capture = IndexHistoryCapture.from_object(item, session_id=session_id)
+            prior = captures.get(session_id)
+            if prior is not None and prior != capture:
+                raise ValueError("runtime contains conflicting future index paths")
+            captures[session_id] = capture
+        return captures
 
     def _read_latest_snapshot(self, now: datetime) -> dict[str, object]:
         path = self.root_owner.root / "latest-snapshot.json"
         if not path.exists():
             return _waiting_snapshot(self.session, now)
         snapshot = _mapping(_read_json(path), "latest snapshot")
-        if snapshot.get("session_id") != self.session.session_id:
+        snapshot_session_id = snapshot.get("session_id")
+        if snapshot_session_id == self.session.session_id:
+            if "known_at" not in snapshot:
+                observed_at = _text(snapshot, "observed_at")
+                snapshot["known_at"] = observed_at
+                warnings = snapshot.get("warnings")
+                if not isinstance(warnings, list):
+                    raise ValueError("legacy latest snapshot warnings must be an array")
+                warnings.append("LEGACY_SNAPSHOT_KNOWN_AT_EQUALS_OBSERVED_AT")
+            return snapshot
+        if not self._fixed_session and snapshot_session_id in self._sessions:
+            return _waiting_snapshot(self.session, now)
+        if snapshot_session_id != self.session.session_id:
             raise ValueError("latest snapshot belongs to another Session")
         return snapshot
 
@@ -1314,6 +1873,11 @@ class BtcPublicShadowRuntime:
             candidate_record = record_by_id.get(case.decision_window_id)
             allocation = case.risk_allocation
             structure = case.selected_structure
+            owning_session = (
+                self._session_for_window(candidate_record.window)
+                if candidate_record is not None
+                else None
+            )
             try:
                 structure_expiry = _utc(
                     datetime.fromisoformat(_text(structure, "expiry").replace("Z", "+00:00"))
@@ -1325,23 +1889,24 @@ class BtcPublicShadowRuntime:
                 or candidate_record.result is not DecisionResult.CANDIDATE
                 or case.decision_record_id != candidate_record.identity
                 or case.decision_policy_id != self.policy.identity
-                or allocation.get("market_session_id") != self.session.session_id
+                or owning_session is None
+                or allocation.get("market_session_id") != owning_session.session_id
                 or allocation.get("policy_id") != self.policy.identity
-                or allocation.get("expires_at") != _iso(self.session.end)
-                or structure_expiry != self.session.end
+                or allocation.get("expires_at") != _iso(owning_session.end)
+                or structure_expiry != owning_session.end
                 or case.decision_window_id in seen_windows
             ):
                 raise ValueError("CaseJournal contains a foreign or duplicate runtime Case")
             seen_windows.add(case.decision_window_id)
-        if self.settlement_fact is not None:
-            self._validate_settlement_fact(self.settlement_fact)
+        for session_id, fact in self.settlement_facts.items():
+            self._validate_settlement_fact(fact, self._sessions[session_id])
 
     def _validate_ledger_population(
         self,
         records: Sequence[DecisionRecord],
         outcomes: Sequence[WindowOutcome],
     ) -> dict[str, DecisionRecord]:
-        expected = {window.identity: window for window in self.windows}
+        expected = self._window_index()
         record_by_id = {record.window.identity: record for record in records}
         for record in records:
             window = expected.get(record.window.identity)
@@ -1366,7 +1931,10 @@ class BtcPublicShadowRuntime:
             ):
                 raise ValueError("WindowOutcome population has foreign path semantics")
             if outcome.expiry_settlement is not None:
-                self._validate_settlement_fact(outcome.expiry_settlement)
+                self._validate_settlement_fact(
+                    outcome.expiry_settlement,
+                    self._session_for_window(expected_window),
+                )
         return record_by_id
 
     def _open_candidate_case(self, record: DecisionRecord, now: datetime) -> None:
@@ -1378,7 +1946,12 @@ class BtcPublicShadowRuntime:
             return
         case = self.engine.open_case(journal=self.journal, record=record)
         self.cases[case.identity] = case
-        self._audit("TRADE_CASE_OPENED", now, f"case={case.identity}")
+        self._audit(
+            "TRADE_CASE_OPENED",
+            now,
+            f"case={case.identity}",
+            session=self._session_for_window(record.window),
+        )
 
     def _reconcile_candidate_cases(self, now: datetime) -> None:
         for record in self.ledger.read():
@@ -1387,24 +1960,36 @@ class BtcPublicShadowRuntime:
 
     def _validate_progress(self) -> None:
         attempted = self.progress.attempted_decision_window_ids
-        expected = {window.identity for window in self.windows}
+        expected = set(self._window_index())
         if len(set(attempted)) != len(attempted) or not set(attempted) <= expected:
             raise ValueError("runtime progress contains invalid attempted Window identities")
-        if any(
-            count > 3
-            for count in (
-                self.progress.preflight_attempt_count,
-                self.progress.settlement_attempt_count,
-                self.progress.history_attempt_count,
-            )
+        recorded = {record.window.identity for record in self.ledger.read()}
+        if not recorded <= set(attempted):
+            raise ValueError("ObservationLedger contains a Window without a runtime attempt")
+        if self.progress.active_session_id != self.session.session_id:
+            raise ValueError("runtime progress active Session is stale or foreign")
+        if self.progress.preflight_attempt_count > 3 or any(
+            count > 3 for _session_id, count in self.progress.history_attempt_counts
         ):
             raise ValueError("runtime progress exceeds its bounded public attempt count")
+        known_sessions = set(self._sessions)
+        for counts in (
+            self.progress.settlement_attempt_counts,
+            self.progress.history_attempt_counts,
+        ):
+            if (
+                len(dict(counts)) != len(counts)
+                or not {key for key, _count in counts} <= known_sessions
+            ):
+                raise ValueError("runtime progress contains a foreign Session attempt")
         if self.progress.preflight_complete and self.progress.preflight_attempt_count == 0:
             raise ValueError("runtime progress preflight completion lacks an attempt")
-        if self.settlement_fact is not None and self.progress.settlement_attempt_count == 0:
-            raise ValueError("runtime settlement fact lacks a recorded attempt")
-        if self.history_capture is not None and self.progress.history_attempt_count == 0:
-            raise ValueError("runtime history capture lacks a recorded attempt")
+        for session_id in self.settlement_facts:
+            if dict(self.progress.settlement_attempt_counts).get(session_id, 0) == 0:
+                raise ValueError("runtime settlement fact lacks a recorded attempt")
+        for session_id in self.history_captures:
+            if dict(self.progress.history_attempt_counts).get(session_id, 0) == 0:
+                raise ValueError("runtime history capture lacks a recorded attempt")
         known_cases = set(self.cases)
         if not {case_id for case_id, _at in self.progress.case_attempted_at} <= known_cases:
             raise ValueError("runtime progress contains an unknown TradeCase attempt")
@@ -1416,20 +2001,32 @@ class BtcPublicShadowRuntime:
             if boundary is not None and boundary > self.progress.updated_at:
                 raise ValueError("runtime progress has an invalid time boundary")
 
-    def _audit(self, kind: str, at: datetime, detail: str) -> None:
+    def _audit(
+        self,
+        kind: str,
+        at: datetime,
+        detail: str,
+        *,
+        session: DeribitSession | None = None,
+    ) -> None:
+        owning_session = session or self.session
         path = self.root_owner.root / "runtime-events.jsonl"
-        value = {
-            "implementation_id": self.manifest.implementation_id,
-            "session_id": self.session.session_id,
-            "at": _iso(at),
-            "kind": kind,
-            "detail": detail,
-        }
         with self._audit_lock:
+            boundary = _utc(at)
+            if self._last_audit_at is not None:
+                boundary = max(boundary, self._last_audit_at)
+            value = {
+                "implementation_id": self.manifest.implementation_id,
+                "session_id": owning_session.session_id,
+                "at": _iso(boundary),
+                "kind": kind,
+                "detail": detail,
+            }
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
+            self._last_audit_at = boundary
 
     def _audit_public_call(
         self,
@@ -1447,23 +2044,28 @@ class BtcPublicShadowRuntime:
             separators=(",", ":"),
             sort_keys=True,
         )
-        self._audit("DERIBIT_PUBLIC_CALL", datetime.now(UTC), detail)
+        self._audit("DERIBIT_PUBLIC_CALL", self._business_time_floor, detail)
 
     def _recover_audit(self) -> None:
         path = self.root_owner.root / "runtime-events.jsonl"
         if not path.exists():
             return
         _recover_jsonl(path, field="runtime audit")
+        previous_at: datetime | None = None
         for index, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             value = _mapping(json.loads(line), f"runtime audit line {index}")
             if set(value) != {"implementation_id", "session_id", "at", "kind", "detail"}:
                 raise ValueError(f"runtime audit line {index} has foreign fields")
             if (
                 value.get("implementation_id") != self.manifest.implementation_id
-                or value.get("session_id") != self.manifest.target_session_id
+                or value.get("session_id") not in self._sessions
             ):
                 raise ValueError(f"runtime audit line {index} belongs to another runtime")
-            _datetime(value, "at")
+            at = _datetime(value, "at")
+            if previous_at is not None and at < previous_at:
+                raise ValueError(f"runtime audit line {index} has a regressing boundary")
+            previous_at = at
+            self._last_audit_at = max(self._last_audit_at or at, at)
             _text(value, "kind")
             _text(value, "detail")
 
@@ -1490,6 +2092,32 @@ class _WorkbenchServer:
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
+
+
+def _clock_scope(
+    at: datetime,
+    policy: BtcShortVolPolicy,
+) -> tuple[str, str]:
+    boundary = _utc(at)
+    session = current_deribit_session(boundary, phase_policy=policy.session)
+    windows = Btc0DteShortVolEngine(policy=policy).decision_windows(at=boundary)
+    window = next(item for item in windows if item.starts_at <= boundary < item.ends_at)
+    return session.session_id, window.identity
+
+
+def _unambiguous_clock_boundary(
+    reading: DeribitClockReading,
+    *,
+    policy: BtcShortVolPolicy,
+) -> datetime:
+    if _clock_scope(reading.earliest_at, policy) != _clock_scope(
+        reading.latest_at,
+        policy,
+    ):
+        raise DeribitSourceError(
+            "Deribit clock uncertainty crosses a Session or DecisionWindow boundary"
+        )
+    return _utc(reading.earliest_at)
 
 
 def _manifest_session(
@@ -1524,6 +2152,7 @@ def _manifest_session(
 def _waiting_snapshot(session: DeribitSession, now: datetime) -> dict[str, object]:
     return {
         "observed_at": _iso(now),
+        "known_at": _iso(now),
         "session_id": session.session_id,
         "instrument_count": 0,
         "requested_book_count": 0,
@@ -1560,6 +2189,7 @@ def _gap_snapshot(
 ) -> dict[str, object]:
     return {
         "observed_at": _iso(now),
+        "known_at": _iso(now),
         "session_id": session.session_id,
         "instrument_count": 0,
         "requested_book_count": 0,
@@ -1626,6 +2256,34 @@ def _recover_jsonl(path: Path, *, field: str) -> None:
         accepted_bytes += len(raw_line)
 
 
+def _read_jsonl(path: Path, *, field: str) -> tuple[object, ...]:
+    if not path.exists():
+        return ()
+    _recover_jsonl(path, field=field)
+    values: list[object] = []
+    for index, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        try:
+            values.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"invalid {field} line {index}: {exc}") from exc
+    return tuple(values)
+
+
+def _append_jsonl(path: Path, value: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def _path_has_symlink(path: Path) -> bool:
     current = Path(path.anchor)
     for part in path.parts[1:]:
@@ -1650,6 +2308,23 @@ def _text(value: Mapping[str, object], field: str) -> str:
     if not isinstance(member, str) or not member:
         raise ValueError(f"{field} must be non-empty text")
     return member
+
+
+def _attempt_counts(
+    value: Mapping[str, object],
+    field: str,
+) -> tuple[tuple[str, int], ...]:
+    member = value.get(field)
+    if not isinstance(member, dict) or not all(
+        isinstance(session_id, str)
+        and session_id
+        and isinstance(count, int)
+        and not isinstance(count, bool)
+        and count >= 0
+        for session_id, count in member.items()
+    ):
+        raise ValueError(f"{field} must map Session identities to non-negative integers")
+    return tuple(sorted(member.items()))
 
 
 def _datetime(value: Mapping[str, object], field: str) -> datetime:

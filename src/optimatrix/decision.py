@@ -3,13 +3,27 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Self
 
 from optimatrix.channels import ChannelId
 from optimatrix.identity import canonical_identity, canonical_value, require_identity
-from optimatrix.market import MarketContext, OptionQuote
+from optimatrix.market import (
+    EventState,
+    EventStateSource,
+    ImpliedVarianceMethod,
+    MarketContext,
+    MarketContextEvidence,
+    OptionQuote,
+    OptionType,
+    PriceLevel,
+    RealizedVarianceMethod,
+    TickSchedule,
+    TickStep,
+)
 from optimatrix.policy import ObservationPolicy, WindowSchedulePolicy
+from optimatrix.products import PRODUCTS, ProductId
 from optimatrix.session import DeribitSession
 
 
@@ -64,6 +78,19 @@ class DecisionWindow:
     @classmethod
     def from_object(cls, value: object) -> Self:
         item = _mapping(value, "decision_window")
+        _require_fields(
+            item,
+            {
+                "decision_window_id",
+                "channel_id",
+                "market_session_id",
+                "schedule_policy_id",
+                "starts_at",
+                "ends_at",
+                "input_deadline",
+            },
+            "decision_window",
+        )
         window = cls(
             channel_id=ChannelId(_text(item, "channel_id")),
             market_session_id=_text(item, "market_session_id"),
@@ -121,11 +148,15 @@ class MarketObservation:
             raise ValueError("observation cannot be known before it is observed")
         if self.context.now != self.observed_at:
             raise ValueError("MarketObservation boundary must match MarketContext")
-        context_blockers = self.context.evidence_blockers
+        context_blockers = self.context.evidence_blockers_at(known_at)
         if self.data_health_blockers[: len(context_blockers)] != context_blockers:
             raise ValueError("MarketObservation DataHealth does not match MarketContext")
         if len({quote.instrument_name for quote in self.quotes}) != len(self.quotes):
             raise ValueError("MarketObservation quotes must have unique instruments")
+        if len(set(self.data_health_blockers)) != len(self.data_health_blockers) or any(
+            not blocker for blocker in self.data_health_blockers
+        ):
+            raise ValueError("MarketObservation blockers must be unique non-empty strings")
 
     @property
     def identity(self) -> str:
@@ -148,8 +179,12 @@ class MarketObservation:
         policy: ObservationPolicy,
         context: MarketContext,
         quotes: tuple[OptionQuote, ...],
+        known_at: datetime | None = None,
     ) -> Self:
-        blockers = list(context.evidence_blockers)
+        causal_known_at = context.now if known_at is None else _utc(known_at, "known_at")
+        if context.now > causal_known_at:
+            raise ValueError("MarketObservation cannot be known before its market boundary")
+        blockers = list(context.evidence_blockers_at(causal_known_at))
         quote_names = {quote.instrument_name for quote in quotes}
         if quote_names != set(context.evidence.usable_books):
             blockers.append("OBSERVATION_UNIVERSE_MISMATCH")
@@ -160,16 +195,27 @@ class MarketObservation:
         if len({quote.continuity_epoch for quote in quotes}) > 1:
             blockers.append("MULTIPLE_CONTINUITY_EPOCHS")
         if quotes:
-            known_at_ms = int(context.now.timestamp() * 1000)
+            known_at_ms = (
+                int(causal_known_at.timestamp()) * 1000 + causal_known_at.microsecond // 1000
+            )
             source_span = max(quote.source_timestamp_ms for quote in quotes) - min(
                 quote.source_timestamp_ms for quote in quotes
             )
             receive_span = max(quote.received_timestamp_ms for quote in quotes) - min(
                 quote.received_timestamp_ms for quote in quotes
             )
+            complete_receive_span = (
+                context.evidence.market_received_max_ms - context.evidence.market_received_min_ms
+                if context.evidence.market_received_min_ms is not None
+                and context.evidence.market_received_max_ms is not None
+                else None
+            )
             if source_span > policy.maximum_source_span_ms:
                 blockers.append("MARKET_SOURCE_SPAN_EXCEEDED")
-            if receive_span > policy.maximum_receive_span_ms:
+            if receive_span > policy.maximum_receive_span_ms or (
+                complete_receive_span is not None
+                and complete_receive_span > policy.maximum_receive_span_ms
+            ):
                 blockers.append("MARKET_RECEIVE_SPAN_EXCEEDED")
             if any(quote.source_timestamp_ms > quote.received_timestamp_ms for quote in quotes):
                 blockers.append("MARKET_SOURCE_AFTER_RECEIPT")
@@ -190,11 +236,53 @@ class MarketObservation:
             channel_id=channel_id,
             data_health_policy_id=policy.identity,
             observed_at=context.now,
-            known_at=context.now,
+            known_at=causal_known_at,
             context=context,
             quotes=quotes,
             data_health_blockers=tuple(dict.fromkeys(blockers)),
         )
+
+    def as_object(self) -> dict[str, object]:
+        return {
+            "market_observation_id": self.identity,
+            "channel_id": self.channel_id.value,
+            "data_health_policy_id": self.data_health_policy_id,
+            "observed_at": _iso(self.observed_at),
+            "known_at": _iso(self.known_at),
+            "context": _market_context_object(self.context),
+            "quotes": [_option_quote_object(quote) for quote in self.quotes],
+            "data_health_blockers": list(self.data_health_blockers),
+        }
+
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "market_observation")
+        _require_fields(
+            item,
+            {
+                "market_observation_id",
+                "channel_id",
+                "data_health_policy_id",
+                "observed_at",
+                "known_at",
+                "context",
+                "quotes",
+                "data_health_blockers",
+            },
+            "market_observation",
+        )
+        observation = cls(
+            channel_id=ChannelId(_text(item, "channel_id")),
+            data_health_policy_id=_text(item, "data_health_policy_id"),
+            observed_at=_datetime(item, "observed_at"),
+            known_at=_datetime(item, "known_at"),
+            context=_market_context_from_object(item.get("context")),
+            quotes=tuple(_option_quote_from_object(member) for member in _array(item, "quotes")),
+            data_health_blockers=_string_tuple(item, "data_health_blockers"),
+        )
+        if _text(item, "market_observation_id") != observation.identity:
+            raise ValueError("MarketObservation identity mismatch")
+        return observation
 
 
 @dataclass(frozen=True)
@@ -209,12 +297,17 @@ class DecisionRecord:
     risk_allocation_id: str | None = None
     selected_structure_json: str | None = None
     risk_allocation_json: str | None = None
+    observation: MarketObservation | None = None
 
     def __post_init__(self) -> None:
         require_identity(self.decision_policy_id, "decision_policy_id")
         _utc(self.known_at, "known_at")
         if self.observation_id is not None:
             require_identity(self.observation_id, "observation_id")
+        if (self.observation_id is None) != (self.observation is None):
+            raise ValueError("observation identity and evidence must appear together")
+        if self.observation is not None and self.observation.identity != self.observation_id:
+            raise ValueError("observation evidence does not match its identity")
         if self.selected_structure_id is not None:
             require_identity(self.selected_structure_id, "selected_structure_id")
         if self.risk_allocation_id is not None:
@@ -263,11 +356,12 @@ class DecisionRecord:
     @property
     def identity(self) -> str:
         return canonical_identity(
-            "DecisionRecordV1",
+            "DecisionRecordV2",
             self.window.identity,
             self.decision_policy_id,
             self.known_at,
             self.observation_id,
+            self.observation,
             self.result,
             self.blockers,
             self.selected_structure_id,
@@ -287,6 +381,7 @@ class DecisionRecord:
             "decision_policy_id": self.decision_policy_id,
             "known_at": _iso(self.known_at),
             "observation_id": self.observation_id,
+            "observation": self.observation.as_object() if self.observation is not None else None,
             "result": self.result.value,
             "blockers": list(self.blockers),
             "selected_structure_id": self.selected_structure_id,
@@ -298,6 +393,24 @@ class DecisionRecord:
     @classmethod
     def from_object(cls, value: object) -> Self:
         item = _mapping(value, "decision_record")
+        _require_fields(
+            item,
+            {
+                "decision_record_id",
+                "window",
+                "decision_policy_id",
+                "known_at",
+                "observation_id",
+                "observation",
+                "result",
+                "blockers",
+                "selected_structure_id",
+                "risk_allocation_id",
+                "selected_structure",
+                "risk_allocation",
+            },
+            "decision_record",
+        )
         blockers = item.get("blockers")
         if not isinstance(blockers, list) or not all(isinstance(value, str) for value in blockers):
             raise ValueError("decision_record.blockers must be an array of strings")
@@ -306,6 +419,12 @@ class DecisionRecord:
             raise ValueError("decision_record.observation_id must be text or null")
         selected_structure_id = _optional_text(item, "selected_structure_id")
         risk_allocation_id = _optional_text(item, "risk_allocation_id")
+        encoded_observation = item.get("observation")
+        observation = (
+            None
+            if encoded_observation is None
+            else MarketObservation.from_object(encoded_observation)
+        )
         selected_structure = _optional_mapping(item, "selected_structure")
         risk_allocation = _optional_mapping(item, "risk_allocation")
         record = cls(
@@ -319,6 +438,7 @@ class DecisionRecord:
             risk_allocation_id=risk_allocation_id,
             selected_structure_json=_payload_text(selected_structure),
             risk_allocation_json=_payload_text(risk_allocation),
+            observation=observation,
         )
         if _text(item, "decision_record_id") != record.identity:
             raise ValueError("DecisionRecord identity mismatch")
@@ -336,6 +456,7 @@ def unassessed_decision_record(
     if boundary < window.input_deadline:
         raise ValueError("DecisionRecord cannot be finalized before the input deadline")
     observation_id: str | None = None
+    bound_observation: MarketObservation | None = None
     blockers: tuple[str, ...]
     if observation is None:
         blockers = ("NO_OBSERVATION",)
@@ -347,6 +468,7 @@ def unassessed_decision_record(
         blockers = ("OBSERVATION_AFTER_INPUT_DEADLINE",)
     else:
         observation_id = observation.identity
+        bound_observation = observation
         blockers = observation.data_health_blockers or ("DECISION_POLICY_NOT_EVALUATED",)
     return DecisionRecord(
         window=window,
@@ -359,7 +481,275 @@ def unassessed_decision_record(
         risk_allocation_id=None,
         selected_structure_json=None,
         risk_allocation_json=None,
+        observation=bound_observation,
     )
+
+
+def _market_context_object(context: MarketContext) -> dict[str, object]:
+    return {
+        "now": _iso(context.now),
+        "index_price": str(context.index_price),
+        "forward_price": str(context.forward_price),
+        "trailing_realized_variance_proxy": str(context.trailing_realized_variance_proxy),
+        "same_session_implied_variance_proxy": str(context.same_session_implied_variance_proxy),
+        "rv_acceleration": str(context.rv_acceleration),
+        "jump_share": str(context.jump_share),
+        "directional_persistence": str(context.directional_persistence),
+        "event_state": context.event_state.value,
+        "concentrated_strike": (
+            str(context.concentrated_strike) if context.concentrated_strike is not None else None
+        ),
+        "concentration_strength": str(context.concentration_strength),
+        "evidence": _market_context_evidence_object(context.evidence),
+    }
+
+
+def _market_context_from_object(value: object) -> MarketContext:
+    item = _mapping(value, "market_observation.context")
+    _require_fields(
+        item,
+        {
+            "now",
+            "index_price",
+            "forward_price",
+            "trailing_realized_variance_proxy",
+            "same_session_implied_variance_proxy",
+            "rv_acceleration",
+            "jump_share",
+            "directional_persistence",
+            "event_state",
+            "concentrated_strike",
+            "concentration_strength",
+            "evidence",
+        },
+        "market_observation.context",
+    )
+    return MarketContext(
+        now=_datetime(item, "now"),
+        index_price=_decimal(item, "index_price"),
+        forward_price=_decimal(item, "forward_price"),
+        trailing_realized_variance_proxy=_decimal(item, "trailing_realized_variance_proxy"),
+        same_session_implied_variance_proxy=_decimal(item, "same_session_implied_variance_proxy"),
+        rv_acceleration=_decimal(item, "rv_acceleration"),
+        jump_share=_decimal(item, "jump_share"),
+        directional_persistence=_decimal(item, "directional_persistence"),
+        event_state=EventState(_text(item, "event_state")),
+        concentrated_strike=_optional_decimal(item, "concentrated_strike"),
+        concentration_strength=_decimal(item, "concentration_strength"),
+        evidence=_market_context_evidence_from_object(item.get("evidence")),
+    )
+
+
+def _market_context_evidence_object(evidence: MarketContextEvidence) -> dict[str, object]:
+    return {
+        "realized_variance_method": (
+            evidence.realized_variance_method.value
+            if evidence.realized_variance_method is not None
+            else None
+        ),
+        "implied_variance_method": (
+            evidence.implied_variance_method.value
+            if evidence.implied_variance_method is not None
+            else None
+        ),
+        "event_state_source": (
+            evidence.event_state_source.value if evidence.event_state_source is not None else None
+        ),
+        "required_history_start_ms": evidence.required_history_start_ms,
+        "history_coverage_start_ms": evidence.history_coverage_start_ms,
+        "history_coverage_end_ms": evidence.history_coverage_end_ms,
+        "history_cadence_ms": evidence.history_cadence_ms,
+        "market_source_min_ms": evidence.market_source_min_ms,
+        "market_source_max_ms": evidence.market_source_max_ms,
+        "market_received_min_ms": evidence.market_received_min_ms,
+        "market_received_max_ms": evidence.market_received_max_ms,
+        "event_state_known_at_ms": evidence.event_state_known_at_ms,
+        "maximum_market_age_ms": evidence.maximum_market_age_ms,
+        "requested_books": list(evidence.requested_books),
+        "usable_books": list(evidence.usable_books),
+        "declared_blockers": list(evidence.declared_blockers),
+    }
+
+
+def _market_context_evidence_from_object(value: object) -> MarketContextEvidence:
+    item = _mapping(value, "market_observation.context.evidence")
+    _require_fields(
+        item,
+        {
+            "realized_variance_method",
+            "implied_variance_method",
+            "event_state_source",
+            "required_history_start_ms",
+            "history_coverage_start_ms",
+            "history_coverage_end_ms",
+            "history_cadence_ms",
+            "market_source_min_ms",
+            "market_source_max_ms",
+            "market_received_min_ms",
+            "market_received_max_ms",
+            "event_state_known_at_ms",
+            "maximum_market_age_ms",
+            "requested_books",
+            "usable_books",
+            "declared_blockers",
+        },
+        "market_observation.context.evidence",
+    )
+    realized_method = _optional_text(item, "realized_variance_method")
+    implied_method = _optional_text(item, "implied_variance_method")
+    event_source = _optional_text(item, "event_state_source")
+    return MarketContextEvidence(
+        realized_variance_method=(
+            RealizedVarianceMethod(realized_method) if realized_method is not None else None
+        ),
+        implied_variance_method=(
+            ImpliedVarianceMethod(implied_method) if implied_method is not None else None
+        ),
+        event_state_source=(EventStateSource(event_source) if event_source is not None else None),
+        required_history_start_ms=_optional_integer(item, "required_history_start_ms"),
+        history_coverage_start_ms=_optional_integer(item, "history_coverage_start_ms"),
+        history_coverage_end_ms=_optional_integer(item, "history_coverage_end_ms"),
+        history_cadence_ms=_optional_integer(item, "history_cadence_ms"),
+        market_source_min_ms=_optional_integer(item, "market_source_min_ms"),
+        market_source_max_ms=_optional_integer(item, "market_source_max_ms"),
+        market_received_min_ms=_optional_integer(item, "market_received_min_ms"),
+        market_received_max_ms=_optional_integer(item, "market_received_max_ms"),
+        event_state_known_at_ms=_optional_integer(item, "event_state_known_at_ms"),
+        maximum_market_age_ms=_integer(item, "maximum_market_age_ms"),
+        requested_books=_string_tuple(item, "requested_books"),
+        usable_books=_string_tuple(item, "usable_books"),
+        declared_blockers=_string_tuple(item, "declared_blockers"),
+    )
+
+
+def _option_quote_object(quote: OptionQuote) -> dict[str, object]:
+    return {
+        "instrument_name": quote.instrument_name,
+        "product_id": quote.product.product_id.value,
+        "product_spec_id": quote.product.identity,
+        "expiry": _iso(quote.expiry),
+        "strike": str(quote.strike),
+        "option_type": quote.option_type.value,
+        "signed_delta": str(quote.signed_delta),
+        "mark_iv": str(quote.mark_iv),
+        "bid": [_price_level_object(level) for level in quote.bid],
+        "ask": [_price_level_object(level) for level in quote.ask],
+        "tick_schedule": _tick_schedule_object(quote.tick_schedule),
+        "source_timestamp_ms": quote.source_timestamp_ms,
+        "received_timestamp_ms": quote.received_timestamp_ms,
+        "continuity_epoch": quote.continuity_epoch,
+        "delivery_fee_exempt": quote.delivery_fee_exempt,
+        "open_interest": str(quote.open_interest),
+        "gamma": str(quote.gamma),
+    }
+
+
+def _option_quote_from_object(value: object) -> OptionQuote:
+    item = _mapping(value, "market_observation.quote")
+    _require_fields(
+        item,
+        {
+            "instrument_name",
+            "product_id",
+            "product_spec_id",
+            "expiry",
+            "strike",
+            "option_type",
+            "signed_delta",
+            "mark_iv",
+            "bid",
+            "ask",
+            "tick_schedule",
+            "source_timestamp_ms",
+            "received_timestamp_ms",
+            "continuity_epoch",
+            "delivery_fee_exempt",
+            "open_interest",
+            "gamma",
+        },
+        "market_observation.quote",
+    )
+    product_id = ProductId(_text(item, "product_id"))
+    try:
+        product = PRODUCTS[product_id]
+    except KeyError as exc:
+        raise ValueError("market_observation.quote product is unsupported") from exc
+    if _text(item, "product_spec_id") != product.identity:
+        raise ValueError("OptionQuote product specification identity mismatch")
+    return OptionQuote(
+        instrument_name=_text(item, "instrument_name"),
+        product=product,
+        expiry=_datetime(item, "expiry"),
+        strike=_decimal(item, "strike"),
+        option_type=OptionType(_text(item, "option_type")),
+        signed_delta=_decimal(item, "signed_delta"),
+        mark_iv=_decimal(item, "mark_iv"),
+        bid=_price_levels(item, "bid"),
+        ask=_price_levels(item, "ask"),
+        tick_schedule=_tick_schedule_from_object(item.get("tick_schedule")),
+        source_timestamp_ms=_integer(item, "source_timestamp_ms"),
+        received_timestamp_ms=_integer(item, "received_timestamp_ms"),
+        continuity_epoch=_integer(item, "continuity_epoch"),
+        delivery_fee_exempt=_boolean(item, "delivery_fee_exempt"),
+        open_interest=_decimal(item, "open_interest"),
+        gamma=_decimal(item, "gamma"),
+    )
+
+
+def _price_level_object(level: PriceLevel) -> dict[str, object]:
+    return {"price": str(level.price), "quantity": str(level.quantity)}
+
+
+def _price_levels(value: dict[str, object], field: str) -> tuple[PriceLevel, ...]:
+    levels: list[PriceLevel] = []
+    for member in _array(value, field):
+        item = _mapping(member, f"market_observation.quote.{field}.level")
+        _require_fields(
+            item,
+            {"price", "quantity"},
+            f"market_observation.quote.{field}.level",
+        )
+        levels.append(
+            PriceLevel(
+                price=_decimal(item, "price"),
+                quantity=_decimal(item, "quantity"),
+            )
+        )
+    return tuple(levels)
+
+
+def _tick_schedule_object(schedule: TickSchedule) -> dict[str, object]:
+    return {
+        "base_tick": str(schedule.base_tick),
+        "steps": [
+            {"above_price": str(step.above_price), "tick_size": str(step.tick_size)}
+            for step in schedule.steps
+        ],
+    }
+
+
+def _tick_schedule_from_object(value: object) -> TickSchedule:
+    item = _mapping(value, "market_observation.quote.tick_schedule")
+    _require_fields(
+        item,
+        {"base_tick", "steps"},
+        "market_observation.quote.tick_schedule",
+    )
+    steps: list[TickStep] = []
+    for member in _array(item, "steps"):
+        step = _mapping(member, "market_observation.quote.tick_schedule.step")
+        _require_fields(
+            step,
+            {"above_price", "tick_size"},
+            "market_observation.quote.tick_schedule.step",
+        )
+        steps.append(
+            TickStep(
+                above_price=_decimal(step, "above_price"),
+                tick_size=_decimal(step, "tick_size"),
+            )
+        )
+    return TickSchedule(base_tick=_decimal(item, "base_tick"), steps=tuple(steps))
 
 
 def _utc(value: datetime, field: str) -> datetime:
@@ -376,6 +766,24 @@ def _mapping(value: object, field: str) -> dict[str, object]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise ValueError(f"{field} must be an object")
     return value
+
+
+def _require_fields(
+    value: dict[str, object],
+    expected: set[str],
+    field: str,
+) -> None:
+    actual = set(value)
+    if actual == expected:
+        return
+    missing = sorted(expected - actual)
+    unexpected = sorted(actual - expected)
+    details: list[str] = []
+    if missing:
+        details.append(f"missing {missing}")
+    if unexpected:
+        details.append(f"unexpected {unexpected}")
+    raise ValueError(f"{field} fields are invalid: {', '.join(details)}")
 
 
 def _text(value: dict[str, object], field: str) -> str:
@@ -399,6 +807,62 @@ def _optional_mapping(value: dict[str, object], field: str) -> dict[str, object]
     if member is None:
         return None
     return _mapping(member, field)
+
+
+def _array(value: dict[str, object], field: str) -> list[object]:
+    member = value.get(field)
+    if not isinstance(member, list):
+        raise ValueError(f"{field} must be an array")
+    return member
+
+
+def _string_tuple(value: dict[str, object], field: str) -> tuple[str, ...]:
+    members = _array(value, field)
+    result: list[str] = []
+    for member in members:
+        if not isinstance(member, str) or not member:
+            raise ValueError(f"{field} must be an array of non-empty strings")
+        result.append(member)
+    return tuple(result)
+
+
+def _decimal(value: dict[str, object], field: str) -> Decimal:
+    member = value.get(field)
+    if not isinstance(member, str) or not member:
+        raise ValueError(f"{field} must be a decimal string")
+    try:
+        result = Decimal(member)
+    except InvalidOperation as exc:
+        raise ValueError(f"{field} must be a decimal string") from exc
+    if not result.is_finite():
+        raise ValueError(f"{field} must be finite")
+    return result
+
+
+def _optional_decimal(value: dict[str, object], field: str) -> Decimal | None:
+    if value.get(field) is None:
+        return None
+    return _decimal(value, field)
+
+
+def _integer(value: dict[str, object], field: str) -> int:
+    member = value.get(field)
+    if isinstance(member, bool) or not isinstance(member, int) or member < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+    return member
+
+
+def _optional_integer(value: dict[str, object], field: str) -> int | None:
+    if value.get(field) is None:
+        return None
+    return _integer(value, field)
+
+
+def _boolean(value: dict[str, object], field: str) -> bool:
+    member = value.get(field)
+    if not isinstance(member, bool):
+        raise ValueError(f"{field} must be boolean")
+    return member
 
 
 def _payload_text(value: dict[str, object] | None) -> str | None:

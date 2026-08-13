@@ -5,15 +5,18 @@ from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from threading import Barrier
+from types import SimpleNamespace
 
 import pytest
 
+import optimatrix.deribit_snapshot as deribit_snapshot
 from optimatrix.decision import schedule_decision_windows
 from optimatrix.deribit_snapshot import (
     DERIBIT_DELIVERY_PRICE_METHOD_ID,
     DERIBIT_DELIVERY_PRICE_SOURCE_ID,
     DERIBIT_INDEX_PATH_METHOD_ID,
     DERIBIT_PUBLIC_METHOD_ALLOWLIST,
+    DeribitClock,
     DeribitHttpClient,
     DeribitSourceError,
     PublicRpcResponse,
@@ -27,12 +30,6 @@ from optimatrix.market import EventState, EventStateSource, SettlementEvidenceKi
 from optimatrix.products import BTC
 from optimatrix.session import current_deribit_session
 from optimatrix.workbench import build_workbench_document
-
-
-@pytest.fixture(autouse=True)
-def _freeze_public_snapshot_receive_clock(monkeypatch) -> None:
-    boundary = datetime(2026, 8, 12, 18, 7, tzinfo=UTC).timestamp()
-    monkeypatch.setattr("optimatrix.deribit_snapshot.time.time", lambda: boundary)
 
 
 class FakeDeribitClient:
@@ -137,6 +134,8 @@ def test_public_snapshot_projects_bounded_whole_product_without_writes(
         is EventStateSource.EXPLICIT_HUMAN_OR_EXTERNAL_CALENDAR_INPUT
     )
     snapshot = evaluation.as_object()
+    assert snapshot["observed_at"] == evaluation.observed_at.isoformat()
+    assert snapshot["known_at"] == evaluation.observation.known_at.isoformat()
     counts = snapshot["market_counts"]
     assert counts["legal_structures"] > 0
     assert snapshot["window"]["ledger_state"] == "NOT_RECORDED_BY_BOUNDED_SNAPSHOT"
@@ -161,6 +160,212 @@ def test_incomplete_book_universe_is_unknown_and_skips_structure(policy) -> None
     assert evaluation.selection is None
     snapshot = evaluation.as_object()
     assert snapshot["projection"]["state"] == "UNKNOWN"
+
+
+def test_incomplete_book_response_still_advances_complete_cut_known_at(policy) -> None:
+    now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    boundary_us = int(now.timestamp() * 1_000_000)
+    boundary_ms = boundary_us // 1_000
+
+    class TimedClosedBookClient(FakeDeribitClient):
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            result = super().call(method, params)
+            is_closed = (
+                method == "public/get_order_book" and params["instrument_name"] == "BTC-X-99000-P"
+            )
+            if is_closed:
+                result = {"state": "closed", "instrument_name": "BTC-X-99000-P"}
+            round_trip_ms = 4_500 if is_closed else 20
+            return PublicRpcResponse(
+                jsonrpc="2.0",
+                request_id=1,
+                result=result,
+                testnet=False,
+                server_received_at_us=boundary_us,
+                server_sent_at_us=boundary_us + 1_000,
+                server_processing_us=1_000,
+                request_sent_monotonic_ns=1_000_000_000,
+                response_received_monotonic_ns=(1_000_000_000 + round_trip_ms * 1_000_000),
+            )
+
+    evaluation = evaluate_live_btc_snapshot(
+        client=TimedClosedBookClient(now),
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=8,
+        depth=20,
+    )
+
+    assert evaluation.observation.known_at == now + timedelta(milliseconds=4_500)
+    assert evaluation.context.evidence.market_received_min_ms == boundary_ms + 20
+    assert evaluation.context.evidence.market_received_max_ms == boundary_ms + 4_500
+    assert "SELECTION_UNIVERSE_INCOMPLETE" in evaluation.observation.data_health_blockers
+    assert "MARKET_RECEIVE_SPAN_EXCEEDED" in evaluation.observation.data_health_blockers
+
+
+def test_default_elapsed_clock_advances_across_macos_sleep(monkeypatch) -> None:
+    calls: list[int] = []
+    fake_time = SimpleNamespace(
+        CLOCK_MONOTONIC_RAW=4,
+        clock_gettime_ns=lambda clock_id: calls.append(clock_id) or 123_456_789,
+    )
+    monkeypatch.setattr(deribit_snapshot, "sys", SimpleNamespace(platform="darwin"))
+    monkeypatch.setattr(deribit_snapshot, "time", fake_time)
+
+    assert deribit_snapshot._continuous_monotonic_ns() == 123_456_789
+    assert calls == [4]
+
+
+def test_deribit_clock_ignores_late_response_with_older_server_send_anchor() -> None:
+    at = datetime(2026, 8, 12, 9, tzinfo=UTC)
+    at_us = int(at.timestamp() * 1_000_000)
+    monotonic_ns = 1_300_000_000
+    clock = DeribitClock(monotonic_ns=lambda: monotonic_ns)
+    newer = PublicRpcResponse(
+        jsonrpc="2.0",
+        request_id=2,
+        result={},
+        testnet=False,
+        server_received_at_us=at_us + 100_000,
+        server_sent_at_us=at_us + 110_000,
+        server_processing_us=10_000,
+        request_sent_monotonic_ns=1_000_000_000,
+        response_received_monotonic_ns=1_200_000_000,
+    )
+    clock.initialize(
+        newer.clock_reading,
+        server_sent_at_us=newer.server_sent_at_us,
+    )
+    before = clock.read()
+
+    older_but_received_later = PublicRpcResponse(
+        jsonrpc="2.0",
+        request_id=1,
+        result={},
+        testnet=False,
+        server_received_at_us=at_us - 100_000,
+        server_sent_at_us=at_us - 90_000,
+        server_processing_us=10_000,
+        request_sent_monotonic_ns=900_000_000,
+        response_received_monotonic_ns=monotonic_ns,
+    )
+    clock.refresh(
+        older_but_received_later.clock_reading,
+        server_sent_at_us=older_but_received_later.server_sent_at_us,
+    )
+    after = clock.read()
+
+    assert after == before
+
+
+def test_deribit_clock_newer_server_send_anchor_can_reanchor_and_widen() -> None:
+    at = datetime(2026, 8, 12, 9, tzinfo=UTC)
+    at_us = int(at.timestamp() * 1_000_000)
+    monotonic_ns = 1_401_000_000
+    clock = DeribitClock(monotonic_ns=lambda: monotonic_ns)
+    initial = PublicRpcResponse(
+        jsonrpc="2.0",
+        request_id=1,
+        result={},
+        testnet=False,
+        server_received_at_us=at_us,
+        server_sent_at_us=at_us + 1_000,
+        server_processing_us=1_000,
+        request_sent_monotonic_ns=1_000_000_000,
+        response_received_monotonic_ns=1_011_000_000,
+    )
+    clock.initialize(
+        initial.clock_reading,
+        server_sent_at_us=initial.server_sent_at_us,
+    )
+    before = clock.read()
+
+    newer = PublicRpcResponse(
+        jsonrpc="2.0",
+        request_id=2,
+        result={},
+        testnet=False,
+        server_received_at_us=at_us + 500_000,
+        server_sent_at_us=at_us + 501_000,
+        server_processing_us=1_000,
+        request_sent_monotonic_ns=1_200_000_000,
+        response_received_monotonic_ns=monotonic_ns,
+    )
+    clock.refresh(
+        newer.clock_reading,
+        server_sent_at_us=newer.server_sent_at_us,
+    )
+    after = clock.read()
+
+    assert after == newer.clock_reading
+    assert after.latest_at - after.earliest_at > before.latest_at - before.earliest_at
+
+
+def test_deribit_clock_never_moves_an_emitted_business_floor_backwards() -> None:
+    at = datetime(2026, 8, 12, 9, tzinfo=UTC)
+    at_us = int(at.timestamp() * 1_000_000)
+    monotonic_ns = [1_500_000_000]
+    clock = DeribitClock(monotonic_ns=lambda: monotonic_ns[0])
+    initial = PublicRpcResponse(
+        jsonrpc="2.0",
+        request_id=1,
+        result={},
+        testnet=False,
+        server_received_at_us=at_us,
+        server_sent_at_us=at_us,
+        server_processing_us=0,
+        request_sent_monotonic_ns=1_000_000_000,
+        response_received_monotonic_ns=1_000_000_000,
+    )
+    clock.initialize(
+        initial.clock_reading,
+        server_sent_at_us=initial.server_sent_at_us,
+    )
+    committed = clock.read()
+    assert committed.earliest_at == at + timedelta(milliseconds=500)
+
+    partially_behind = PublicRpcResponse(
+        jsonrpc="2.0",
+        request_id=2,
+        result={},
+        testnet=False,
+        server_received_at_us=at_us + 400_000,
+        server_sent_at_us=at_us + 400_000,
+        server_processing_us=0,
+        request_sent_monotonic_ns=1_300_000_000,
+        response_received_monotonic_ns=monotonic_ns[0],
+    )
+    clock.refresh(
+        partially_behind.clock_reading,
+        server_sent_at_us=partially_behind.server_sent_at_us,
+    )
+    clamped = clock.read()
+    assert clamped.earliest_at == committed.earliest_at
+    assert clamped.latest_at == at + timedelta(milliseconds=600)
+
+    monotonic_ns[0] += 200_000_000
+    progressed = clock.read()
+    assert progressed.earliest_at > clamped.earliest_at
+
+    wholly_behind = PublicRpcResponse(
+        jsonrpc="2.0",
+        request_id=3,
+        result={},
+        testnet=False,
+        server_received_at_us=at_us + 550_000,
+        server_sent_at_us=at_us + 550_000,
+        server_processing_us=0,
+        request_sent_monotonic_ns=monotonic_ns[0] - 40_000_000,
+        response_received_monotonic_ns=monotonic_ns[0],
+    )
+    with pytest.raises(DeribitSourceError, match="behind committed business time"):
+        clock.refresh(
+            wholly_behind.clock_reading,
+            server_sent_at_us=wholly_behind.server_sent_at_us,
+        )
+    with pytest.raises(DeribitSourceError, match="behind committed business time"):
+        clock.read()
 
 
 def test_snapshot_captures_independent_inputs_and_all_books_concurrently(policy) -> None:
@@ -235,6 +440,120 @@ def test_snapshot_retries_as_a_whole_when_any_requested_book_call_fails(policy) 
         )
 
 
+def test_snapshot_uses_server_response_envelope_for_causal_book_receipt(policy) -> None:
+    now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    boundary_ms = int(now.timestamp() * 1000)
+
+    class ClockSkewedBookClient(FakeDeribitClient):
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            result = super().call(method, params)
+            if method != "public/get_order_book":
+                return result
+            return PublicRpcResponse(
+                jsonrpc="2.0",
+                request_id=1,
+                result=result,
+                testnet=False,
+                server_received_at_us=boundary_ms * 1000,
+                server_sent_at_us=boundary_ms * 1000 + 500,
+                server_processing_us=500,
+                request_sent_monotonic_ns=1_000_000_000,
+                response_received_monotonic_ns=1_100_000_000,
+            )
+
+    evaluation = evaluate_live_btc_snapshot(
+        client=ClockSkewedBookClient(now),
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=8,
+        depth=20,
+    )
+
+    assert not evaluation.observation.data_health_blockers
+    assert evaluation.observed_at == now
+    assert {quote.received_timestamp_ms for quote in evaluation.quotes} == {boundary_ms + 100}
+    assert evaluation.observation.known_at == now + timedelta(milliseconds=100)
+
+
+@pytest.mark.parametrize(
+    "latest_method",
+    (
+        "public/get_index_price",
+        "public/get_instruments",
+        "public/get_index_chart_data",
+        "public/get_order_book",
+    ),
+)
+def test_snapshot_known_at_covers_every_public_input_response(policy, latest_method) -> None:
+    now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    boundary_us = int(now.timestamp() * 1_000_000)
+    boundary_ms = boundary_us // 1_000
+
+    class TimedCutClient(FakeDeribitClient):
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            result = super().call(method, params)
+            round_trip_ms = 200 if method == latest_method else 20
+            return PublicRpcResponse(
+                jsonrpc="2.0",
+                request_id=1,
+                result=result,
+                testnet=False,
+                server_received_at_us=boundary_us,
+                server_sent_at_us=boundary_us + 1_000,
+                server_processing_us=1_000,
+                request_sent_monotonic_ns=1_000_000_000,
+                response_received_monotonic_ns=(1_000_000_000 + round_trip_ms * 1_000_000),
+            )
+
+    evaluation = evaluate_live_btc_snapshot(
+        client=TimedCutClient(now),
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=8,
+        depth=20,
+    )
+
+    assert evaluation.observed_at == now + timedelta(milliseconds=1)
+    assert evaluation.observation.known_at == now + timedelta(milliseconds=200)
+    assert evaluation.context.evidence.market_received_min_ms == boundary_ms + 20
+    assert evaluation.context.evidence.market_received_max_ms == boundary_ms + 200
+    assert not evaluation.observation.data_health_blockers
+
+
+def test_snapshot_rejects_source_timestamp_after_its_server_response_envelope(policy) -> None:
+    now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    boundary_ms = int(now.timestamp() * 1000)
+
+    class InvalidBookCausalityClient(FakeDeribitClient):
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            result = super().call(method, params)
+            if method != "public/get_order_book":
+                return result
+            return PublicRpcResponse(
+                jsonrpc="2.0",
+                request_id=1,
+                result=result,
+                testnet=False,
+                server_received_at_us=(boundary_ms - 200) * 1000,
+                server_sent_at_us=(boundary_ms - 100) * 1000,
+                server_processing_us=100_000,
+                request_sent_monotonic_ns=1_000_000_000,
+                response_received_monotonic_ns=1_800_000_000,
+            )
+
+    with pytest.raises(DeribitSourceError, match="6 of 6 requested option books failed"):
+        evaluate_live_btc_snapshot(
+            client=InvalidBookCausalityClient(now),
+            policy=policy,
+            now=now,
+            event_state=EventState.NONE,
+            maximum_books=8,
+            depth=20,
+        )
+
+
 def test_material_index_history_gap_rejects_snapshot(policy) -> None:
     now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
     client = FakeDeribitClient(now, remove_history=frozenset({80, 81, 82}))
@@ -251,15 +570,12 @@ def test_material_index_history_gap_rejects_snapshot(policy) -> None:
 
 def test_snapshot_keeps_matched_physical_horizon_evaluable_with_five_minute_cadence_near_expiry(
     policy,
-    monkeypatch,
 ) -> None:
     session = current_deribit_session(
         datetime(2026, 8, 12, 18, 7, tzinfo=UTC),
         phase_policy=policy.session,
     )
     now = session.end - timedelta(minutes=29)
-    monkeypatch.setattr("optimatrix.deribit_snapshot.time.time", lambda: now.timestamp())
-
     evaluation = evaluate_live_btc_snapshot(
         client=FakeDeribitClient(now),
         policy=policy,
@@ -310,9 +626,8 @@ def test_http_client_refuses_methods_outside_b3_allowlist_before_request_constru
     assert connection_constructed is False
 
 
-def test_http_client_preserves_validated_production_json_rpc_envelope(monkeypatch) -> None:
+def test_http_client_requires_get_time_before_other_public_calls(monkeypatch) -> None:
     sent_ms = int(datetime(2026, 8, 12, 18, 7, tzinfo=UTC).timestamp() * 1000)
-    receive_ms = sent_ms + 50
     server_in_us = sent_ms * 1000 + 10_000
     server_out_us = sent_ms * 1000 + 20_000
     payload = {
@@ -348,28 +663,120 @@ def test_http_client_preserves_validated_production_json_rpc_envelope(monkeypatc
         def close(self) -> None:
             requests.append("closed")
 
-    clock = iter((sent_ms / 1000, receive_ms / 1000))
-    monkeypatch.setattr("optimatrix.deribit_snapshot.time.time", lambda: next(clock))
+    monotonic = iter((1_000_000_000, 1_050_000_000))
     monkeypatch.setattr("optimatrix.deribit_snapshot.HTTPSConnection", FakeHttpsConnection)
-    response = DeribitHttpClient(timeout_seconds=10).call(
+    client = DeribitHttpClient(timeout_seconds=10, monotonic_ns=lambda: next(monotonic))
+    with pytest.raises(DeribitSourceError, match="get_time"):
+        client.call(
+            "public/get_index_price",
+            {"index_name": "btc_usd"},
+        )
+    assert not requests
+
+
+def test_http_client_get_time_initializes_deribit_clock(monkeypatch) -> None:
+    boundary_ms = int(datetime(2026, 8, 12, 18, 7, tzinfo=UTC).timestamp() * 1000)
+    payloads = iter(
+        (
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": boundary_ms + 10,
+                "testnet": False,
+                "usIn": (boundary_ms + 10) * 1000,
+                "usOut": (boundary_ms + 20) * 1000,
+                "usDiff": 10_000,
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {"index_price": 100000},
+                "testnet": False,
+                "usIn": (boundary_ms + 70) * 1000,
+                "usOut": (boundary_ms + 80) * 1000,
+                "usDiff": 10_000,
+            },
+        )
+    )
+
+    class FakeHttpResponse:
+        status = 200
+
+        def getheader(self, _name):
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(next(payloads)).encode("utf-8")
+
+    requests: list[object] = []
+
+    class FakeHttpsConnection:
+        def __init__(self, host, *, port, timeout):
+            requests.append((host, port, timeout))
+
+        def request(self, method, path, *, body, headers):
+            requests.append((method, path, body, headers))
+
+        def getresponse(self):
+            return FakeHttpResponse()
+
+        def close(self) -> None:
+            requests.append("closed")
+
+    monotonic_values = iter(
+        (
+            1_000_000_000,
+            1_050_000_000,
+            1_060_000_000,
+            1_110_000_000,
+            1_120_000_000,
+        )
+    )
+    monkeypatch.setattr("optimatrix.deribit_snapshot.HTTPSConnection", FakeHttpsConnection)
+    monkeypatch.setattr(
+        "optimatrix.deribit_snapshot.time.time",
+        lambda: (_ for _ in ()).throw(AssertionError("wall clock must not be read")),
+    )
+    client = DeribitHttpClient(monotonic_ns=lambda: next(monotonic_values))
+    preflight = preflight_public_clock(client)
+    response = client.call(
         "public/get_index_price",
         {"index_name": "btc_usd"},
     )
     assert isinstance(response, PublicRpcResponse)
     assert response.result == {"index_price": 100000}
     assert response.testnet is False
-    assert response.local_sent_at_ms == sent_ms
-    assert response.local_received_at_ms == receive_ms
+    assert preflight.clock_reading.earliest_at == datetime.fromtimestamp(
+        (boundary_ms + 20) / 1000,
+        tz=UTC,
+    )
+    assert preflight.clock_reading.estimate_at == datetime.fromtimestamp(
+        (boundary_ms + 40) / 1000,
+        tz=UTC,
+    )
+    assert preflight.clock_reading.latest_at == datetime.fromtimestamp(
+        (boundary_ms + 60) / 1000,
+        tz=UTC,
+    )
+    assert response.request_round_trip_ms == 50
     assert response.server_processing_us == 10_000
-    assert requests[0] == ("www.deribit.com", None, 10)
+    assert response.clock_reading.latest_at == datetime.fromtimestamp(
+        (boundary_ms + 120) / 1000,
+        tz=UTC,
+    )
+    assert client.clock.read().latest_at == datetime.fromtimestamp(
+        (boundary_ms + 130) / 1000,
+        tz=UTC,
+    )
+    assert requests[0] == ("www.deribit.com", None, 10.0)
     method, path, body, headers = requests[1]
     assert method == "POST"
-    assert path == "/api/v2/public/get_index_price"
+    assert path == "/api/v2/public/get_time"
     assert json.loads(body) == {
         "jsonrpc": "2.0",
         "id": 1,
-        "method": "public/get_index_price",
-        "params": {"index_name": "btc_usd"},
+        "method": "public/get_time",
+        "params": {},
     }
     assert headers["Connection"] == "keep-alive"
     assert headers["Accept-Encoding"] == "gzip"
@@ -459,9 +866,8 @@ def test_http_client_rejects_invalid_http_transport_facts(
         DeribitHttpClient().call("public/get_time", {})
 
 
-def test_public_clock_preflight_supports_result_only_fake_clients() -> None:
-    local_now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
-    server_time_ms = int(local_now.timestamp() * 1000) + 75
+def test_public_clock_preflight_requires_validated_response_envelope() -> None:
+    server_time_ms = int(datetime(2026, 8, 12, 18, 7, tzinfo=UTC).timestamp() * 1000)
 
     class ClockClient:
         def call(self, method: str, params: Mapping[str, object]) -> object:
@@ -469,23 +875,76 @@ def test_public_clock_preflight_supports_result_only_fake_clients() -> None:
             assert not params
             return server_time_ms
 
-    preflight = preflight_public_clock(
-        ClockClient(),
-        local_now=local_now,
-        maximum_clock_skew_ms=100,
+    with pytest.raises(DeribitSourceError, match="validated response envelope"):
+        preflight_public_clock(ClockClient())
+
+
+def test_public_clock_preflight_rejects_get_time_outside_response_envelope() -> None:
+    boundary = datetime(2026, 8, 13, 8, 5, tzinfo=UTC)
+    boundary_ms = int(boundary.timestamp() * 1_000)
+
+    class InvalidEnvelopeClient:
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            assert method == "public/get_time"
+            assert not params
+            return PublicRpcResponse(
+                jsonrpc="2.0",
+                request_id=1,
+                result=boundary_ms + 1_000,
+                testnet=False,
+                server_received_at_us=boundary_ms * 1_000,
+                server_sent_at_us=boundary_ms * 1_000 + 500,
+                server_processing_us=500,
+                request_sent_monotonic_ns=1_000_000_000,
+                response_received_monotonic_ns=1_100_000_000,
+            )
+
+    with pytest.raises(DeribitSourceError, match="outside its response timing envelope"):
+        preflight_public_clock(InvalidEnvelopeClient())
+
+
+def test_public_clock_and_settlement_use_causal_server_send_boundary() -> None:
+    boundary = datetime(2026, 8, 13, 8, 5, tzinfo=UTC)
+    boundary_ms = int(boundary.timestamp() * 1000)
+
+    class EnvelopeClient:
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            result: object
+            if method == "public/get_time":
+                result = boundary_ms
+            elif method == "public/get_delivery_prices":
+                result = {
+                    "data": [{"date": "2026-08-13", "delivery_price": "119123.45"}],
+                    "records_total": 1,
+                }
+            else:
+                raise AssertionError(f"unexpected method: {method}")
+            return PublicRpcResponse(
+                jsonrpc="2.0",
+                request_id=1,
+                result=result,
+                testnet=False,
+                server_received_at_us=boundary_ms * 1000,
+                server_sent_at_us=boundary_ms * 1000 + 500,
+                server_processing_us=500,
+                request_sent_monotonic_ns=1_000_000_000,
+                response_received_monotonic_ns=1_100_000_000,
+            )
+
+    preflight = preflight_public_clock(EnvelopeClient())
+    settlement = fetch_btc_expiry_settlement(
+        EnvelopeClient(),
+        expiry=datetime(2026, 8, 13, 8, tzinfo=UTC),
+        known_at=boundary,
     )
-    assert preflight.clock_skew_ms == 75
-    assert preflight.request_round_trip_ms is None
-    with pytest.raises(DeribitSourceError, match="clock skew"):
-        preflight_public_clock(
-            ClockClient(),
-            local_now=local_now,
-            maximum_clock_skew_ms=50,
-        )
+
+    expected = boundary + timedelta(milliseconds=100)
+    assert preflight.known_at == expected
+    assert settlement.known_at == expected
 
 
-def test_snapshot_binds_explicit_target_and_forces_required_books(policy, monkeypatch) -> None:
-    now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+def test_snapshot_binds_explicit_target_and_forces_required_books(policy) -> None:
+    now = datetime(2026, 8, 12, 18, 14, 59, tzinfo=UTC)
     session = current_deribit_session(now, phase_policy=policy.session)
     target = next(
         window
@@ -514,13 +973,27 @@ def test_snapshot_binds_explicit_target_and_forces_required_books(policy, monkey
     assert evaluation.decision_window == target
     assert {quote.instrument_name for quote in evaluation.quotes} == set(required_names)
 
-    crossed_at = target.ends_at + timedelta(seconds=1)
-    monkeypatch.setattr(
-        "optimatrix.deribit_snapshot.time.time",
-        lambda: crossed_at.timestamp(),
-    )
-    crossed = evaluate_live_btc_snapshot(
-        client=FakeDeribitClient(now),
+    within_grace_at = target.ends_at + timedelta(milliseconds=500)
+    within_grace_ms = int(within_grace_at.timestamp() * 1000)
+    window_end_ms = int(target.ends_at.timestamp() * 1000)
+
+    class GraceBoundaryClient(FakeDeribitClient):
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            result = super().call(method, params)
+            return PublicRpcResponse(
+                jsonrpc="2.0",
+                request_id=1,
+                result=result,
+                testnet=False,
+                server_received_at_us=(window_end_ms - 20) * 1_000,
+                server_sent_at_us=(window_end_ms - 10) * 1_000,
+                server_processing_us=10_000,
+                request_sent_monotonic_ns=1_000_000_000,
+                response_received_monotonic_ns=1_520_000_000,
+            )
+
+    within_grace = evaluate_live_btc_snapshot(
+        client=GraceBoundaryClient(now),
         policy=policy,
         now=now,
         event_state=EventState.NONE,
@@ -528,8 +1001,71 @@ def test_snapshot_binds_explicit_target_and_forces_required_books(policy, monkey
         target_window=target,
         required_instrument_names=required_names,
     )
-    assert crossed.decision_window == target
-    assert "SNAPSHOT_CROSSED_TARGET_WINDOW_BOUNDARY" in crossed.observation.data_health_blockers
+    assert within_grace.observation.observed_at == target.ends_at - timedelta(milliseconds=10)
+    assert within_grace.observation.known_at == within_grace_at
+    assert "SNAPSHOT_CROSSED_TARGET_WINDOW_BOUNDARY" not in (
+        within_grace.observation.data_health_blockers
+    )
+
+    class PostWindowInputClient(FakeDeribitClient):
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            result = super().call(method, params)
+            return PublicRpcResponse(
+                jsonrpc="2.0",
+                request_id=1,
+                result=result,
+                testnet=False,
+                server_received_at_us=(within_grace_ms - 20) * 1_000,
+                server_sent_at_us=(within_grace_ms - 10) * 1_000,
+                server_processing_us=10_000,
+                request_sent_monotonic_ns=1_000_000_000,
+                response_received_monotonic_ns=1_020_000_000,
+            )
+
+    post_window_input = evaluate_live_btc_snapshot(
+        client=PostWindowInputClient(now),
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=4,
+        target_window=target,
+        required_instrument_names=required_names,
+    )
+    assert post_window_input.observation.observed_at == within_grace_at - timedelta(milliseconds=10)
+    assert "SNAPSHOT_CROSSED_TARGET_WINDOW_BOUNDARY" in (
+        post_window_input.observation.data_health_blockers
+    )
+    assert post_window_input.selection is None
+
+    crossed_at = target.input_deadline + timedelta(seconds=1)
+    crossed_ms = int(crossed_at.timestamp() * 1000)
+
+    class CrossedBoundaryClient(FakeDeribitClient):
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            result = super().call(method, params)
+            return PublicRpcResponse(
+                jsonrpc="2.0",
+                request_id=1,
+                result=result,
+                testnet=False,
+                server_received_at_us=(crossed_ms - 20) * 1_000,
+                server_sent_at_us=(crossed_ms - 10) * 1_000,
+                server_processing_us=10_000,
+                request_sent_monotonic_ns=1_000_000_000,
+                response_received_monotonic_ns=1_020_000_000,
+            )
+
+    crossed = evaluate_live_btc_snapshot(
+        client=CrossedBoundaryClient(now),
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=4,
+        target_window=target,
+        required_instrument_names=required_names,
+    )
+    assert crossed.observation.known_at == crossed_at
+    assert "SNAPSHOT_CROSSED_TARGET_WINDOW_BOUNDARY" in (crossed.observation.data_health_blockers)
     assert crossed.selection is None
 
 

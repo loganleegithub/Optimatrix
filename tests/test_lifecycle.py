@@ -215,6 +215,58 @@ def test_data_gap_preserves_position_and_cannot_create_exit_intent(policy, tmp_p
     assert updated.gap_observed
 
 
+def test_latest_exit_freezes_responsibility_even_when_market_data_is_unknown(
+    policy,
+    tmp_path,
+) -> None:
+    engine, case = _entered_case(policy, tmp_path)
+    expiry = current_expiry(case.entry_observed_at)
+    latest_exit_at = expiry - timedelta(minutes=policy.lifecycle.latest_exit_minutes_to_expiry)
+    gap = _observation(engine, latest_exit_at, evidence=MarketContextEvidence.unknown())
+
+    updated, evaluation = monitor_shadow_position(case, observation=gap, policy=policy)
+
+    assert evaluation.observation_status is ObservationStatus.UNKNOWN
+    assert evaluation.management_action is PositionAction.EXIT_WHOLE_PRODUCT
+    assert evaluation.known_triggers == ("LATEST_EXIT",)
+    assert evaluation.reason is not None
+    assert updated.gap_observed
+    assert updated.position_state is PositionState.EXIT_INTENT_FROZEN
+    assert updated.exit_intent is not None
+    assert updated.exit_intent.reason == "LATEST_EXIT"
+    assert updated.exit_intent.source == "DERIBIT_TIME_BOUNDARY"
+
+
+def test_latest_exit_freezes_responsibility_when_one_frozen_leg_is_missing(
+    policy,
+    tmp_path,
+) -> None:
+    engine, case = _entered_case(policy, tmp_path)
+    expiry = current_expiry(case.entry_observed_at)
+    latest_exit_at = expiry - timedelta(minutes=policy.lifecycle.latest_exit_minutes_to_expiry)
+    quotes = tuple(
+        quote
+        for quote in base_chain(expiry=expiry, observed_at=latest_exit_at)
+        if not quote.instrument_name.endswith("95000-P")
+    )
+    incomplete = _observation(engine, latest_exit_at, quotes=quotes)
+    assert not incomplete.data_health_blockers
+
+    updated, evaluation = monitor_shadow_position(
+        case,
+        observation=incomplete,
+        policy=policy,
+    )
+
+    assert evaluation.observation_status is ObservationStatus.UNKNOWN
+    assert evaluation.management_action is PositionAction.EXIT_WHOLE_PRODUCT
+    assert evaluation.known_triggers == ("LATEST_EXIT",)
+    assert evaluation.reason == "SELECTED_STRUCTURE_QUOTES_MISSING"
+    assert updated.position_state is PositionState.EXIT_INTENT_FROZEN
+    assert updated.exit_intent is not None
+    assert updated.exit_intent.reason == "LATEST_EXIT"
+
+
 def test_first_trigger_is_immutable_and_exit_requires_strictly_later_cut(
     policy,
     tmp_path,

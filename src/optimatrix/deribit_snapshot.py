@@ -3,12 +3,13 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import sys
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from http.client import HTTPException, HTTPSConnection
 from itertools import pairwise
@@ -67,13 +68,153 @@ class DeribitSourceError(RuntimeError):
     """A bounded public Deribit snapshot could not be interpreted truthfully."""
 
 
+def _continuous_monotonic_ns() -> int:
+    """Return elapsed time that continues across host sleep when the OS exposes it."""
+
+    if sys.platform == "darwin":
+        return time.clock_gettime_ns(time.CLOCK_MONOTONIC_RAW)
+    boot_time_clock = getattr(time, "CLOCK_BOOTTIME", None)
+    if boot_time_clock is not None:
+        return time.clock_gettime_ns(boot_time_clock)
+    return time.monotonic_ns()
+
+
 class PublicRpcClient(Protocol):
     def call(self, method: str, params: Mapping[str, object]) -> object: ...
 
 
 @dataclass(frozen=True)
+class DeribitClockReading:
+    """A bounded Deribit UTC reading at one local monotonic instant."""
+
+    earliest_at: datetime
+    estimate_at: datetime
+    latest_at: datetime
+    monotonic_ns: int
+
+    def __post_init__(self) -> None:
+        earliest = _utc(self.earliest_at)
+        estimate = _utc(self.estimate_at)
+        latest = _utc(self.latest_at)
+        if not earliest <= estimate <= latest:
+            raise ValueError("Deribit clock reading bounds are invalid")
+        if isinstance(self.monotonic_ns, bool) or not isinstance(self.monotonic_ns, int):
+            raise ValueError("monotonic_ns must be an integer")
+        if self.monotonic_ns < 0:
+            raise ValueError("monotonic_ns must be non-negative")
+        object.__setattr__(self, "earliest_at", earliest)
+        object.__setattr__(self, "estimate_at", estimate)
+        object.__setattr__(self, "latest_at", latest)
+
+    def at_monotonic(self, monotonic_ns: int) -> DeribitClockReading:
+        if isinstance(monotonic_ns, bool) or not isinstance(monotonic_ns, int):
+            raise ValueError("monotonic_ns must be an integer")
+        if monotonic_ns < self.monotonic_ns:
+            raise ValueError("Deribit clock cannot be projected backwards")
+        elapsed_ns = monotonic_ns - self.monotonic_ns
+        earliest_elapsed = timedelta(microseconds=elapsed_ns // 1_000)
+        estimate_elapsed = timedelta(microseconds=(elapsed_ns + 500) // 1_000)
+        latest_elapsed = timedelta(microseconds=_ceil_div(elapsed_ns, 1_000))
+        return DeribitClockReading(
+            earliest_at=self.earliest_at + earliest_elapsed,
+            estimate_at=self.estimate_at + estimate_elapsed,
+            latest_at=self.latest_at + latest_elapsed,
+            monotonic_ns=monotonic_ns,
+        )
+
+
+class DeribitClock:
+    """One process-local Deribit UTC clock anchored only by public responses."""
+
+    def __init__(self, *, monotonic_ns: Callable[[], int] | None = None) -> None:
+        self._monotonic_ns = monotonic_ns or _continuous_monotonic_ns
+        self._reading: DeribitClockReading | None = None
+        self._server_sent_at_us: int | None = None
+        self._last_emitted_reading: DeribitClockReading | None = None
+        self._lock = threading.Lock()
+
+    @property
+    def initialized(self) -> bool:
+        with self._lock:
+            return self._reading is not None
+
+    def initialize(
+        self,
+        reading: DeribitClockReading,
+        *,
+        server_sent_at_us: int | None = None,
+    ) -> None:
+        with self._lock:
+            if self._reading is not None:
+                raise DeribitSourceError("Deribit clock is already initialized")
+            self._reading = reading
+            self._server_sent_at_us = (
+                server_sent_at_us
+                if server_sent_at_us is not None
+                else _datetime_to_epoch_us(reading.earliest_at)
+            )
+
+    def refresh(
+        self,
+        reading: DeribitClockReading,
+        *,
+        server_sent_at_us: int | None = None,
+    ) -> None:
+        with self._lock:
+            if self._reading is None:
+                raise DeribitSourceError("public/get_time must initialize the Deribit clock")
+            incoming_server_sent_at_us = (
+                server_sent_at_us
+                if server_sent_at_us is not None
+                else _datetime_to_epoch_us(reading.earliest_at)
+            )
+            assert self._server_sent_at_us is not None
+            if incoming_server_sent_at_us < self._server_sent_at_us:
+                return
+            if (
+                incoming_server_sent_at_us == self._server_sent_at_us
+                and reading.monotonic_ns <= self._reading.monotonic_ns
+            ):
+                return
+            self._reading = reading
+            self._server_sent_at_us = incoming_server_sent_at_us
+            emitted = self._last_emitted_reading
+            if emitted is not None:
+                comparison_ns = max(emitted.monotonic_ns, reading.monotonic_ns)
+                emitted_at_comparison = emitted.at_monotonic(comparison_ns)
+                incoming_at_comparison = reading.at_monotonic(comparison_ns)
+                if incoming_at_comparison.latest_at < emitted_at_comparison.earliest_at:
+                    raise DeribitSourceError(
+                        "the latest Deribit clock anchor is behind committed business time"
+                    )
+
+    def read(self) -> DeribitClockReading:
+        with self._lock:
+            if self._reading is None:
+                raise DeribitSourceError("public/get_time has not initialized the Deribit clock")
+            monotonic_ns = self._monotonic_ns()
+            reading = self._reading.at_monotonic(monotonic_ns)
+            emitted = self._last_emitted_reading
+            if emitted is not None:
+                floor = emitted.at_monotonic(monotonic_ns).earliest_at
+                if reading.latest_at < floor:
+                    raise DeribitSourceError(
+                        "the latest Deribit clock anchor is behind committed business time"
+                    )
+                earliest_at = max(reading.earliest_at, floor)
+                reading = DeribitClockReading(
+                    earliest_at=earliest_at,
+                    estimate_at=max(earliest_at, reading.estimate_at),
+                    latest_at=reading.latest_at,
+                    monotonic_ns=reading.monotonic_ns,
+                )
+            self._last_emitted_reading = reading
+            return reading
+
+
+@dataclass(frozen=True)
 class PublicRpcResponse:
-    """One validated production Deribit JSON-RPC response and its local boundaries."""
+    """One validated production response with Deribit UTC and monotonic boundaries."""
 
     jsonrpc: str
     request_id: int
@@ -82,17 +223,62 @@ class PublicRpcResponse:
     server_received_at_us: int
     server_sent_at_us: int
     server_processing_us: int
-    local_sent_at_ms: int
-    local_received_at_ms: int
+    request_sent_monotonic_ns: int
+    response_received_monotonic_ns: int
+
+    def __post_init__(self) -> None:
+        for value, field_name in (
+            (self.request_sent_monotonic_ns, "request_sent_monotonic_ns"),
+            (self.response_received_monotonic_ns, "response_received_monotonic_ns"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+        if self.response_received_monotonic_ns < self.request_sent_monotonic_ns:
+            raise ValueError("monotonic receive boundary precedes request boundary")
+        if self.server_received_at_us <= 0 or self.server_sent_at_us < self.server_received_at_us:
+            raise ValueError("Deribit response timing order is invalid")
+        if self.server_processing_us != self.server_sent_at_us - self.server_received_at_us:
+            raise ValueError("Deribit response processing time is inconsistent")
+
+    @property
+    def clock_reading(self) -> DeribitClockReading:
+        round_trip_us = _ceil_div(
+            self.response_received_monotonic_ns - self.request_sent_monotonic_ns,
+            1_000,
+        )
+        uncertainty_us = max(0, round_trip_us - self.server_processing_us)
+        earliest_at = _datetime_from_epoch_us(self.server_sent_at_us)
+        return DeribitClockReading(
+            earliest_at=earliest_at,
+            estimate_at=earliest_at + timedelta(microseconds=uncertainty_us // 2),
+            latest_at=earliest_at + timedelta(microseconds=uncertainty_us),
+            monotonic_ns=self.response_received_monotonic_ns,
+        )
+
+    @property
+    def server_sent_at_ms(self) -> int:
+        return (self.server_sent_at_us + 999) // 1000
+
+    @property
+    def causal_received_at_ms(self) -> int:
+        """Conservative receipt boundary expressed only in Deribit UTC."""
+
+        return _datetime_to_ceil_ms(self.clock_reading.latest_at)
+
+    @property
+    def request_round_trip_ms(self) -> int:
+        return _ceil_div(
+            self.response_received_monotonic_ns - self.request_sent_monotonic_ns,
+            1_000_000,
+        )
 
 
 @dataclass(frozen=True)
 class PublicClockPreflight:
     server_time_ms: int
-    local_time_ms: int
-    clock_skew_ms: int
-    request_round_trip_ms: int | None
+    request_round_trip_ms: int
     known_at: datetime
+    clock_reading: DeribitClockReading
 
 
 @dataclass(frozen=True)
@@ -146,6 +332,7 @@ class PublicSnapshotEvaluation:
         )
         return {
             "observed_at": self.observed_at.isoformat(),
+            "known_at": self.observation.known_at.isoformat(),
             "session_id": self.session_id,
             "instrument_count": self.instrument_count,
             "requested_book_count": self.requested_book_count,
@@ -190,7 +377,7 @@ class PublicSnapshotEvaluation:
                 "projection": projection_state,
             },
             "context": {
-                "knowledge": self.context.knowledge.value,
+                "knowledge": self.context.knowledge_at(self.observation.known_at).value,
                 "index_price": str(self.context.index_price),
                 "forward_price": str(self.context.forward_price),
                 "trailing_realized_variance_proxy": str(
@@ -292,6 +479,7 @@ class DeribitHttpClient:
         base_url: str = DEFAULT_DERIBIT_API,
         timeout_seconds: float = 10.0,
         audit_callback: Callable[[str, Mapping[str, object], float], None] | None = None,
+        monotonic_ns: Callable[[], int] | None = None,
     ) -> None:
         if not base_url.startswith("https://"):
             raise ValueError("Deribit base_url must use HTTPS")
@@ -315,10 +503,14 @@ class DeribitHttpClient:
         self.audit_callback = audit_callback
         self._next_request_id = 1
         self._request_id_lock = threading.Lock()
+        self._monotonic_ns = monotonic_ns or _continuous_monotonic_ns
+        self.clock = DeribitClock(monotonic_ns=self._monotonic_ns)
 
     def call(self, method: str, params: Mapping[str, object]) -> PublicRpcResponse:
         if method not in DERIBIT_PUBLIC_METHOD_ALLOWLIST:
             raise ValueError("only public Deribit methods in the B3 allowlist are allowed")
+        if method != "public/get_time" and not self.clock.initialized:
+            raise DeribitSourceError("public/get_time must initialize the Deribit clock")
         if self.audit_callback is not None:
             self.audit_callback(method, dict(params), self.timeout_seconds)
         with self._request_id_lock:
@@ -339,7 +531,7 @@ class DeribitHttpClient:
             port=self._port,
             timeout=self.timeout_seconds,
         )
-        local_sent_at_ms = int(time.time() * 1000)
+        request_sent_monotonic_ns = self._monotonic_ns()
         try:
             connection.request(
                 "POST",
@@ -366,7 +558,7 @@ class DeribitHttpClient:
                 raise DeribitSourceError(
                     f"Deribit HTTP response uses unsupported encoding: {content_encoding}"
                 )
-            local_received_at_ms = int(time.time() * 1000)
+            response_received_monotonic_ns = self._monotonic_ns()
             payload = json.loads(response_body.decode("utf-8"))
         except DeribitSourceError:
             raise
@@ -383,60 +575,49 @@ class DeribitHttpClient:
             ) from exc
         finally:
             connection.close()
-        return _validated_public_rpc_response(
+        validated = _validated_public_rpc_response(
             payload,
             method=method,
             request_id=request_id,
             timeout_seconds=self.timeout_seconds,
-            local_sent_at_ms=local_sent_at_ms,
-            local_received_at_ms=local_received_at_ms,
+            request_sent_monotonic_ns=request_sent_monotonic_ns,
+            response_received_monotonic_ns=response_received_monotonic_ns,
         )
+        if method == "public/get_time" and not self.clock.initialized:
+            self.clock.initialize(
+                validated.clock_reading,
+                server_sent_at_us=validated.server_sent_at_us,
+            )
+        else:
+            self.clock.refresh(
+                validated.clock_reading,
+                server_sent_at_us=validated.server_sent_at_us,
+            )
+        return validated
 
 
 def preflight_public_clock(
     client: PublicRpcClient,
-    *,
-    local_now: datetime,
-    maximum_clock_skew_ms: int,
 ) -> PublicClockPreflight:
-    """Fail closed when Deribit's public clock is too far from the runtime clock."""
+    """Initialize and validate one production Deribit UTC clock reading."""
 
-    if (
-        isinstance(maximum_clock_skew_ms, bool)
-        or not isinstance(maximum_clock_skew_ms, int)
-        or maximum_clock_skew_ms < 0
-    ):
-        raise ValueError("maximum_clock_skew_ms must be a non-negative integer")
-    normalized_local_now = _utc(local_now)
-    local_time_ms = int(normalized_local_now.timestamp() * 1000)
     response = client.call("public/get_time", {})
     server_time_ms = _integer(_rpc_result(response), "public/get_time result")
     if server_time_ms <= 0:
         raise DeribitSourceError("public/get_time result must be positive")
-    request_round_trip_ms: int | None = None
-    known_at_ms = local_time_ms
-    comparison_local_ms = local_time_ms
-    if isinstance(response, PublicRpcResponse):
-        earliest_server_ms = response.server_received_at_us // 1000 - 1
-        latest_server_ms = (response.server_sent_at_us + 999) // 1000 + 1
-        if not earliest_server_ms <= server_time_ms <= latest_server_ms:
-            raise DeribitSourceError(
-                "public/get_time result is outside its response timing envelope"
-            )
-        request_round_trip_ms = response.local_received_at_ms - response.local_sent_at_ms
-        known_at_ms = max(known_at_ms, response.local_received_at_ms)
-        comparison_local_ms = (response.local_sent_at_ms + response.local_received_at_ms) // 2
-    clock_skew_ms = server_time_ms - comparison_local_ms
-    if abs(clock_skew_ms) > maximum_clock_skew_ms:
+    if not isinstance(response, PublicRpcResponse):
         raise DeribitSourceError(
-            "Deribit public clock skew exceeds the configured preflight boundary"
+            "production clock preflight requires a validated response envelope"
         )
+    earliest_server_ms = response.server_received_at_us // 1000
+    latest_server_ms = (response.server_sent_at_us + 999) // 1000
+    if not earliest_server_ms <= server_time_ms <= latest_server_ms:
+        raise DeribitSourceError("public/get_time result is outside its response timing envelope")
     return PublicClockPreflight(
         server_time_ms=server_time_ms,
-        local_time_ms=local_time_ms,
-        clock_skew_ms=clock_skew_ms,
-        request_round_trip_ms=request_round_trip_ms,
-        known_at=datetime.fromtimestamp(known_at_ms / 1000, tz=UTC),
+        request_round_trip_ms=response.request_round_trip_ms,
+        known_at=response.clock_reading.latest_at,
+        clock_reading=response.clock_reading,
     )
 
 
@@ -447,14 +628,27 @@ def fetch_btc_index_history(
 ) -> tuple[tuple[int, Decimal], ...]:
     """Read the validated public 2d BTC index series needed by WindowOutcome assembly."""
 
+    history, _boundary_ms = _fetch_btc_index_history_with_boundary(
+        client,
+        known_at=known_at,
+    )
+    return history
+
+
+def _fetch_btc_index_history_with_boundary(
+    client: PublicRpcClient,
+    *,
+    known_at: datetime,
+) -> tuple[tuple[tuple[int, Decimal], ...], int]:
     normalized_known_at = _utc(known_at)
+    request_boundary_ms = _datetime_to_floor_ms(normalized_known_at)
     response = client.call(
         "public/get_index_chart_data",
         {"index_name": BTC.price_index, "range": "2d"},
     )
-    return _index_history(
-        _rpc_result(response),
-        now_ms=int(normalized_known_at.timestamp() * 1000),
+    return (
+        _index_history(_rpc_result(response), now_ms=request_boundary_ms),
+        _response_known_at_ms(response, fallback_ms=request_boundary_ms),
     )
 
 
@@ -471,8 +665,8 @@ def summarize_btc_index_path(
     if normalized_start >= normalized_end:
         raise ValueError("index path boundaries must have positive duration")
     points = _validated_index_history_points(history)
-    start_ms = int(normalized_start.timestamp() * 1000)
-    end_ms = int(normalized_end.timestamp() * 1000)
+    start_ms = _datetime_to_floor_ms(normalized_start)
+    end_ms = _datetime_to_floor_ms(normalized_end)
     path = tuple(point for point in points if start_ms <= point[0] <= end_ms)
     if not path:
         return None
@@ -555,14 +749,15 @@ def fetch_btc_expiry_settlement(
         raise DeribitSourceError("delivery prices lack the exact UTC expiry date")
     if len(matching_prices) != 1:
         raise DeribitSourceError("delivery prices contain duplicate UTC expiry dates")
-    effective_known_at_ms = int(normalized_known_at.timestamp() * 1000)
-    if isinstance(response, PublicRpcResponse):
-        effective_known_at_ms = max(effective_known_at_ms, response.local_received_at_ms)
+    effective_known_at_ms = _response_known_at_ms(
+        response,
+        fallback_ms=_datetime_to_floor_ms(normalized_known_at),
+    )
     return ExpirySettlementFact(
         product_id=BTC.product_id,
         expiry=normalized_expiry,
         delivery_price_usd=matching_prices[0],
-        known_at=datetime.fromtimestamp(effective_known_at_ms / 1000, tz=UTC),
+        known_at=_datetime_from_epoch_ms(effective_known_at_ms),
         evidence_kind=SettlementEvidenceKind.OFFICIAL_EXCHANGE,
         source_id=DERIBIT_DELIVERY_PRICE_SOURCE_ID,
         method_id=DERIBIT_DELIVERY_PRICE_METHOD_ID,
@@ -591,6 +786,7 @@ def evaluate_live_btc_snapshot(
         maximum_books=maximum_books,
     )
     normalized_now = _utc(now)
+    request_boundary_ms = _datetime_to_floor_ms(normalized_now)
     session = current_deribit_session(normalized_now, phase_policy=policy.session)
     if target_window is not None:
         _validate_target_window(
@@ -610,18 +806,18 @@ def evaluate_live_btc_snapshot(
             {"currency": BTC.public_currency, "kind": "option", "expired": False},
         )
         history_future = executor.submit(
-            fetch_btc_index_history,
+            _fetch_btc_index_history_with_boundary,
             client,
             known_at=normalized_now,
         )
         index_response = index_future.result()
         instrument_response = instruments_future.result()
-        history = history_future.result()
+        history, history_known_at_ms = history_future.result()
     index_result = _mapping(_rpc_result(index_response), "index price result")
     index_price = _positive_decimal(index_result.get("index_price"), "index_price")
     instruments = _instrument_metadata(
         _rpc_result(instrument_response),
-        session_end_ms=int(session.end.timestamp() * 1000),
+        session_end_ms=_datetime_to_floor_ms(session.end),
     )
     available_names = {str(item["instrument_name"]) for item in instruments}
     missing_required_names = tuple(name for name in required_names if name not in available_names)
@@ -631,10 +827,17 @@ def evaluate_live_btc_snapshot(
         maximum_books=maximum_books,
         required_instrument_names=required_names,
     )
-    quotes, forwards, fetch_warnings = _fetch_books(
+    (
+        quotes,
+        forwards,
+        fetch_warnings,
+        book_source_boundaries_ms,
+        book_response_boundaries_ms,
+    ) = _fetch_books(
         client=client,
         metadata=selected_metadata,
         depth=depth,
+        fallback_received_at_ms=request_boundary_ms,
     )
     warnings: list[str] = list(fetch_warnings)
     warnings.extend(
@@ -670,9 +873,24 @@ def evaluate_live_btc_snapshot(
         index_history_cadence_ms=history_cadence_ms,
         book_fetch_mode="BOUNDED_CONCURRENT_PUBLIC_GET_ORDER_BOOK",
     )
-    request_boundary_ms = int(normalized_now.timestamp() * 1000)
-    known_at_ms = max(request_boundary_ms, int(time.time() * 1000))
-    known_at = datetime.fromtimestamp(known_at_ms / 1000, tz=UTC)
+    input_response_boundaries_ms = (
+        _response_known_at_ms(index_response, fallback_ms=request_boundary_ms),
+        _response_known_at_ms(instrument_response, fallback_ms=request_boundary_ms),
+        history_known_at_ms,
+        *book_response_boundaries_ms,
+    )
+    current_market_source_boundaries_ms = (
+        _response_source_upper_bound_ms(index_response, fallback_ms=request_boundary_ms),
+        _response_source_upper_bound_ms(instrument_response, fallback_ms=request_boundary_ms),
+        *book_source_boundaries_ms,
+    )
+    known_at_ms = max(
+        request_boundary_ms,
+        *input_response_boundaries_ms,
+    )
+    observed_at_ms = max(current_market_source_boundaries_ms)
+    observed_at = _datetime_from_epoch_ms(observed_at_ms)
+    known_at = _datetime_from_epoch_ms(known_at_ms)
     requested_books = tuple(sorted(str(item["instrument_name"]) for item in selected_metadata))
     usable_books = tuple(sorted(quote.instrument_name for quote in quotes))
     evidence_blockers: list[str] = []
@@ -681,12 +899,13 @@ def evaluate_live_btc_snapshot(
     if missing_required_names:
         evidence_blockers.append("REQUIRED_INSTRUMENT_METADATA_MISSING")
     if (
-        current_deribit_session(known_at, phase_policy=policy.session).session_id
+        current_deribit_session(observed_at, phase_policy=policy.session).session_id
         != session.session_id
     ):
         evidence_blockers.append("SNAPSHOT_CROSSED_SESSION_BOUNDARY")
-    if target_window is not None and not (
-        target_window.starts_at <= known_at < target_window.ends_at
+    if target_window is not None and (
+        not target_window.starts_at <= observed_at < target_window.ends_at
+        or known_at > target_window.input_deadline
     ):
         evidence_blockers.append("SNAPSHOT_CROSSED_TARGET_WINDOW_BOUNDARY")
     evidence = MarketContextEvidence(
@@ -701,10 +920,10 @@ def evaluate_live_btc_snapshot(
         history_coverage_start_ms=history[0][0],
         history_coverage_end_ms=history[-1][0],
         history_cadence_ms=history_cadence_ms,
-        market_source_min_ms=min(quote.source_timestamp_ms for quote in quotes),
-        market_source_max_ms=max(quote.source_timestamp_ms for quote in quotes),
-        market_received_min_ms=min(quote.received_timestamp_ms for quote in quotes),
-        market_received_max_ms=max(quote.received_timestamp_ms for quote in quotes),
+        market_source_min_ms=min(current_market_source_boundaries_ms),
+        market_source_max_ms=max(current_market_source_boundaries_ms),
+        market_received_min_ms=min(input_response_boundaries_ms),
+        market_received_max_ms=max(input_response_boundaries_ms),
         event_state_known_at_ms=request_boundary_ms,
         maximum_market_age_ms=policy.observation.maximum_age_ms,
         requested_books=requested_books,
@@ -712,7 +931,7 @@ def evaluate_live_btc_snapshot(
         declared_blockers=tuple(evidence_blockers),
     )
     context = MarketContext(
-        now=known_at,
+        now=observed_at,
         index_price=index_price,
         forward_price=forward,
         trailing_realized_variance_proxy=physical_variance,
@@ -741,6 +960,7 @@ def evaluate_live_btc_snapshot(
         policy=policy.observation,
         context=context,
         quotes=tuple(quotes),
+        known_at=known_at,
     )
     selection = (
         None
@@ -748,7 +968,7 @@ def evaluate_live_btc_snapshot(
         else select_btc_0dte_condor(observation=observation, policy=policy)
     )
     return PublicSnapshotEvaluation(
-        observed_at=known_at,
+        observed_at=observed_at,
         session_id=session.session_id,
         instrument_count=len(instruments),
         requested_book_count=len(selected_metadata),
@@ -768,22 +988,36 @@ def _fetch_books(
     client: PublicRpcClient,
     metadata: tuple[dict[str, object], ...],
     depth: int,
-) -> tuple[list[OptionQuote], list[Decimal], tuple[str, ...]]:
+    fallback_received_at_ms: int,
+) -> tuple[
+    list[OptionQuote],
+    list[Decimal],
+    tuple[str, ...],
+    tuple[int, ...],
+    tuple[int, ...],
+]:
     quotes: list[OptionQuote] = []
     forwards: list[Decimal] = []
     warnings: list[str] = []
+    source_boundaries_ms: list[int] = []
+    response_boundaries_ms: list[int] = []
 
-    def fetch_one(item: dict[str, object]) -> tuple[dict[str, object], object, int]:
+    def fetch_one(
+        item: dict[str, object],
+    ) -> tuple[dict[str, object], object, int, int | None]:
         response = client.call(
             "public/get_order_book",
             {"instrument_name": item["instrument_name"], "depth": depth},
         )
         received_at_ms = (
-            response.local_received_at_ms
+            response.causal_received_at_ms
             if isinstance(response, PublicRpcResponse)
-            else int(time.time() * 1000)
+            else fallback_received_at_ms
         )
-        return item, _rpc_result(response), received_at_ms
+        server_sent_at_us = (
+            response.server_sent_at_us if isinstance(response, PublicRpcResponse) else None
+        )
+        return item, _rpc_result(response), received_at_ms, server_sent_at_us
 
     workers = min(32, max(1, len(metadata)))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="deribit-book") as executor:
@@ -792,12 +1026,25 @@ def _fetch_books(
             item = futures[future]
             instrument_name = str(item["instrument_name"])
             try:
-                returned_metadata, raw_result, received_timestamp_ms = future.result()
+                (
+                    returned_metadata,
+                    raw_result,
+                    received_timestamp_ms,
+                    server_sent_at_us,
+                ) = future.result()
+                response_boundaries_ms.append(received_timestamp_ms)
                 result = _mapping(raw_result, "order book result")
+                source_boundary_ms = _book_source_upper_bound_ms(
+                    result,
+                    fallback_ms=fallback_received_at_ms,
+                    server_sent_at_us=server_sent_at_us,
+                )
+                source_boundaries_ms.append(source_boundary_ms)
                 quote, forward, quote_warnings = _quote_from_public_book(
                     metadata=returned_metadata,
                     result=result,
                     received_timestamp_ms=received_timestamp_ms,
+                    server_sent_at_us=server_sent_at_us,
                 )
             except (DeribitSourceError, OSError, ValueError) as exc:
                 warnings.append(
@@ -817,7 +1064,17 @@ def _fetch_books(
             f"{len(failed_requests)} of {len(metadata)} requested option books failed"
         )
     quotes.sort(key=lambda quote: (quote.strike, quote.option_type.value, quote.instrument_name))
-    return quotes, forwards, tuple(warnings)
+    if len(response_boundaries_ms) != len(metadata):
+        raise DeribitSourceError("requested option book response boundaries are incomplete")
+    if len(source_boundaries_ms) != len(metadata):
+        raise DeribitSourceError("requested option book source boundaries are incomplete")
+    return (
+        quotes,
+        forwards,
+        tuple(warnings),
+        tuple(source_boundaries_ms),
+        tuple(response_boundaries_ms),
+    )
 
 
 def _instrument_metadata(value: object, *, session_end_ms: int) -> tuple[dict[str, object], ...]:
@@ -919,6 +1176,7 @@ def _quote_from_public_book(
     metadata: Mapping[str, object],
     result: Mapping[str, object],
     received_timestamp_ms: int,
+    server_sent_at_us: int | None = None,
 ) -> tuple[OptionQuote | None, Decimal | None, tuple[str, ...]]:
     warnings: list[str] = []
     if result.get("state") != "open":
@@ -938,12 +1196,14 @@ def _quote_from_public_book(
     settlement_period = str(metadata["settlement_period"])
     if settlement_period not in {"day", "week", "month"}:
         warnings.append(f"UNRECOGNIZED_SETTLEMENT_PERIOD:{settlement_period}")
+    source_timestamp_ms = _integer(result.get("timestamp"), "timestamp")
+    if server_sent_at_us is not None and source_timestamp_ms * 1_000 > server_sent_at_us:
+        raise DeribitSourceError("order book source timestamp follows its response envelope")
     quote = OptionQuote(
         instrument_name=instrument_name,
         product=BTC,
-        expiry=datetime.fromtimestamp(
-            _integer(metadata["expiration_timestamp"], "expiration_timestamp") / 1000,
-            tz=UTC,
+        expiry=_datetime_from_epoch_ms(
+            _integer(metadata["expiration_timestamp"], "expiration_timestamp")
         ),
         strike=_positive_decimal(metadata["strike"], "strike"),
         option_type=(OptionType.CALL if metadata["option_type"] == "call" else OptionType.PUT),
@@ -955,7 +1215,7 @@ def _quote_from_public_book(
             _positive_decimal(metadata["tick_size"], "tick_size"),
             tick_steps,
         ),
-        source_timestamp_ms=_integer(result.get("timestamp"), "timestamp"),
+        source_timestamp_ms=source_timestamp_ms,
         received_timestamp_ms=received_timestamp_ms,
         continuity_epoch=1,
         delivery_fee_exempt=settlement_period == "day",
@@ -1195,8 +1455,8 @@ def _validated_public_rpc_response(
     method: str,
     request_id: int,
     timeout_seconds: float,
-    local_sent_at_ms: int,
-    local_received_at_ms: int,
+    request_sent_monotonic_ns: int,
+    response_received_monotonic_ns: int,
 ) -> PublicRpcResponse:
     root = _mapping(value, "JSON-RPC response")
     if root.get("jsonrpc") != "2.0":
@@ -1208,20 +1468,14 @@ def _validated_public_rpc_response(
     server_received_at_us = _integer(root.get("usIn"), "JSON-RPC usIn")
     server_sent_at_us = _integer(root.get("usOut"), "JSON-RPC usOut")
     server_processing_us = _integer(root.get("usDiff"), "JSON-RPC usDiff")
-    if local_received_at_ms < local_sent_at_ms:
-        raise DeribitSourceError("local receive boundary precedes request boundary")
+    if response_received_monotonic_ns < request_sent_monotonic_ns:
+        raise DeribitSourceError("monotonic receive boundary precedes request boundary")
     if server_received_at_us <= 0 or server_sent_at_us < server_received_at_us:
         raise DeribitSourceError(f"Deribit response timing order is invalid: {method}")
     if server_processing_us != server_sent_at_us - server_received_at_us:
         raise DeribitSourceError(f"Deribit response processing time is inconsistent: {method}")
     if server_processing_us > int(timeout_seconds * 1_000_000):
         raise DeribitSourceError(f"Deribit response processing time exceeds timeout: {method}")
-    maximum_clock_distance_us = 24 * 60 * 60 * 1_000_000
-    if (
-        server_received_at_us < local_sent_at_ms * 1000 - maximum_clock_distance_us
-        or server_sent_at_us > local_received_at_ms * 1000 + maximum_clock_distance_us
-    ):
-        raise DeribitSourceError(f"Deribit response timing fields are implausible: {method}")
     has_result = "result" in root
     error = root.get("error")
     if error is not None and has_result:
@@ -1230,6 +1484,19 @@ def _validated_public_rpc_response(
         raise DeribitSourceError(f"Deribit returned an error for {method}")
     if not has_result:
         raise DeribitSourceError(f"Deribit response lacks result: {method}")
+    if method == "public/get_time":
+        server_time_ms = _integer(root["result"], "public/get_time result")
+        if (
+            not server_received_at_us // 1_000
+            <= server_time_ms
+            <= _ceil_div(
+                server_sent_at_us,
+                1_000,
+            )
+        ):
+            raise DeribitSourceError(
+                "public/get_time result is outside its response timing envelope"
+            )
     return PublicRpcResponse(
         jsonrpc="2.0",
         request_id=request_id,
@@ -1238,13 +1505,66 @@ def _validated_public_rpc_response(
         server_received_at_us=server_received_at_us,
         server_sent_at_us=server_sent_at_us,
         server_processing_us=server_processing_us,
-        local_sent_at_ms=local_sent_at_ms,
-        local_received_at_ms=local_received_at_ms,
+        request_sent_monotonic_ns=request_sent_monotonic_ns,
+        response_received_monotonic_ns=response_received_monotonic_ns,
     )
 
 
 def _rpc_result(value: object) -> object:
     return value.result if isinstance(value, PublicRpcResponse) else value
+
+
+def _response_known_at_ms(value: object, *, fallback_ms: int) -> int:
+    return (
+        max(fallback_ms, value.causal_received_at_ms)
+        if isinstance(value, PublicRpcResponse)
+        else fallback_ms
+    )
+
+
+def _response_source_upper_bound_ms(value: object, *, fallback_ms: int) -> int:
+    return value.server_sent_at_ms if isinstance(value, PublicRpcResponse) else fallback_ms
+
+
+def _book_source_upper_bound_ms(
+    result: Mapping[str, object],
+    *,
+    fallback_ms: int,
+    server_sent_at_us: int | None,
+) -> int:
+    raw_timestamp = result.get("timestamp")
+    if raw_timestamp is None:
+        return _ceil_div(server_sent_at_us, 1_000) if server_sent_at_us is not None else fallback_ms
+    source_ms = _integer(raw_timestamp, "timestamp")
+    if server_sent_at_us is not None and source_ms * 1_000 > server_sent_at_us:
+        raise DeribitSourceError("order book source timestamp follows its response envelope")
+    return source_ms
+
+
+def _ceil_div(numerator: int, denominator: int) -> int:
+    return -(-numerator // denominator)
+
+
+def _datetime_to_ceil_ms(value: datetime) -> int:
+    return _ceil_div(_datetime_to_epoch_us(value), 1_000)
+
+
+def _datetime_to_floor_ms(value: datetime) -> int:
+    return _datetime_to_epoch_us(value) // 1_000
+
+
+def _datetime_to_epoch_us(value: datetime) -> int:
+    normalized = _utc(value)
+    elapsed = normalized - datetime(1970, 1, 1, tzinfo=UTC)
+    return (elapsed.days * 24 * 60 * 60 + elapsed.seconds) * 1_000_000 + elapsed.microseconds
+
+
+def _datetime_from_epoch_us(value: int) -> datetime:
+    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(microseconds=value)
+
+
+def _datetime_from_epoch_ms(value: int) -> datetime:
+    return datetime(1970, 1, 1, tzinfo=UTC) + timedelta(milliseconds=value)
 
 
 def _required_instrument_names(
