@@ -1452,11 +1452,16 @@ class BtcPublicShadowRuntime:
             _text(value, "detail")
 
 
+class _LoopbackWorkbenchHandler(SimpleHTTPRequestHandler):
+    def log_message(self, _format: str, *args: object) -> None:
+        """Keep high-frequency loopback probes out of the runtime terminal."""
+
+
 class _WorkbenchServer:
     def __init__(self, directory: Path, port: int) -> None:
         if not 1 <= port <= 65_535:
             raise ValueError("Workbench port must be in [1, 65535]")
-        handler = partial(SimpleHTTPRequestHandler, directory=str(directory))
+        handler = partial(_LoopbackWorkbenchHandler, directory=str(directory))
         self.server = ThreadingHTTPServer(("127.0.0.1", port), handler)
         self.thread = Thread(
             target=self.server.serve_forever, name="optimatrix-workbench", daemon=True
