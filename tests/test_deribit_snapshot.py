@@ -176,6 +176,30 @@ def test_material_index_history_gap_rejects_snapshot(policy) -> None:
         )
 
 
+def test_snapshot_keeps_matched_physical_horizon_evaluable_with_five_minute_cadence_near_expiry(
+    policy,
+    monkeypatch,
+) -> None:
+    session = current_deribit_session(
+        datetime(2026, 8, 12, 18, 7, tzinfo=UTC),
+        phase_policy=policy.session,
+    )
+    now = session.end - timedelta(minutes=29)
+    monkeypatch.setattr("optimatrix.deribit_snapshot.time.time", lambda: now.timestamp())
+
+    evaluation = evaluate_live_btc_snapshot(
+        client=FakeDeribitClient(now),
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=8,
+        depth=20,
+    )
+
+    assert evaluation.methodology.index_history_cadence_ms == 5 * 60_000
+    assert not evaluation.observation.data_health_blockers
+
+
 def test_http_client_allowlist_matches_b3_runtime_permission() -> None:
     assert DERIBIT_PUBLIC_METHOD_ALLOWLIST == frozenset(
         {

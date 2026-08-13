@@ -3,13 +3,27 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
 import pytest
 
-from optimatrix.lifecycle import TradeCase
+from optimatrix.decision import MarketObservation
+from optimatrix.engine import Btc0DteShortVolEngine
+from optimatrix.lifecycle import (
+    PositionState,
+    TradeCase,
+    evaluate_shadow_entry,
+    evaluate_shadow_exit,
+    monitor_shadow_position,
+    open_trade_case,
+)
+from optimatrix.observation_ledger import ObservationLedger
+from optimatrix.policy import BtcShortVolPolicy
+from optimatrix.risk import ShadowCapacity
+from optimatrix.scenarios import base_chain, current_expiry, market_context
 from optimatrix.workbench import build_workbench_document, write_workbench
 
 
@@ -128,6 +142,78 @@ def _recovered_case(identity_suffix: str, *, minute: int) -> TradeCase:
     )
 
 
+def _terminal_case(policy: BtcShortVolPolicy, tmp_path: Path) -> TradeCase:
+    decision_at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    engine = Btc0DteShortVolEngine(policy=policy)
+    window = next(
+        item
+        for item in engine.decision_windows(at=decision_at)
+        if item.starts_at <= decision_at < item.ends_at
+    )
+    decision_quotes = base_chain(
+        expiry=current_expiry(decision_at),
+        observed_at=decision_at,
+    )
+    decision_observation = engine.capture_observation(
+        quotes=decision_quotes,
+        context=market_context(
+            decision_at,
+            book_names=tuple(quote.instrument_name for quote in decision_quotes),
+        ),
+    )
+    assessment = engine.assess_window(
+        ledger=ObservationLedger(tmp_path / "case-evidence-ledger"),
+        window=window,
+        observation=decision_observation,
+        capacity=ShadowCapacity.empty(
+            channel_id=policy.channel_id,
+            market_session_id=window.market_session_id,
+            known_at=window.input_deadline,
+        ),
+        known_at=window.input_deadline,
+    )
+    opened = open_trade_case(assessment.record, policy)
+
+    def observation(
+        at: datetime,
+        *,
+        index: Decimal | None = None,
+    ) -> MarketObservation:
+        quotes = base_chain(expiry=current_expiry(at), observed_at=at)
+        return engine.capture_observation(
+            quotes=quotes,
+            context=market_context(
+                at,
+                index=index if index is not None else Decimal("100000"),
+                book_names=tuple(quote.instrument_name for quote in quotes),
+            ),
+        )
+
+    entry_at = assessment.record.known_at + timedelta(seconds=30)
+    entered, _entry = evaluate_shadow_entry(
+        opened,
+        observation=observation(entry_at),
+        policy=policy,
+        known_at=entry_at,
+    )
+    trigger_at = entry_at + timedelta(seconds=policy.lifecycle.monitoring_cadence_seconds)
+    armed, _monitor = monitor_shadow_position(
+        entered,
+        observation=observation(trigger_at, index=Decimal("104100")),
+        policy=policy,
+    )
+    terminal, _exit = evaluate_shadow_exit(
+        armed,
+        observation=observation(
+            trigger_at + timedelta(seconds=2),
+            index=Decimal("104100"),
+        ),
+        policy=policy,
+    )
+    assert terminal.position_state is PositionState.TERMINAL
+    return terminal
+
+
 def test_document_projects_one_four_leg_strategy_without_recalculating_values() -> None:
     document = build_workbench_document(_snapshot())
 
@@ -196,6 +282,7 @@ def test_static_export_is_network_free_and_browser_receives_only_presentation_da
     assert exported.script_path.is_file()
     assert exported.data_path.is_file()
     html = exported.index_path.read_text(encoding="utf-8")
+    stylesheet = exported.stylesheet_path.read_text(encoding="utf-8")
     script = exported.script_path.read_text(encoding="utf-8")
     data_script = exported.data_path.read_text(encoding="utf-8")
     assert "PUBLIC SHADOW - READ ONLY" in html
@@ -205,6 +292,8 @@ def test_static_export_is_network_free_and_browser_receives_only_presentation_da
     assert "Runtime and recovery" in html
     assert "Session population" in html
     assert "All Shadow Cases" in html
+    assert ".runtime-values { grid-template-columns: 1fr; }" in stylesheet
+    assert ".runtime-values > div { grid-template-columns:" in stylesheet
     assert "fetch(" not in script
     assert "XMLHttpRequest" not in script
     assert "WebSocket" not in script
@@ -226,6 +315,164 @@ def test_legacy_single_trade_case_is_also_the_only_case_in_the_runtime_collectio
     case_views = cast(Sequence[Mapping[str, object]], document["cases"])
     assert legacy_case["trade_case_id"] == trade_case.identity
     assert [item["trade_case_id"] for item in case_views] == [trade_case.identity]
+
+
+def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_case(
+    policy: BtcShortVolPolicy,
+    tmp_path: Path,
+) -> None:
+    trade_case = _terminal_case(policy, tmp_path)
+    snapshot = _snapshot()
+    current_projection = dict(cast(Mapping[str, object], snapshot["projection"]))
+    current_structure = dict(cast(Mapping[str, object], current_projection["structure"]))
+    current_structure.update(
+        {
+            "long_put": "CURRENT-CUT-LONG-PUT",
+            "short_put": "CURRENT-CUT-SHORT-PUT",
+            "short_call": "CURRENT-CUT-SHORT-CALL",
+            "long_call": "CURRENT-CUT-LONG-CALL",
+        }
+    )
+    current_projection["structure"] = current_structure
+    snapshot["projection"] = current_projection
+
+    document = build_workbench_document(snapshot, recovered_cases=(trade_case,))
+
+    case_view = cast(Sequence[Mapping[str, object]], document["cases"])[0]
+    frozen = cast(Mapping[str, object], case_view["selected_structure"])
+    frozen_legs = cast(Sequence[Mapping[str, object]], frozen["legs"])
+    case_structure = trade_case.selected_structure
+    case_legs = cast(Mapping[str, Mapping[str, object]], case_structure["legs"])
+    assert [leg["role"] for leg in frozen_legs] == [
+        "long_put",
+        "short_put",
+        "short_call",
+        "long_call",
+    ]
+    assert [leg["instrument_name"] for leg in frozen_legs] == [
+        case_legs[role]["instrument_name"]
+        for role in ("long_put", "short_put", "short_call", "long_call")
+    ]
+    assert "CURRENT-CUT-LONG-PUT" not in json.dumps(frozen)
+    assert all(leg["candidate_id"] == trade_case.selected_structure_id for leg in frozen_legs)
+    assert all(leg["expiry"] == case_structure["expiry"] for leg in frozen_legs)
+    assert all(leg["option_amount"] == case_structure["option_amount"] for leg in frozen_legs)
+    assert [leg["strike"] for leg in frozen_legs] == [
+        case_legs[role]["strike"] for role in ("long_put", "short_put", "short_call", "long_call")
+    ]
+
+    allocation = trade_case.risk_allocation
+    allocation_rows = cast(Sequence[Mapping[str, str]], case_view["risk_allocation"])
+    allocation_values = {row["key"]: row["value"] for row in allocation_rows}
+    assert allocation_values["allocation_id"] == trade_case.risk_allocation_id
+    assert allocation_values["budget_metric"] == allocation["budget_metric"]
+    assert (
+        allocation_values["maximum_contractual_payoff_usd"]
+        == allocation["maximum_contractual_payoff_usd"]
+    )
+    assert allocation_values["session_used_before_usd"] == allocation["session_used_before_usd"]
+    assert (
+        allocation_values["session_remaining_after_usd"]
+        == allocation["session_remaining_after_usd"]
+    )
+    assert allocation_values["concurrent_position_limit"] == str(
+        allocation["concurrent_position_limit"]
+    )
+    assert allocation_values["expires_at"] == allocation["expires_at"]
+    assert allocation_values["release_condition"] == allocation["release_condition"]
+
+    entry_rows = cast(Sequence[Mapping[str, str]], case_view["entry_evidence"])
+    entry_values = {row["key"]: row["value"] for row in entry_rows}
+    assert trade_case.entry_observation_id is not None
+    assert trade_case.entry_observed_at is not None
+    assert trade_case.entry_known_at is not None
+    assert entry_values["decision_boundary"] == trade_case.decision_boundary.isoformat()
+    assert entry_values["entry_observation_id"] == trade_case.entry_observation_id
+    assert entry_values["entry_observed_at"] == trade_case.entry_observed_at.isoformat()
+    assert entry_values["entry_known_at"] == trade_case.entry_known_at.isoformat()
+    assert entry_values["entry_pricing_basis"] == trade_case.entry_pricing_basis
+    economics_rows = cast(Sequence[Mapping[str, str]], case_view["entry_economics"])
+    economics_values = {row["key"]: row["value"] for row in economics_rows}
+    entry_pricing = trade_case.entry_pricing
+    assert entry_pricing is not None
+    assert economics_values["native_net_credit"] == entry_pricing["native_net_credit"]
+    assert economics_values["entry_native_net_credit"] == str(trade_case.entry_native_net_credit)
+
+    assert trade_case.exit_intent is not None
+    exit_rows = cast(Sequence[Mapping[str, str]], case_view["exit_intent"])
+    exit_values = {row["key"]: row["value"] for row in exit_rows}
+    assert exit_values["exit_intent_id"] == trade_case.exit_intent.identity
+    assert exit_values["observation_id"] == trade_case.exit_intent.observation_id
+    assert exit_values["known_at"] == trade_case.exit_intent.known_at.isoformat()
+    assert exit_values["source"] == trade_case.exit_intent.source
+    assert exit_values["policy_id"] == trade_case.exit_intent.policy_id
+    assert exit_values["scope"] == "WHOLE_PRODUCT"
+
+    assert trade_case.outcome is not None
+    assert trade_case.outcome.terminal_evidence_id is not None
+    outcome_rows = cast(Sequence[Mapping[str, str]], case_view["outcome"])
+    outcome_values = {row["key"]: row["value"] for row in outcome_rows}
+    assert outcome_values["terminal_evidence_id"] == trade_case.outcome.terminal_evidence_id
+    assert outcome_values["terminal_source"] == trade_case.outcome.terminal_source
+    assert outcome_values["terminal_at"] == trade_case.outcome.terminal_at.isoformat()
+    assert outcome_values["native_result_btc"] == str(trade_case.outcome.native_result_btc)
+    assert outcome_values["boundary_reference_result_usd"] == str(
+        trade_case.outcome.boundary_reference_result_usd
+    )
+
+    exported = write_workbench(
+        snapshot,
+        tmp_path / "case-evidence-workbench",
+        recovered_cases=(trade_case,),
+    )
+    app_script = exported.script_path.read_text(encoding="utf-8")
+    data_script = exported.data_path.read_text(encoding="utf-8")
+    assert "Frozen selected structure" in app_script
+    assert "Frozen Shadow Risk Allocation" in app_script
+    assert "Entry causal evidence" in app_script
+    assert trade_case.selected_structure_id in data_script
+    assert trade_case.entry_observation_id in data_script
+    assert trade_case.outcome.terminal_evidence_id in data_script
+    assert "innerHTML" not in app_script
+    assert "insertAdjacentHTML" not in app_script
+
+
+def test_frozen_case_text_cannot_close_the_data_script_or_become_html(tmp_path: Path) -> None:
+    malicious_name = "</script><img src=x onerror=alert(1)>"
+    legacy_value = cast(SimpleNamespace, _recovered_case("d", minute=52))
+    legacy_value.selected_structure = {
+        "candidate_id": f"sha256:{'e' * 64}",
+        "expiry": "2026-08-13T08:00:00+00:00",
+        "option_amount": "1",
+        "legs": {
+            role: {
+                "instrument_name": malicious_name if role == "long_put" else f"SAFE-{role}",
+                "strike": str(90_000 + position * 1_000),
+                "option_type": option_type,
+            }
+            for position, (role, _label, _action, option_type) in enumerate(
+                (
+                    ("long_put", "Long Put wing", "LONG", "PUT"),
+                    ("short_put", "Short Put body", "SHORT", "PUT"),
+                    ("short_call", "Short Call body", "SHORT", "CALL"),
+                    ("long_call", "Long Call wing", "LONG", "CALL"),
+                ),
+                start=1,
+            )
+        },
+    }
+    exported = write_workbench(
+        _snapshot(),
+        tmp_path / "escaped-case-evidence",
+        recovered_cases=(cast(TradeCase, legacy_value),),
+    )
+
+    app_script = exported.script_path.read_text(encoding="utf-8")
+    data_script = exported.data_path.read_text(encoding="utf-8")
+    assert malicious_name not in data_script
+    assert "<\\/script><img src=x onerror=alert(1)>" in data_script
+    assert "innerHTML" not in app_script
+    assert "insertAdjacentHTML" not in app_script
 
 
 def test_runtime_population_and_every_recovered_case_are_rendered_as_supplied(
@@ -299,7 +546,8 @@ def test_runtime_population_and_every_recovered_case_are_rendered_as_supplied(
         f"sha256:{'a' * 64}",
         f"sha256:{'b' * 64}",
     ]
-    assert document["case"]["available"] is False
+    legacy_case = cast(Mapping[str, object], document["case"])
+    assert legacy_case["available"] is False
 
     exported = write_workbench(
         _snapshot(),

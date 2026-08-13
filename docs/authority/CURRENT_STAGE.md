@@ -67,9 +67,12 @@ active task
   and continuously rewrites a loopback-only Workbench. Its public method allowlist, exact stable
   root, Policy identity, bounds, and port are fail-closed to the active task.
 - The deterministic acceptance population contains `96/96` DecisionRecords and `96/96`
-  WindowOutcomes. Seven offline scenarios and the repository gate pass, including fault-injected
-  restart recovery across Window, Case, settlement, and Outcome write boundaries. These fixtures
-  are not market evidence.
+  WindowOutcomes. In addition to fault-injected restart recovery, an append-only causal tape of raw
+  Deribit-shaped responses now drives every Window through the production public translator. It
+  proves frozen four-leg risk, Entry, monitoring, public-market triggers, strictly later atomic
+  exit or official-settlement fallback, capacity recovery/release, and their trader-visible Case
+  evidence. These simulations falsify the runtime implementation but are not production market
+  evidence.
 
 The component-Vertical acquisition path, public-Combo discovery gate, buyback-depth hard veto,
 partial/remediation graph, residual-wing lifecycle, and pre-A0 journal codec are absent.

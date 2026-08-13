@@ -86,6 +86,92 @@ _CASE_LABELS = {
     "last_observed_at": "Last lifecycle observation",
     "gap_observed": "DataHealth gap observed",
 }
+_CASE_STRUCTURE_LABELS = {
+    "candidate_id": "Frozen Candidate identity",
+    "expiry": "Frozen expiry",
+    "option_amount": "Frozen option amount",
+}
+_CASE_LEG_LABELS = {
+    "strike": "Frozen strike",
+    "option_type": "Frozen option type",
+    "expiry": "Frozen expiry",
+    "option_amount": "Frozen amount",
+    "candidate_id": "Frozen Candidate identity",
+}
+_RISK_ALLOCATION_LABELS = {
+    "allocation_id": "Shadow Risk Allocation identity",
+    "result": "Allocation result",
+    "candidate_id": "Frozen Candidate identity",
+    "channel_id": "Channel",
+    "market_session_id": "Market Session",
+    "policy_id": "Risk Policy identity",
+    "known_at": "Allocation known at",
+    "budget_metric": "Budget metric",
+    "option_amount": "Allocated option amount",
+    "maximum_contractual_payoff_usd": "Contractual payoff cap (USD)",
+    "entry_premium_native": "Boundary entry premium (BTC)",
+    "combo_fee_native": "Boundary Combo fee (BTC)",
+    "boundary_index_price_usd": "Boundary index price (USD)",
+    "exit_cost_stress_native": "Exit-cost stress (BTC)",
+    "session_budget_usd": "Session budget (USD)",
+    "session_used_before_usd": "Session used before (USD)",
+    "session_remaining_after_usd": "Session remaining after (USD)",
+    "concurrent_position_limit": "Concurrent Position limit",
+    "open_position_count_before": "Open Positions before",
+    "expires_at": "Allocation expires at",
+    "release_condition": "Release condition",
+    "reason": "Allocation reason",
+}
+_ENTRY_EVIDENCE_LABELS = {
+    "decision_record_id": "Decision Record identity",
+    "decision_policy_id": "Decision Policy identity",
+    "decision_boundary": "Decision known-at boundary",
+    "entry_deadline": "Entry deadline",
+    "entry_status": "Entry status",
+    "entry_final": "Entry final",
+    "entry_observation_id": "Entry Market Observation identity",
+    "entry_observed_at": "Entry observation observed at",
+    "entry_known_at": "Entry observation known at",
+    "entry_pricing_basis": "Shadow pricing basis",
+    "entry_reason": "Entry reason",
+}
+_ENTRY_ECONOMICS_LABELS = {
+    "fee_model_id": "Fee model identity",
+    "native_gross_credit": "Gross entry credit (BTC)",
+    "combo_standard_fee_native": "Entry Combo fee (BTC)",
+    "native_net_credit": "Net entry credit (BTC)",
+    "boundary_index_price_usd": "Entry boundary index (USD)",
+    "boundary_net_credit_usd": "Net entry credit at boundary (USD)",
+    "entry_native_net_credit": "Frozen Case entry net credit (BTC)",
+    "entry_index_price_usd": "Frozen Case entry index (USD)",
+    "entry_vrp_proxy_ratio": "Entry VRP proxy ratio",
+}
+_EXIT_INTENT_LABELS = {
+    "exit_intent_id": "Exit Intent identity",
+    "category": "Trigger category",
+    "reason": "First trigger reason",
+    "observation_id": "Trigger Market Observation identity",
+    "observed_at": "Trigger observed at",
+    "known_at": "Trigger known at",
+    "source": "Trigger source",
+    "policy_id": "Lifecycle Policy identity",
+    "scope": "Exit scope",
+}
+_OUTCOME_LABELS = {
+    "outcome_id": "Outcome identity",
+    "terminal_method": "Terminal method",
+    "terminal_at": "Terminal known at",
+    "entry_status": "Terminal Entry status",
+    "entry_observation_id": "Entry Market Observation identity",
+    "terminal_evidence_id": "Terminal evidence identity",
+    "native_result_btc": "Shadow result (BTC)",
+    "boundary_reference_result_usd": "Boundary reference result (USD)",
+    "fee_model_id": "Terminal fee model identity",
+    "shadow_model_id": "Shadow model identity",
+    "terminal_source": "Terminal evidence source",
+    "data_gap_observed": "DataHealth gap observed",
+    "reason": "Terminal reason",
+}
 _STRUCTURE_METRIC_LABELS = {
     "boundary_net_credit_usd": "Boundary-valued four-leg net credit",
     "boundary_reference_loss_usd": "Boundary-valued reference loss",
@@ -258,6 +344,10 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
             "position_state": "UNKNOWN",
             "message": "This bounded snapshot did not open a TradeCase.",
             "facts": [],
+            "selected_structure": _empty_case_structure_projection(),
+            "risk_allocation": [],
+            "entry_evidence": [],
+            "entry_economics": [],
             "exit_intent": [],
             "outcome": [],
             "eligibility": [],
@@ -281,11 +371,42 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
         ),
         "gap_observed": case.gap_observed,
     }
+    selected_structure = _case_structure_projection(case)
+    risk_allocation = _case_mapping(case, "risk_allocation", "TradeCase.risk_allocation")
+    entry_pricing = _case_mapping(case, "entry_pricing", "TradeCase.entry_pricing")
+    entry_evidence = {
+        "decision_record_id": getattr(case, "decision_record_id", None),
+        "decision_policy_id": getattr(case, "decision_policy_id", None),
+        "decision_boundary": _optional_isoformat(getattr(case, "decision_boundary", None)),
+        "entry_deadline": case.entry_deadline.isoformat(),
+        "entry_status": case.entry_status.value if case.entry_status is not None else None,
+        "entry_final": case.entry_final,
+        "entry_observation_id": getattr(case, "entry_observation_id", None),
+        "entry_observed_at": _optional_isoformat(case.entry_observed_at),
+        "entry_known_at": _optional_isoformat(getattr(case, "entry_known_at", None)),
+        "entry_pricing_basis": getattr(case, "entry_pricing_basis", None),
+        "entry_reason": case.entry_reason,
+    }
+    entry_economics = dict(entry_pricing or {})
+    entry_economics.update(
+        {
+            "entry_native_net_credit": _optional_string(
+                getattr(case, "entry_native_net_credit", None)
+            ),
+            "entry_index_price_usd": _optional_string(getattr(case, "entry_index_price_usd", None)),
+            "entry_vrp_proxy_ratio": _optional_string(getattr(case, "entry_vrp_proxy_ratio", None)),
+        }
+    )
     intent = (
         {
+            "exit_intent_id": case.exit_intent.identity,
             "category": case.exit_intent.category,
             "reason": case.exit_intent.reason,
+            "observation_id": case.exit_intent.observation_id,
             "observed_at": case.exit_intent.observed_at.isoformat(),
+            "known_at": case.exit_intent.known_at.isoformat(),
+            "source": case.exit_intent.source,
+            "policy_id": case.exit_intent.policy_id,
             "scope": case.exit_intent.scope,
         }
         if case.exit_intent is not None
@@ -294,8 +415,12 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
     outcome = case.outcome
     outcome_values = (
         {
+            "outcome_id": outcome.identity,
             "terminal_method": outcome.terminal_method.value,
             "terminal_at": outcome.terminal_at.isoformat(),
+            "entry_status": outcome.entry_status.value,
+            "entry_observation_id": outcome.entry_observation_id,
+            "terminal_evidence_id": outcome.terminal_evidence_id,
             "native_result_btc": (
                 str(outcome.native_result_btc) if outcome.native_result_btc is not None else None
             ),
@@ -304,6 +429,8 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
                 if outcome.boundary_reference_result_usd is not None
                 else None
             ),
+            "fee_model_id": outcome.fee_model_id,
+            "shadow_model_id": outcome.shadow_model_id,
             "terminal_source": outcome.terminal_source,
             "data_gap_observed": outcome.data_gap_observed,
             "reason": outcome.reason,
@@ -351,10 +478,95 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
         ),
         "message": "Counterfactual whole-product lifecycle; no order, fill, or account Position.",
         "facts": _display_rows(facts, _CASE_LABELS),
-        "exit_intent": _optional_display_rows(intent, {}),
-        "outcome": _optional_display_rows(outcome_values, {}),
+        "selected_structure": selected_structure,
+        "risk_allocation": _optional_display_rows(
+            risk_allocation,
+            _RISK_ALLOCATION_LABELS,
+        ),
+        "entry_evidence": _display_rows(entry_evidence, _ENTRY_EVIDENCE_LABELS),
+        "entry_economics": _display_rows(entry_economics, _ENTRY_ECONOMICS_LABELS),
+        "exit_intent": _optional_display_rows(intent, _EXIT_INTENT_LABELS),
+        "outcome": _optional_display_rows(outcome_values, _OUTCOME_LABELS),
         "eligibility": eligibility,
     }
+
+
+def _empty_case_structure_projection() -> dict[str, object]:
+    return {"available": False, "summary": [], "legs": []}
+
+
+def _case_structure_projection(case: TradeCase) -> dict[str, object]:
+    structure = _case_mapping(case, "selected_structure", "TradeCase.selected_structure")
+    if structure is None:
+        return _empty_case_structure_projection()
+    candidate_id = structure.get("candidate_id")
+    expiry = structure.get("expiry")
+    option_amount = structure.get("option_amount")
+    legs_value = _mapping(structure.get("legs"), "TradeCase.selected_structure.legs")
+    legs: list[dict[str, object]] = []
+    for position, (role, label, action, _option_type) in enumerate(_LEG_DEFINITIONS, start=1):
+        leg = _mapping(legs_value.get(role), f"TradeCase.selected_structure.legs.{role}")
+        values = {
+            "strike": leg.get("strike"),
+            "option_type": leg.get("option_type"),
+            "expiry": expiry,
+            "option_amount": option_amount,
+            "candidate_id": candidate_id,
+        }
+        legs.append(
+            {
+                "position": position,
+                "role": role,
+                "label": label,
+                "action": action,
+                "option_type": _display_value(leg.get("option_type")),
+                "instrument_name": _display_value(leg.get("instrument_name")),
+                "strike": _display_value(leg.get("strike")),
+                "expiry": _display_value(expiry),
+                "option_amount": _display_value(option_amount),
+                "candidate_id": _display_value(candidate_id),
+                "details": _display_rows(values, _CASE_LEG_LABELS),
+            }
+        )
+    return {
+        "available": True,
+        "summary": _display_rows(
+            {
+                "candidate_id": candidate_id,
+                "expiry": expiry,
+                "option_amount": option_amount,
+            },
+            _CASE_STRUCTURE_LABELS,
+        ),
+        "legs": legs,
+    }
+
+
+def _case_mapping(
+    case: TradeCase,
+    attribute: str,
+    field: str,
+) -> Mapping[str, object] | None:
+    value = getattr(case, attribute, None)
+    if value is None:
+        return None
+    return _mapping(value, field)
+
+
+def _optional_isoformat(value: object) -> str | None:
+    method = getattr(value, "isoformat", None)
+    if value is None:
+        return None
+    if not callable(method):
+        raise TypeError("Case timestamp must provide isoformat()")
+    result = method()
+    if not isinstance(result, str):
+        raise TypeError("Case timestamp isoformat() must return text")
+    return result
+
+
+def _optional_string(value: object) -> str | None:
+    return str(value) if value is not None else None
 
 
 def _runtime_projection(

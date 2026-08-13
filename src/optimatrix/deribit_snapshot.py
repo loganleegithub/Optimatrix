@@ -599,6 +599,10 @@ def evaluate_live_btc_snapshot(
         session.minutes_to_expiry - policy.lifecycle.latest_exit_minutes_to_expiry,
     )
     history_cadence_ms = _history_cadence_ms(history, horizon_minutes=horizon_minutes)
+    horizon_minutes = max(
+        horizon_minutes,
+        math.ceil(history_cadence_ms * 2 / 60_000),
+    )
     physical_variance, acceleration, jump_share, persistence = _physical_path_context(
         history,
         horizon_minutes=horizon_minutes,

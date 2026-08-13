@@ -92,6 +92,34 @@
     return section;
   };
 
+  const renderCaseStructure = structure => {
+    const section = element('section', 'case-structure-evidence');
+    section.append(element('h4', '', 'Frozen selected structure'));
+    if (!structure.available) {
+      section.append(element('p', 'none', 'Frozen structure evidence is unavailable.'));
+      return section;
+    }
+    const summary = element('dl', 'key-values case-structure-summary');
+    renderRowsInto(summary, structure.summary);
+    section.append(summary);
+    const legs = element('div', 'case-leg-grid');
+    structure.legs.forEach(leg => {
+      const card = element('article', 'case-leg-card');
+      card.dataset.action = leg.action;
+      card.append(
+        element('span', 'leg-order', `LEG ${leg.position} · ${leg.role}`),
+        element('h5', '', leg.label),
+        element('p', 'instrument', leg.instrument_name)
+      );
+      const details = element('dl', 'key-values');
+      renderRowsInto(details, leg.details);
+      card.append(details);
+      legs.append(card);
+    });
+    section.append(legs);
+    return section;
+  };
+
   const renderCase = (caseValue, index) => {
     const card = element('article', 'case-card');
     const heading = element('div', 'case-card-heading');
@@ -109,7 +137,13 @@
     const evidence = element('div', 'case-evidence-grid');
     evidence.append(
       caseEvidence('Case and Position', caseValue.facts),
-      caseEvidence('First exit intent', caseValue.exit_intent),
+      renderCaseStructure(
+        caseValue.selected_structure || { available: false, summary: [], legs: [] }
+      ),
+      caseEvidence('Frozen Shadow Risk Allocation', caseValue.risk_allocation || []),
+      caseEvidence('Entry causal evidence', caseValue.entry_evidence || []),
+      caseEvidence('Entry economics', caseValue.entry_economics || []),
+      caseEvidence('First immutable exit intent', caseValue.exit_intent),
       caseEvidence('Terminal Outcome', caseValue.outcome)
     );
     const eligibilitySection = element('section');

@@ -48,7 +48,7 @@ No placeholder remains. Stage links this file as the only active non-template ta
 
 ## Verification and closure
 
-**Cheapest falsification:** focused fake-clock/fake-Deribit tests prove Window scheduling, request-failure `UNKNOWN`, lifecycle cadence, no duplicate Window, stable-root exclusivity, crash-tail recovery, restart of every unresolved Case, capacity reconstruction, official settlement, continuous Workbench refresh, and refusal of private methods or a foreign root
+**Cheapest falsification:** focused fake-clock/fake-Deribit tests prove Window scheduling, request-failure `UNKNOWN`, lifecycle cadence, no duplicate Window, stable-root exclusivity, crash-tail recovery, restart of every unresolved Case, capacity reconstruction, official settlement, continuous Workbench refresh, and refusal of private methods or a foreign root; a causal append-only raw-Deribit market tape must also drive all 96 Window cuts and prove both complete four-leg paths — Candidate selection, frozen Shadow allocation, strictly later Entry and monitoring, public-market trigger, then either a still-later whole-product valuation or official settlement after a shallow-leg exit blocker — plus capacity freeze/recovery/release and trader-visible Case evidence
 
 **Repository gate:** `make check`
 
