@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark light">
   <meta name="referrer" content="no-referrer">
+  <meta http-equiv="refresh" content="10">
   <title>Optimatrix 0DTE Workbench</title>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -34,10 +35,23 @@
       <ul id="boundary-statements"></ul>
     </section>
 
-    <section class="snapshot-strip" aria-label="Snapshot identity">
-      <div><span>Deribit session</span><strong id="session-id">—</strong></div>
+    <section class="runtime-panel" aria-labelledby="runtime-heading">
+      <div class="section-heading compact">
+        <div>
+          <span class="section-kicker">Single-process public shadow</span>
+          <h2 id="runtime-heading">Runtime and recovery</h2>
+          <p>Continuously rewritten from accepted runtime facts; this page is read only.</p>
+        </div>
+        <span id="runtime-status" class="state-badge">SNAPSHOT_ONLY</span>
+      </div>
+      <dl id="runtime-values" class="key-values runtime-values"></dl>
+    </section>
+
+    <section class="snapshot-strip" aria-label="Runtime and snapshot identity">
+      <div><span>Target Deribit Session</span><strong id="target-session-id">—</strong></div>
+      <div><span>Snapshot Session</span><strong id="session-id">—</strong></div>
       <div><span>Observed at</span><strong id="observed-at">—</strong></div>
-      <div><span>Mode</span><strong>Bounded public observation</strong></div>
+      <div><span>Last runtime update</span><strong id="runtime-updated-at">—</strong></div>
     </section>
 
     <section id="warning-panel" class="warning-panel" aria-labelledby="warning-heading">
@@ -78,6 +92,34 @@
       </section>
     </div>
 
+    <section class="panel population-panel" aria-labelledby="population-heading">
+      <div class="section-heading">
+        <div>
+          <span class="section-kicker">Stable ObservationLedger</span>
+          <h2 id="population-heading">Session population</h2>
+          <p>Recorded counts are rendered as supplied by the Ledger summaries.</p>
+        </div>
+      </div>
+      <div class="population-grid">
+        <article class="population-card">
+          <div class="population-heading">
+            <h3 id="decision-population-label">DecisionRecords</h3>
+            <span id="decision-population-count" class="count-badge">UNKNOWN / UNKNOWN</span>
+          </div>
+          <dl id="decision-population-values" class="key-values"></dl>
+          <div id="decision-population-breakdowns" class="population-breakdowns"></div>
+        </article>
+        <article class="population-card">
+          <div class="population-heading">
+            <h3 id="outcome-population-label">WindowOutcomes</h3>
+            <span id="outcome-population-count" class="count-badge">UNKNOWN / UNKNOWN</span>
+          </div>
+          <dl id="outcome-population-values" class="key-values"></dl>
+          <div id="outcome-population-breakdowns" class="population-breakdowns"></div>
+        </article>
+      </div>
+    </section>
+
     <section class="panel structure-panel" aria-labelledby="structure-heading">
       <div class="section-heading">
         <div>
@@ -109,20 +151,16 @@
       <dl id="methodology-values" class="key-values"></dl>
     </details>
 
-    <section class="panel" aria-labelledby="case-heading">
+    <section class="panel case-panel" aria-labelledby="case-heading">
       <div class="section-heading">
         <div>
           <span class="section-kicker">Whole-product lifecycle</span>
-          <h2 id="case-heading">Shadow Case / Position / Outcome</h2>
-          <p id="case-message">No TradeCase projection loaded.</p>
+          <h2 id="case-heading">All Shadow Cases / Positions / Outcomes</h2>
+          <p>Every recovered accepted Case prefix for the target Session.</p>
         </div>
+        <span id="case-count" class="count-badge">0</span>
       </div>
-      <div class="evidence-grid">
-        <div><h3>Case and Position</h3><dl id="case-facts" class="key-values"></dl></div>
-        <div><h3>First exit intent</h3><dl id="case-exit-intent" class="key-values"></dl></div>
-        <div><h3>Terminal Outcome</h3><dl id="case-outcome" class="key-values"></dl></div>
-        <div><h3>Eligibility</h3><ul id="case-eligibility" class="chip-list"></ul></div>
-      </div>
+      <div id="case-list" class="case-list"></div>
     </section>
   </main>
 

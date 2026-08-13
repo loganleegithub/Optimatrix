@@ -20,6 +20,10 @@ exchange fact; none validates Optimatrix thresholds, proxies, Edge, or profitabi
 
 ## Public market-data API
 
+- [JSON-RPC overview](https://docs.deribit.com/articles/json-rpc-overview)
+  — production endpoint, request envelope, response timing fields, and `testnet` environment fact.
+- [`public/get_time`](https://docs.deribit.com/api-reference/supporting/public-get_time)
+  — public server-clock result used by the bounded runtime preflight.
 - [`public/get_instruments`](https://docs.deribit.com/api-reference/market-data/public-get_instruments)
   — available instrument payload.
 - [`public/get_order_book`](https://docs.deribit.com/api-reference/market-data/public-get_order_book)

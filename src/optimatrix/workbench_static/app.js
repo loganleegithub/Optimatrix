@@ -31,8 +31,7 @@
     });
   };
 
-  const renderRows = (targetId, rows) => {
-    const target = byId(targetId);
+  const renderRowsInto = (target, rows) => {
     target.replaceChildren();
     if (!rows.length) {
       const wrapper = element('div');
@@ -45,6 +44,95 @@
       wrapper.append(element('dt', '', row.label), element('dd', '', row.value));
       target.append(wrapper);
     });
+  };
+  const renderRows = (targetId, rows) => renderRowsInto(byId(targetId), rows);
+
+  const renderBreakdowns = (targetId, breakdowns) => {
+    const target = byId(targetId);
+    target.replaceChildren();
+    breakdowns.forEach(breakdown => {
+      const section = element('section', 'population-breakdown');
+      section.append(element('h4', '', breakdown.label));
+      const values = element('dl', 'key-values');
+      renderRowsInto(values, breakdown.rows);
+      section.append(values);
+      target.append(section);
+    });
+  };
+
+  const renderPopulation = (prefix, population) => {
+    setText(`${prefix}-population-label`, population.label);
+    setText(
+      `${prefix}-population-count`,
+      `${population.recorded} / ${population.denominator}`
+    );
+    renderRows(`${prefix}-population-values`, population.rows);
+    renderBreakdowns(`${prefix}-population-breakdowns`, population.breakdowns);
+  };
+
+  const renderEligibility = (target, facts) => {
+    target.replaceChildren();
+    if (!facts.length) {
+      target.append(element('li', 'none', 'No terminal eligibility facts.'));
+      return;
+    }
+    facts.forEach(fact => {
+      target.append(
+        element('li', '', `${fact.label}: ${fact.value} · ${fact.reason || 'NONE'}`)
+      );
+    });
+  };
+
+  const caseEvidence = (title, rows) => {
+    const section = element('section');
+    section.append(element('h4', '', title));
+    const values = element('dl', 'key-values');
+    renderRowsInto(values, rows);
+    section.append(values);
+    return section;
+  };
+
+  const renderCase = (caseValue, index) => {
+    const card = element('article', 'case-card');
+    const heading = element('div', 'case-card-heading');
+    const identity = element('div');
+    identity.append(
+      element('span', 'section-kicker', `CASE ${String(index + 1).padStart(2, '0')}`),
+      element('h3', 'case-identity', caseValue.trade_case_id || 'UNKNOWN')
+    );
+    const state = caseValue.position_state !== 'UNKNOWN'
+      ? caseValue.position_state
+      : caseValue.entry_status;
+    heading.append(identity, element('span', 'state-badge', state));
+    card.append(heading, element('p', 'case-message', caseValue.message));
+
+    const evidence = element('div', 'case-evidence-grid');
+    evidence.append(
+      caseEvidence('Case and Position', caseValue.facts),
+      caseEvidence('First exit intent', caseValue.exit_intent),
+      caseEvidence('Terminal Outcome', caseValue.outcome)
+    );
+    const eligibilitySection = element('section');
+    eligibilitySection.append(element('h4', '', 'Eligibility'));
+    const eligibility = element('ul', 'chip-list');
+    renderEligibility(eligibility, caseValue.eligibility);
+    eligibilitySection.append(eligibility);
+    evidence.append(eligibilitySection);
+    card.append(evidence);
+    return card;
+  };
+
+  const renderCases = values => {
+    const target = byId('case-list');
+    target.replaceChildren();
+    setText('case-count', String(values.length));
+    if (!values.length) {
+      target.append(
+        element('p', 'empty-state', 'No TradeCase has been recorded for this target Session.')
+      );
+      return;
+    }
+    values.forEach((value, index) => target.append(renderCase(value, index)));
   };
 
   const renderLeg = leg => {
@@ -89,12 +177,17 @@
 
   const product = documentValue.product;
   const snapshot = documentValue.snapshot;
+  const runtime = documentValue.runtime;
   const projection = documentValue.projection;
   setText('product-title', product.title);
   setText('strategy-name', product.strategy);
   setText('boundary-label', documentValue.boundary.label);
+  setText('runtime-status', runtime.status);
+  byId('runtime-status').dataset.tone = runtime.tone;
+  setText('target-session-id', runtime.session_id);
   setText('session-id', snapshot.session_id);
   setText('observed-at', snapshot.observed_at);
+  setText('runtime-updated-at', runtime.updated_at);
   setText('projection-state', projection.state);
   setText('projection-phase', projection.phase);
   byId('projection-state').dataset.tone = projection.tone;
@@ -106,24 +199,14 @@
   setText('warning-count', String(documentValue.warnings.length));
   renderList('warning-list', documentValue.warnings, 'No snapshot warnings were reported.');
   renderList('blocker-list', projection.blockers, 'No projection blocker was reported.');
+  renderRows('runtime-values', runtime.facts);
+  renderPopulation('decision', documentValue.population.decisions);
+  renderPopulation('outcome', documentValue.population.outcomes);
   renderRows('window-values', documentValue.window);
   renderRows('context-values', documentValue.context);
   renderRows('methodology-values', documentValue.methodology);
   renderStructure(documentValue.structure);
-  const caseValue = documentValue.case;
-  setText('case-message', caseValue.message);
-  renderRows('case-facts', caseValue.facts);
-  renderRows('case-exit-intent', caseValue.exit_intent);
-  renderRows('case-outcome', caseValue.outcome);
-  const eligibility = byId('case-eligibility');
-  eligibility.replaceChildren();
-  if (!caseValue.eligibility.length) {
-    eligibility.append(element('li', 'none', 'No terminal eligibility facts.'));
-  } else {
-    caseValue.eligibility.forEach(fact => {
-      eligibility.append(element('li', '', `${fact.label}: ${fact.value} · ${fact.reason}`));
-    });
-  }
+  renderCases(documentValue.cases);
 
   document.querySelectorAll('[data-theme]').forEach(button => {
     button.addEventListener('click', () => {

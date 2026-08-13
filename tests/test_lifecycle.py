@@ -38,8 +38,8 @@ from optimatrix.scenarios import base_chain, current_expiry, market_context
 from optimatrix.workbench import build_case_projection
 
 
-def _candidate(policy, tmp_path):
-    decision_at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+def _candidate(policy, tmp_path, *, decision_at=None):
+    decision_at = decision_at or datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
     engine = Btc0DteShortVolEngine(policy=policy)
     window = next(
         item
@@ -439,6 +439,97 @@ def test_case_journal_rejects_mutation_of_frozen_case_facts(policy, tmp_path) ->
     journal.append(case)
     with pytest.raises(ValueError, match="frozen TradeCase facts"):
         journal.append(replace(case, entry_deadline=case.entry_deadline + timedelta(seconds=1)))
+
+
+def test_case_journal_recover_all_enumerates_every_case_and_repairs_each_tail(
+    policy,
+    tmp_path,
+) -> None:
+    _engine, _record, first = _candidate(policy, tmp_path)
+    _engine, _record, second = _candidate(
+        policy,
+        tmp_path,
+        decision_at=datetime(2026, 8, 12, 18, 22, tzinfo=UTC),
+    )
+    journal = CaseJournal(tmp_path / "case-journal")
+    journal.append(first)
+    journal.append(second)
+    for case in (first, second):
+        with journal.path_for(case.identity).open("ab") as handle:
+            handle.write(b'{"sequence":1')
+
+    assert journal.recover_all() == tuple(sorted((first, second), key=lambda case: case.identity))
+    assert all(
+        journal.path_for(case.identity).read_bytes().endswith(b"\n") for case in (first, second)
+    )
+
+
+def test_case_journal_recovery_discards_complete_json_without_commit_newline(
+    policy,
+    tmp_path,
+) -> None:
+    _engine, _record, case = _candidate(policy, tmp_path)
+    journal = CaseJournal(tmp_path / "case-journal")
+    journal.append(case)
+    path = journal.path_for(case.identity)
+    path.write_bytes(path.read_bytes().removesuffix(b"\n"))
+
+    with pytest.raises(ValueError, match="unterminated write"):
+        journal.read(case.identity)
+
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="no accepted snapshot"):
+        journal.recover_all()
+    assert path.read_bytes() == before
+
+    assert journal.recover_all(recoverable_empty_case_ids=frozenset({case.identity})) == ()
+    assert not path.exists()
+
+
+def test_case_journal_recovery_rejects_unowned_empty_case_file(policy, tmp_path) -> None:
+    journal = CaseJournal(tmp_path / "case-journal")
+    foreign = journal.path_for(f"sha256:{'0' * 64}")
+    foreign.parent.mkdir(parents=True)
+    foreign.write_bytes(b"")
+
+    with pytest.raises(ValueError, match="no accepted snapshot"):
+        journal.recover_all()
+
+    assert foreign.read_bytes() == b""
+
+
+def test_case_journal_recover_all_rejects_foreign_case_directory_entries(
+    policy,
+    tmp_path,
+) -> None:
+    _engine, _record, case = _candidate(policy, tmp_path)
+    journal = CaseJournal(tmp_path / "case-journal")
+    journal.append(case)
+    case_path = journal.path_for(case.identity)
+    with case_path.open("ab") as handle:
+        handle.write(b'{"sequence":1')
+    before = case_path.read_bytes()
+    foreign = case_path.parent / "zz-foreign"
+    foreign.write_text("foreign", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="foreign entry: zz-foreign"):
+        journal.recover_all()
+    assert case_path.read_bytes() == before
+
+
+def test_case_journal_recover_all_rejects_filename_identity_mismatch(
+    policy,
+    tmp_path,
+) -> None:
+    _engine, _record, case = _candidate(policy, tmp_path)
+    journal = CaseJournal(tmp_path / "case-journal")
+    original = journal.path_for(case.identity)
+    journal.append(case)
+    mismatched = original.with_name(f"{'0' * 64}.jsonl")
+    original.rename(mismatched)
+
+    with pytest.raises(ValueError, match="contains a different TradeCase"):
+        journal.recover_all()
 
 
 def test_window_outcome_is_distinct_append_once_population(policy, tmp_path) -> None:

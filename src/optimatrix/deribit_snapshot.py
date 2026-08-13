@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,7 +12,6 @@ from decimal import Decimal, InvalidOperation
 from http.client import HTTPException
 from itertools import pairwise
 from typing import Protocol
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from optimatrix.decision import (
@@ -19,9 +19,11 @@ from optimatrix.decision import (
     MarketObservation,
     schedule_decision_windows,
 )
+from optimatrix.lifecycle import FuturePathSummary
 from optimatrix.market import (
     EventState,
     EventStateSource,
+    ExpirySettlementFact,
     ImpliedVarianceMethod,
     MarketContext,
     MarketContextEvidence,
@@ -29,6 +31,7 @@ from optimatrix.market import (
     OptionType,
     PriceLevel,
     RealizedVarianceMethod,
+    SettlementEvidenceKind,
     TickSchedule,
     TickStep,
 )
@@ -41,6 +44,22 @@ from optimatrix.structure import (
 )
 
 DEFAULT_DERIBIT_API = "https://www.deribit.com/api/v2"
+DERIBIT_PUBLIC_METHOD_ALLOWLIST = frozenset(
+    {
+        "public/get_delivery_prices",
+        "public/get_index_chart_data",
+        "public/get_index_price",
+        "public/get_instruments",
+        "public/get_order_book",
+        "public/get_time",
+    }
+)
+DERIBIT_DELIVERY_PRICE_SOURCE_ID = "DERIBIT_PUBLIC_GET_DELIVERY_PRICES_BTC_USD"
+DERIBIT_DELIVERY_PRICE_METHOD_ID = "DERIBIT_OFFICIAL_DELIVERY_PRICE_BY_EXPIRY_UTC_DATE_V1"
+DERIBIT_INDEX_PATH_SOURCE_ID = "DERIBIT_PUBLIC_GET_INDEX_CHART_DATA_BTC_USD_2D"
+DERIBIT_INDEX_PATH_METHOD_ID = (
+    "DERIBIT_CADENCE_COVERED_INDEX_PATH_ROLLING_30M_OVER_120M_RV_ACCELERATION_V1"
+)
 
 
 class DeribitSourceError(RuntimeError):
@@ -49,6 +68,30 @@ class DeribitSourceError(RuntimeError):
 
 class PublicRpcClient(Protocol):
     def call(self, method: str, params: Mapping[str, object]) -> object: ...
+
+
+@dataclass(frozen=True)
+class PublicRpcResponse:
+    """One validated production Deribit JSON-RPC response and its local boundaries."""
+
+    jsonrpc: str
+    request_id: int
+    result: object
+    testnet: bool
+    server_received_at_us: int
+    server_sent_at_us: int
+    server_processing_us: int
+    local_sent_at_ms: int
+    local_received_at_ms: int
+
+
+@dataclass(frozen=True)
+class PublicClockPreflight:
+    server_time_ms: int
+    local_time_ms: int
+    clock_skew_ms: int
+    request_round_trip_ms: int | None
+    known_at: datetime
 
 
 @dataclass(frozen=True)
@@ -247,37 +290,239 @@ class DeribitHttpClient:
         *,
         base_url: str = DEFAULT_DERIBIT_API,
         timeout_seconds: float = 10.0,
+        audit_callback: Callable[[str, Mapping[str, object], float], None] | None = None,
     ) -> None:
+        if not base_url.startswith("https://"):
+            raise ValueError("Deribit base_url must use HTTPS")
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise ValueError("timeout_seconds must be finite and positive")
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self.audit_callback = audit_callback
+        self._next_request_id = 1
+        self._request_id_lock = threading.Lock()
 
-    def call(self, method: str, params: Mapping[str, object]) -> object:
-        if not method.startswith("public/"):
-            raise ValueError("only public Deribit methods are allowed")
-        query = urlencode(
+    def call(self, method: str, params: Mapping[str, object]) -> PublicRpcResponse:
+        if method not in DERIBIT_PUBLIC_METHOD_ALLOWLIST:
+            raise ValueError("only public Deribit methods in the B3 allowlist are allowed")
+        if self.audit_callback is not None:
+            self.audit_callback(method, dict(params), self.timeout_seconds)
+        with self._request_id_lock:
+            request_id = self._next_request_id
+            self._next_request_id += 1
+        body = json.dumps(
             {
-                key: str(value).lower() if isinstance(value, bool) else value
-                for key, value in params.items()
-            }
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": method,
+                "params": dict(params),
+            },
+            ensure_ascii=True,
+            separators=(",", ":"),
         )
         request = Request(
-            f"{self.base_url}/{method}?{query}",
-            headers={"User-Agent": "optimatrix-btc-0dte/0.1"},
-            method="GET",
+            f"{self.base_url}/{method}",
+            data=body.encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "optimatrix-btc-0dte/0.1",
+            },
+            method="POST",
         )
+        local_sent_at_ms = int(time.time() * 1000)
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+                response_body = response.read()
+            local_received_at_ms = int(time.time() * 1000)
+            payload = json.loads(response_body.decode("utf-8"))
         except (OSError, HTTPException, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise DeribitSourceError(
                 f"Deribit request failed: {method}: {type(exc).__name__}: {exc}"
             ) from exc
-        root = _mapping(payload, "JSON-RPC response")
-        if root.get("error") is not None:
-            raise DeribitSourceError(f"Deribit returned an error for {method}")
-        if "result" not in root:
-            raise DeribitSourceError(f"Deribit response lacks result: {method}")
-        return root["result"]
+        return _validated_public_rpc_response(
+            payload,
+            method=method,
+            request_id=request_id,
+            timeout_seconds=self.timeout_seconds,
+            local_sent_at_ms=local_sent_at_ms,
+            local_received_at_ms=local_received_at_ms,
+        )
+
+
+def preflight_public_clock(
+    client: PublicRpcClient,
+    *,
+    local_now: datetime,
+    maximum_clock_skew_ms: int,
+) -> PublicClockPreflight:
+    """Fail closed when Deribit's public clock is too far from the runtime clock."""
+
+    if (
+        isinstance(maximum_clock_skew_ms, bool)
+        or not isinstance(maximum_clock_skew_ms, int)
+        or maximum_clock_skew_ms < 0
+    ):
+        raise ValueError("maximum_clock_skew_ms must be a non-negative integer")
+    normalized_local_now = _utc(local_now)
+    local_time_ms = int(normalized_local_now.timestamp() * 1000)
+    response = client.call("public/get_time", {})
+    server_time_ms = _integer(_rpc_result(response), "public/get_time result")
+    if server_time_ms <= 0:
+        raise DeribitSourceError("public/get_time result must be positive")
+    request_round_trip_ms: int | None = None
+    known_at_ms = local_time_ms
+    comparison_local_ms = local_time_ms
+    if isinstance(response, PublicRpcResponse):
+        earliest_server_ms = response.server_received_at_us // 1000 - 1
+        latest_server_ms = (response.server_sent_at_us + 999) // 1000 + 1
+        if not earliest_server_ms <= server_time_ms <= latest_server_ms:
+            raise DeribitSourceError(
+                "public/get_time result is outside its response timing envelope"
+            )
+        request_round_trip_ms = response.local_received_at_ms - response.local_sent_at_ms
+        known_at_ms = max(known_at_ms, response.local_received_at_ms)
+        comparison_local_ms = (response.local_sent_at_ms + response.local_received_at_ms) // 2
+    clock_skew_ms = server_time_ms - comparison_local_ms
+    if abs(clock_skew_ms) > maximum_clock_skew_ms:
+        raise DeribitSourceError(
+            "Deribit public clock skew exceeds the configured preflight boundary"
+        )
+    return PublicClockPreflight(
+        server_time_ms=server_time_ms,
+        local_time_ms=local_time_ms,
+        clock_skew_ms=clock_skew_ms,
+        request_round_trip_ms=request_round_trip_ms,
+        known_at=datetime.fromtimestamp(known_at_ms / 1000, tz=UTC),
+    )
+
+
+def fetch_btc_index_history(
+    client: PublicRpcClient,
+    *,
+    known_at: datetime,
+) -> tuple[tuple[int, Decimal], ...]:
+    """Read the validated public 2d BTC index series needed by WindowOutcome assembly."""
+
+    normalized_known_at = _utc(known_at)
+    response = client.call(
+        "public/get_index_chart_data",
+        {"index_name": BTC.price_index, "range": "2d"},
+    )
+    return _index_history(
+        _rpc_result(response),
+        now_ms=int(normalized_known_at.timestamp() * 1000),
+    )
+
+
+def summarize_btc_index_path(
+    history: tuple[tuple[int, Decimal], ...],
+    *,
+    starts_at: datetime,
+    ends_at: datetime,
+) -> FuturePathSummary | None:
+    """Summarize one cadence-covered continuous path without deciding an Outcome."""
+
+    normalized_start = _utc(starts_at)
+    normalized_end = _utc(ends_at)
+    if normalized_start >= normalized_end:
+        raise ValueError("index path boundaries must have positive duration")
+    points = _validated_index_history_points(history)
+    start_ms = int(normalized_start.timestamp() * 1000)
+    end_ms = int(normalized_end.timestamp() * 1000)
+    path = tuple(point for point in points if start_ms <= point[0] <= end_ms)
+    if not path:
+        return None
+    context_start_ms = start_ms - 120 * 60_000
+    context = tuple(point for point in points if context_start_ms <= point[0] <= end_ms)
+    try:
+        cadence_ms = _history_cadence_ms(
+            context,
+            horizon_minutes=max(120, math.ceil((end_ms - context_start_ms) / 60_000)),
+        )
+    except DeribitSourceError:
+        return None
+    if (
+        not context
+        or context[0][0] > context_start_ms + cadence_ms * 2
+        or path[0][0] > start_ms + cadence_ms * 2
+        or path[-1][0] < end_ms - cadence_ms * 2
+        or any(current[0] - previous[0] > cadence_ms * 2 for previous, current in pairwise(path))
+    ):
+        return None
+    accelerations: list[Decimal] = []
+    for timestamp_ms, _ in path:
+        acceleration = _rolling_rv_acceleration(
+            points,
+            at_ms=timestamp_ms,
+            expected_cadence_ms=cadence_ms,
+        )
+        if acceleration is None:
+            return None
+        accelerations.append(acceleration)
+    prices = tuple(price for _, price in path)
+    return FuturePathSummary(
+        source_id=DERIBIT_INDEX_PATH_SOURCE_ID,
+        method_id=DERIBIT_INDEX_PATH_METHOD_ID,
+        starts_at=normalized_start,
+        ends_at=normalized_end,
+        observation_count=len(path),
+        start_index_price_usd=prices[0],
+        end_index_price_usd=prices[-1],
+        minimum_index_price_usd=min(prices),
+        maximum_index_price_usd=max(prices),
+        maximum_rv_acceleration=max(accelerations),
+    )
+
+
+def fetch_btc_expiry_settlement(
+    client: PublicRpcClient,
+    *,
+    expiry: datetime,
+    known_at: datetime,
+) -> ExpirySettlementFact:
+    """Translate the exact UTC expiry-date row into one official BTC settlement fact."""
+
+    normalized_expiry = _utc(expiry)
+    normalized_known_at = _utc(known_at)
+    if normalized_known_at < normalized_expiry:
+        raise ValueError("settlement lookup cannot run before expiry")
+    response = client.call(
+        "public/get_delivery_prices",
+        {"index_name": BTC.price_index, "offset": 0, "count": 10},
+    )
+    result = _mapping(_rpc_result(response), "delivery price result")
+    data = result.get("data")
+    if not isinstance(data, list):
+        raise DeribitSourceError("delivery price data must be an array")
+    expiry_date = normalized_expiry.date().isoformat()
+    matching_prices: list[Decimal] = []
+    for raw in data:
+        item = _mapping(raw, "delivery price row")
+        date_text = _text(item.get("date"), "delivery price date")
+        try:
+            parsed_date = datetime.strptime(date_text, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise DeribitSourceError("delivery price date must be YYYY-MM-DD") from exc
+        if parsed_date.isoformat() != date_text:
+            raise DeribitSourceError("delivery price date must be canonical YYYY-MM-DD")
+        if date_text == expiry_date:
+            matching_prices.append(_positive_decimal(item.get("delivery_price"), "delivery_price"))
+    if not matching_prices:
+        raise DeribitSourceError("delivery prices lack the exact UTC expiry date")
+    if len(matching_prices) != 1:
+        raise DeribitSourceError("delivery prices contain duplicate UTC expiry dates")
+    effective_known_at_ms = int(normalized_known_at.timestamp() * 1000)
+    if isinstance(response, PublicRpcResponse):
+        effective_known_at_ms = max(effective_known_at_ms, response.local_received_at_ms)
+    return ExpirySettlementFact(
+        product_id=BTC.product_id,
+        expiry=normalized_expiry,
+        delivery_price_usd=matching_prices[0],
+        known_at=datetime.fromtimestamp(effective_known_at_ms / 1000, tz=UTC),
+        evidence_kind=SettlementEvidenceKind.OFFICIAL_EXCHANGE,
+        source_id=DERIBIT_DELIVERY_PRICE_SOURCE_ID,
+        method_id=DERIBIT_DELIVERY_PRICE_METHOD_ID,
+    )
 
 
 def evaluate_live_btc_snapshot(
@@ -288,31 +533,51 @@ def evaluate_live_btc_snapshot(
     event_state: EventState,
     maximum_books: int = 32,
     depth: int = 20,
+    target_window: DecisionWindow | None = None,
+    required_instrument_names: Sequence[str] = (),
 ) -> PublicSnapshotEvaluation:
     """Evaluate one current-session public snapshot without opening a Case."""
 
-    if maximum_books < 4:
-        raise ValueError("maximum_books must allow at least four option books")
+    if maximum_books < 4 or maximum_books > 32:
+        raise ValueError("maximum_books must be between four and 32")
     if depth not in {1, 5, 10, 20, 50, 100, 1000, 10000}:
         raise ValueError("depth is outside Deribit's supported values")
+    required_names = _required_instrument_names(
+        required_instrument_names,
+        maximum_books=maximum_books,
+    )
     normalized_now = _utc(now)
     session = current_deribit_session(normalized_now, phase_policy=policy.session)
+    if target_window is not None:
+        _validate_target_window(
+            target_window,
+            policy=policy,
+            request_boundary=normalized_now,
+        )
+    index_response = client.call(
+        "public/get_index_price",
+        {"index_name": BTC.price_index},
+    )
     index_result = _mapping(
-        client.call("public/get_index_price", {"index_name": BTC.price_index}),
+        _rpc_result(index_response),
         "index price result",
     )
     index_price = _positive_decimal(index_result.get("index_price"), "index_price")
+    instrument_response = client.call(
+        "public/get_instruments",
+        {"currency": BTC.public_currency, "kind": "option", "expired": False},
+    )
     instruments = _instrument_metadata(
-        client.call(
-            "public/get_instruments",
-            {"currency": BTC.public_currency, "kind": "option", "expired": False},
-        ),
+        _rpc_result(instrument_response),
         session_end_ms=int(session.end.timestamp() * 1000),
     )
+    available_names = {str(item["instrument_name"]) for item in instruments}
+    missing_required_names = tuple(name for name in required_names if name not in available_names)
     selected_metadata = _shortlist_instruments(
         instruments,
         index_price=index_price,
         maximum_books=maximum_books,
+        required_instrument_names=required_names,
     )
     quotes, forwards, fetch_warnings = _fetch_books(
         client=client,
@@ -320,14 +585,14 @@ def evaluate_live_btc_snapshot(
         depth=depth,
     )
     warnings: list[str] = list(fetch_warnings)
+    warnings.extend(
+        f"REQUIRED_INSTRUMENT_METADATA_MISSING:{name}" for name in missing_required_names
+    )
     if len(quotes) < 4:
         raise DeribitSourceError("fewer than four current-session option books were usable")
-    history = _index_history(
-        client.call(
-            "public/get_index_chart_data",
-            {"index_name": BTC.price_index, "range": "2d"},
-        ),
-        now_ms=int(normalized_now.timestamp() * 1000),
+    history = fetch_btc_index_history(
+        client,
+        known_at=normalized_now,
     )
     horizon_minutes = max(
         5,
@@ -361,11 +626,17 @@ def evaluate_live_btc_snapshot(
     evidence_blockers: list[str] = []
     if any(quote.source_timestamp_ms > quote.received_timestamp_ms for quote in quotes):
         evidence_blockers.append("MARKET_SOURCE_AFTER_RECEIPT")
+    if missing_required_names:
+        evidence_blockers.append("REQUIRED_INSTRUMENT_METADATA_MISSING")
     if (
         current_deribit_session(known_at, phase_policy=policy.session).session_id
         != session.session_id
     ):
         evidence_blockers.append("SNAPSHOT_CROSSED_SESSION_BOUNDARY")
+    if target_window is not None and not (
+        target_window.starts_at <= known_at < target_window.ends_at
+    ):
+        evidence_blockers.append("SNAPSHOT_CROSSED_TARGET_WINDOW_BOUNDARY")
     evidence = MarketContextEvidence(
         realized_variance_method=(
             RealizedVarianceMethod.TRAILING_MATCHED_HORIZON_INDEX_REALIZED_VARIANCE_PROXY
@@ -402,15 +673,17 @@ def evaluate_live_btc_snapshot(
         concentration_strength=concentration_strength,
         evidence=evidence,
     )
-    windows = schedule_decision_windows(
-        session=session,
-        channel_id=policy.channel_id,
-        policy=policy.window,
-    )
-    decision_window = next(
-        (window for window in windows if window.starts_at <= context.now < window.ends_at),
-        windows[-1],
-    )
+    if target_window is not None:
+        decision_window = target_window
+    else:
+        windows = schedule_decision_windows(
+            session=session,
+            channel_id=policy.channel_id,
+            policy=policy.window,
+        )
+        decision_window = next(
+            window for window in windows if window.starts_at <= normalized_now < window.ends_at
+        )
     observation = MarketObservation.capture(
         channel_id=policy.channel_id,
         policy=policy.observation,
@@ -449,11 +722,16 @@ def _fetch_books(
     warnings: list[str] = []
 
     def fetch_one(item: dict[str, object]) -> tuple[dict[str, object], object, int]:
-        result = client.call(
+        response = client.call(
             "public/get_order_book",
             {"instrument_name": item["instrument_name"], "depth": depth},
         )
-        return item, result, int(time.time() * 1000)
+        received_at_ms = (
+            response.local_received_at_ms
+            if isinstance(response, PublicRpcResponse)
+            else int(time.time() * 1000)
+        )
+        return item, _rpc_result(response), received_at_ms
 
     workers = min(8, max(1, len(metadata)))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="deribit-book") as executor:
@@ -530,6 +808,7 @@ def _shortlist_instruments(
     *,
     index_price: Decimal,
     maximum_books: int,
+    required_instrument_names: tuple[str, ...] = (),
 ) -> tuple[dict[str, object], ...]:
     lower = index_price * Decimal("0.75")
     upper = index_price * Decimal("1.25")
@@ -539,7 +818,7 @@ def _shortlist_instruments(
         if lower <= _positive_decimal(item["strike"], "strike") <= upper
     ]
     per_side = maximum_books // 2
-    selected: list[dict[str, object]] = []
+    ranked: list[dict[str, object]] = []
     for option_type in ("put", "call"):
         side = [
             item
@@ -556,14 +835,24 @@ def _shortlist_instruments(
                 math.log(float(_positive_decimal(item["strike"], "strike") / index_price))
             )
         )
-        selected.extend(side[:per_side])
+        ranked.extend(side[:per_side])
+    by_name = {str(item["instrument_name"]): item for item in instruments}
+    selected: list[dict[str, object]] = [
+        by_name[name] for name in required_instrument_names if name in by_name
+    ]
+    selected_names = {str(item["instrument_name"]) for item in selected}
+    for item in ranked:
+        name = str(item["instrument_name"])
+        if name not in selected_names and len(selected) < maximum_books:
+            selected.append(item)
+            selected_names.add(name)
     selected.sort(
         key=lambda item: (
             _positive_decimal(item["strike"], "strike"),
             item["option_type"],
         )
     )
-    return tuple(selected[:maximum_books])
+    return tuple(selected)
 
 
 def _quote_from_public_book(
@@ -671,6 +960,53 @@ def _index_history(value: object, *, now_ms: int) -> tuple[tuple[int, Decimal], 
     if len(output) < 3 or any(current[0] <= previous[0] for previous, current in pairwise(output)):
         raise DeribitSourceError("index history is not strictly chronological")
     return tuple(output)
+
+
+def _validated_index_history_points(
+    history: tuple[tuple[int, Decimal], ...],
+) -> tuple[tuple[int, Decimal], ...]:
+    points: list[tuple[int, Decimal]] = []
+    for raw in history:
+        if not isinstance(raw, tuple) or len(raw) != 2:
+            raise DeribitSourceError("validated index history point is malformed")
+        points.append(
+            (
+                _integer(raw[0], "history timestamp"),
+                _positive_decimal(raw[1], "history price"),
+            )
+        )
+    if any(current[0] <= previous[0] for previous, current in pairwise(points)):
+        raise DeribitSourceError("validated index history is not strictly chronological")
+    return tuple(points)
+
+
+def _rolling_rv_acceleration(
+    history: tuple[tuple[int, Decimal], ...],
+    *,
+    at_ms: int,
+    expected_cadence_ms: int,
+) -> Decimal | None:
+    long_start_ms = at_ms - 120 * 60_000
+    short_start_ms = at_ms - 30 * 60_000
+    long_points = tuple(point for point in history if long_start_ms <= point[0] <= at_ms)
+    if (
+        len(long_points) < 3
+        or long_points[0][0] > long_start_ms + expected_cadence_ms * 2
+        or long_points[-1][0] != at_ms
+        or any(
+            current[0] - previous[0] > expected_cadence_ms * 2
+            for previous, current in pairwise(long_points)
+        )
+    ):
+        return None
+    short_points = tuple(point for point in long_points if point[0] >= short_start_ms)
+    if len(short_points) < 2:
+        return None
+    short_rate = _variance_rate(_log_returns(short_points))
+    long_rate = _variance_rate(_log_returns(long_points))
+    if long_rate <= 0:
+        return Decimal(0)
+    return _clamp((short_rate / long_rate - Decimal(1)) / Decimal(2))
 
 
 def _history_cadence_ms(
@@ -792,6 +1128,102 @@ def _median(values: list[Decimal]) -> Decimal:
     if len(ordered) % 2:
         return ordered[midpoint]
     return (ordered[midpoint - 1] + ordered[midpoint]) / Decimal(2)
+
+
+def _validated_public_rpc_response(
+    value: object,
+    *,
+    method: str,
+    request_id: int,
+    timeout_seconds: float,
+    local_sent_at_ms: int,
+    local_received_at_ms: int,
+) -> PublicRpcResponse:
+    root = _mapping(value, "JSON-RPC response")
+    if root.get("jsonrpc") != "2.0":
+        raise DeribitSourceError(f"Deribit response has invalid JSON-RPC version: {method}")
+    if _integer(root.get("id"), "JSON-RPC id") != request_id:
+        raise DeribitSourceError(f"Deribit response id mismatch: {method}")
+    if root.get("testnet") is not False:
+        raise DeribitSourceError(f"Deribit response is not from production: {method}")
+    server_received_at_us = _integer(root.get("usIn"), "JSON-RPC usIn")
+    server_sent_at_us = _integer(root.get("usOut"), "JSON-RPC usOut")
+    server_processing_us = _integer(root.get("usDiff"), "JSON-RPC usDiff")
+    if local_received_at_ms < local_sent_at_ms:
+        raise DeribitSourceError("local receive boundary precedes request boundary")
+    if server_received_at_us <= 0 or server_sent_at_us < server_received_at_us:
+        raise DeribitSourceError(f"Deribit response timing order is invalid: {method}")
+    if server_processing_us != server_sent_at_us - server_received_at_us:
+        raise DeribitSourceError(f"Deribit response processing time is inconsistent: {method}")
+    if server_processing_us > int(timeout_seconds * 1_000_000):
+        raise DeribitSourceError(f"Deribit response processing time exceeds timeout: {method}")
+    maximum_clock_distance_us = 24 * 60 * 60 * 1_000_000
+    if (
+        server_received_at_us < local_sent_at_ms * 1000 - maximum_clock_distance_us
+        or server_sent_at_us > local_received_at_ms * 1000 + maximum_clock_distance_us
+    ):
+        raise DeribitSourceError(f"Deribit response timing fields are implausible: {method}")
+    has_result = "result" in root
+    error = root.get("error")
+    if error is not None and has_result:
+        raise DeribitSourceError(f"Deribit response contains both result and error: {method}")
+    if error is not None:
+        raise DeribitSourceError(f"Deribit returned an error for {method}")
+    if not has_result:
+        raise DeribitSourceError(f"Deribit response lacks result: {method}")
+    return PublicRpcResponse(
+        jsonrpc="2.0",
+        request_id=request_id,
+        result=root["result"],
+        testnet=False,
+        server_received_at_us=server_received_at_us,
+        server_sent_at_us=server_sent_at_us,
+        server_processing_us=server_processing_us,
+        local_sent_at_ms=local_sent_at_ms,
+        local_received_at_ms=local_received_at_ms,
+    )
+
+
+def _rpc_result(value: object) -> object:
+    return value.result if isinstance(value, PublicRpcResponse) else value
+
+
+def _required_instrument_names(
+    value: Sequence[str],
+    *,
+    maximum_books: int,
+) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)):
+        raise ValueError("required_instrument_names must be a sequence of instrument names")
+    names = tuple(value)
+    if len(names) > maximum_books:
+        raise ValueError("required_instrument_names exceed the bounded book universe")
+    if len(set(names)) != len(names) or any(
+        not isinstance(name, str) or not name or name != name.strip() for name in names
+    ):
+        raise ValueError("required_instrument_names must be unique non-empty text")
+    return names
+
+
+def _validate_target_window(
+    window: DecisionWindow,
+    *,
+    policy: BtcShortVolPolicy,
+    request_boundary: datetime,
+) -> None:
+    target_session = current_deribit_session(window.starts_at, phase_policy=policy.session)
+    expected_windows = schedule_decision_windows(
+        session=target_session,
+        channel_id=policy.channel_id,
+        policy=policy.window,
+    )
+    if window.identity not in {item.identity for item in expected_windows}:
+        raise ValueError("target_window does not belong to the current BTC Policy schedule")
+    request_session = current_deribit_session(request_boundary, phase_policy=policy.session)
+    if request_session.session_id != window.market_session_id:
+        raise ValueError("target_window does not belong to the request Session")
+    if not window.starts_at <= request_boundary < window.ends_at:
+        raise ValueError("request boundary must be inside target_window")
 
 
 def _mapping(value: object, field: str) -> Mapping[str, object]:

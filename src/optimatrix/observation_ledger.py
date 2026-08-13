@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,7 +66,7 @@ class WindowOutcomePopulationSummary:
 
 
 class ObservationLedger:
-    """Append-once DecisionRecords under one caller-supplied offline root."""
+    """Append-once DecisionRecords under one caller-supplied root."""
 
     def __init__(self, root: Path) -> None:
         self.path = root / "decision-records.jsonl"
@@ -88,23 +89,43 @@ class ObservationLedger:
         )
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         return True
 
     def read(self) -> tuple[DecisionRecord, ...]:
+        return self._read_records(recover_unterminated_tail=False)
+
+    def _read_records(
+        self,
+        *,
+        recover_unterminated_tail: bool,
+    ) -> tuple[DecisionRecord, ...]:
         if not self.path.exists():
             return ()
         records: list[DecisionRecord] = []
         seen: set[str] = set()
-        for number, line in enumerate(self.path.read_text(encoding="utf-8").splitlines(), start=1):
+        payload = self.path.read_bytes()
+        lines = payload.splitlines(keepends=True)
+        accepted_bytes = 0
+        for index, raw_line in enumerate(lines):
+            number = index + 1
+            if index == len(lines) - 1 and not raw_line.endswith(b"\n"):
+                if recover_unterminated_tail:
+                    _truncate(self.path, accepted_bytes)
+                    return tuple(records)
+                raise ValueError(f"invalid ObservationLedger line {number}: unterminated write")
             try:
+                line = raw_line.decode("utf-8")
                 value = json.loads(line)
                 record = DecisionRecord.from_object(value)
-            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
                 raise ValueError(f"invalid ObservationLedger line {number}: {exc}") from exc
             if record.window.identity in seen:
                 raise ValueError("ObservationLedger contains a duplicate DecisionWindow")
             seen.add(record.window.identity)
             records.append(record)
+            accepted_bytes += len(raw_line)
         return tuple(records)
 
     def append_outcome(self, outcome: WindowOutcome) -> bool:
@@ -138,27 +159,53 @@ class ObservationLedger:
         )
         with self.outcome_path.open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         return True
 
     def read_outcomes(self) -> tuple[WindowOutcome, ...]:
+        return self._read_outcomes(recover_unterminated_tail=False)
+
+    def _read_outcomes(
+        self,
+        *,
+        recover_unterminated_tail: bool,
+    ) -> tuple[WindowOutcome, ...]:
         if not self.outcome_path.exists():
             return ()
         outcomes: list[WindowOutcome] = []
         seen: set[str] = set()
-        for number, line in enumerate(
-            self.outcome_path.read_text(encoding="utf-8").splitlines(),
-            start=1,
-        ):
+        payload = self.outcome_path.read_bytes()
+        lines = payload.splitlines(keepends=True)
+        accepted_bytes = 0
+        for index, raw_line in enumerate(lines):
+            number = index + 1
+            if index == len(lines) - 1 and not raw_line.endswith(b"\n"):
+                if recover_unterminated_tail:
+                    _truncate(self.outcome_path, accepted_bytes)
+                    return tuple(outcomes)
+                raise ValueError(f"invalid WindowOutcome line {number}: unterminated write")
             try:
+                line = raw_line.decode("utf-8")
                 value = json.loads(line)
                 outcome = WindowOutcome.from_object(value)
-            except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
                 raise ValueError(f"invalid WindowOutcome line {number}: {exc}") from exc
             if outcome.decision_window_id in seen:
                 raise ValueError("ObservationLedger contains a duplicate WindowOutcome")
             seen.add(outcome.decision_window_id)
             outcomes.append(outcome)
+            accepted_bytes += len(raw_line)
         return tuple(outcomes)
+
+    def recover(
+        self,
+    ) -> tuple[tuple[DecisionRecord, ...], tuple[WindowOutcome, ...]]:
+        """Discard only unterminated final writes and return both accepted populations."""
+
+        records = self._read_records(recover_unterminated_tail=True)
+        outcomes = self._read_outcomes(recover_unterminated_tail=True)
+        return records, outcomes
 
     def summarize(
         self,
@@ -217,3 +264,10 @@ def _counts(values: Iterable[str]) -> tuple[tuple[str, int], ...]:
     for value in values:
         counts[value] = counts.get(value, 0) + 1
     return tuple(sorted(counts.items()))
+
+
+def _truncate(path: Path, accepted_bytes: int) -> None:
+    with path.open("r+b") as handle:
+        handle.truncate(accepted_bytes)
+        handle.flush()
+        os.fsync(handle.fileno())

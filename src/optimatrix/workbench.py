@@ -48,6 +48,44 @@ _CONTEXT_LABELS = {
     "market_received_max_ms": "Latest required market receipt (ms)",
     "event_state_known_at_ms": "Event state known at (ms)",
 }
+_RUNTIME_LABELS = {
+    "status": "Runtime status",
+    "session_id": "Target Session",
+    "started_at": "Started at",
+    "updated_at": "Last update",
+    "recovered_case_count": "Recovered Cases",
+    "restart_count": "Observed restarts",
+    "last_recovery_at": "Last recovery",
+    "current_window_id": "Current Decision Window",
+    "last_error": "Last error",
+}
+_POPULATION_LABELS = {
+    "denominator": "Session denominator",
+    "recorded": "Recorded",
+    "missing": "Missing",
+    "complete": "Complete",
+    "future_path_known": "Future path known",
+    "future_path_unknown": "Future path unknown",
+    "continuous": "Continuous future path",
+    "discontinuous": "Discontinuous future path",
+    "decision_evaluable": "Decision evaluable",
+    "strategy_population_eligible": "Strategy population eligible",
+}
+_CASE_LABELS = {
+    "truth_layer": "Truth layer",
+    "trade_case_id": "Trade Case identity",
+    "decision_window_id": "Decision Window identity",
+    "opened_at": "Opened at",
+    "entry_deadline": "Entry deadline",
+    "entry_status": "Entry status",
+    "entry_final": "Entry final",
+    "entry_observed_at": "Entry observed at",
+    "entry_reason": "Entry reason",
+    "position_id": "Shadow Position identity",
+    "position_state": "Position state",
+    "last_observed_at": "Last lifecycle observation",
+    "gap_observed": "DataHealth gap observed",
+}
 _STRUCTURE_METRIC_LABELS = {
     "boundary_net_credit_usd": "Boundary-valued four-leg net credit",
     "boundary_reference_loss_usd": "Boundary-valued reference loss",
@@ -95,8 +133,11 @@ def build_workbench_document(
     snapshot: Mapping[str, object],
     *,
     trade_case: TradeCase | None = None,
+    runtime_state: Mapping[str, object] | None = None,
+    ledger_population: Mapping[str, object] | None = None,
+    recovered_cases: Sequence[TradeCase] | None = None,
 ) -> dict[str, object]:
-    """Build the complete presentation model for one public Deribit snapshot.
+    """Build the presentation model for one public snapshot and optional runtime facts.
 
     All joins, ordering, labels, and state tones are resolved here. The browser receives a display
     document and never recomputes strategy, structure, or lifecycle truth.
@@ -132,6 +173,12 @@ def build_workbench_document(
             "requested_book_count": _display_value(root.get("requested_book_count")),
             "fetched_book_count": _display_value(root.get("fetched_book_count")),
         },
+        "runtime": _runtime_projection(
+            runtime_state,
+            fallback_session_id=session_id,
+            fallback_updated_at=observed_at,
+        ),
+        "population": _ledger_population_projection(ledger_population),
         "warnings": [{"code": warning, "tone": "warning"} for warning in warnings],
         "window": _display_rows(window, _WINDOW_LABELS),
         "projection": {
@@ -148,6 +195,10 @@ def build_workbench_document(
         "context": _display_rows(context, _CONTEXT_LABELS),
         "methodology": _optional_display_rows(root.get("methodology"), {}),
         "case": build_case_projection(trade_case),
+        "cases": _case_collection_projection(
+            trade_case=trade_case,
+            recovered_cases=recovered_cases,
+        ),
     }
 
 
@@ -156,10 +207,19 @@ def write_workbench(
     output_dir: str | Path,
     *,
     trade_case: TradeCase | None = None,
+    runtime_state: Mapping[str, object] | None = None,
+    ledger_population: Mapping[str, object] | None = None,
+    recovered_cases: Sequence[TradeCase] | None = None,
 ) -> WorkbenchExport:
-    """Write a self-contained, network-free Workbench directory for one snapshot mapping."""
+    """Write a self-contained, network-JavaScript-free Workbench directory."""
 
-    document = build_workbench_document(snapshot, trade_case=trade_case)
+    document = build_workbench_document(
+        snapshot,
+        trade_case=trade_case,
+        runtime_state=runtime_state,
+        ledger_population=ledger_population,
+        recovered_cases=recovered_cases,
+    )
     destination = Path(output_dir).expanduser().resolve()
     if destination == _ASSET_ROOT.resolve():
         raise ValueError("output_dir cannot overwrite the Workbench source assets")
@@ -193,6 +253,9 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
     if case is None:
         return {
             "available": False,
+            "trade_case_id": None,
+            "entry_status": "UNKNOWN",
+            "position_state": "UNKNOWN",
             "message": "This bounded snapshot did not open a TradeCase.",
             "facts": [],
             "exit_intent": [],
@@ -203,10 +266,19 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
         "truth_layer": case.truth_layer,
         "trade_case_id": case.identity,
         "decision_window_id": case.decision_window_id,
+        "opened_at": case.opened_at.isoformat(),
+        "entry_deadline": case.entry_deadline.isoformat(),
         "entry_status": case.entry_status.value if case.entry_status is not None else None,
         "entry_final": case.entry_final,
+        "entry_observed_at": (
+            case.entry_observed_at.isoformat() if case.entry_observed_at is not None else None
+        ),
+        "entry_reason": case.entry_reason,
         "position_id": case.position_id,
         "position_state": case.position_state.value if case.position_state is not None else None,
+        "last_observed_at": (
+            case.last_observed_at.isoformat() if case.last_observed_at is not None else None
+        ),
         "gap_observed": case.gap_observed,
     }
     intent = (
@@ -272,12 +344,131 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
     )
     return {
         "available": True,
+        "trade_case_id": case.identity,
+        "entry_status": case.entry_status.value if case.entry_status is not None else "UNKNOWN",
+        "position_state": (
+            case.position_state.value if case.position_state is not None else "UNKNOWN"
+        ),
         "message": "Counterfactual whole-product lifecycle; no order, fill, or account Position.",
-        "facts": _display_rows(facts, {}),
+        "facts": _display_rows(facts, _CASE_LABELS),
         "exit_intent": _optional_display_rows(intent, {}),
         "outcome": _optional_display_rows(outcome_values, {}),
         "eligibility": eligibility,
     }
+
+
+def _runtime_projection(
+    value: Mapping[str, object] | None,
+    *,
+    fallback_session_id: str,
+    fallback_updated_at: str,
+) -> dict[str, object]:
+    if value is None:
+        return {
+            "available": False,
+            "status": "SNAPSHOT_ONLY",
+            "tone": "neutral",
+            "session_id": fallback_session_id,
+            "updated_at": fallback_updated_at,
+            "last_error": "NONE",
+            "facts": [],
+        }
+    runtime = _mapping(value, "runtime_state")
+    status = _required_text(runtime.get("status"), "runtime_state.status")
+    session_id = _required_text(runtime.get("session_id"), "runtime_state.session_id")
+    display_runtime = dict(runtime)
+    if "last_error" in display_runtime and display_runtime["last_error"] is None:
+        display_runtime["last_error"] = "NONE"
+    return {
+        "available": True,
+        "status": status,
+        "tone": _runtime_tone(status),
+        "session_id": session_id,
+        "updated_at": _display_value(runtime.get("updated_at")),
+        "last_error": _display_value(display_runtime.get("last_error")),
+        "facts": _display_rows(display_runtime, _RUNTIME_LABELS),
+    }
+
+
+def _ledger_population_projection(
+    value: Mapping[str, object] | None,
+) -> dict[str, object]:
+    if value is None:
+        return {
+            "available": False,
+            "decisions": _population_section(None, label="DecisionRecords"),
+            "outcomes": _population_section(None, label="WindowOutcomes"),
+        }
+    population = _mapping(value, "ledger_population")
+    return {
+        "available": True,
+        "decisions": _population_section(
+            population.get("decisions"),
+            label="DecisionRecords",
+            field="ledger_population.decisions",
+        ),
+        "outcomes": _population_section(
+            population.get("outcomes"),
+            label="WindowOutcomes",
+            field="ledger_population.outcomes",
+        ),
+    }
+
+
+def _population_section(
+    value: object,
+    *,
+    label: str,
+    field: str = "ledger population",
+) -> dict[str, object]:
+    if value is None:
+        return {
+            "label": label,
+            "recorded": "UNKNOWN",
+            "denominator": "UNKNOWN",
+            "rows": [],
+            "breakdowns": [],
+        }
+    summary = _mapping(value, field)
+    breakdowns: list[dict[str, object]] = []
+    for key, nested in summary.items():
+        if not isinstance(nested, Mapping):
+            continue
+        nested_summary = _mapping(nested, f"{field}.{key}")
+        breakdowns.append(
+            {
+                "key": key,
+                "label": key.replace("_", " ").title(),
+                "rows": _display_rows(nested_summary, {}),
+            }
+        )
+    return {
+        "label": label,
+        "recorded": _display_value(summary.get("recorded")),
+        "denominator": _display_value(summary.get("denominator")),
+        "rows": _display_rows(summary, _POPULATION_LABELS),
+        "breakdowns": breakdowns,
+    }
+
+
+def _case_collection_projection(
+    *,
+    trade_case: TradeCase | None,
+    recovered_cases: Sequence[TradeCase] | None,
+) -> list[dict[str, object]]:
+    if recovered_cases is not None and isinstance(recovered_cases, (str, bytes)):
+        raise TypeError("recovered_cases must be an array of TradeCase values")
+    values = ([trade_case] if trade_case is not None else []) + list(recovered_cases or ())
+    selected: list[TradeCase] = []
+    by_identity: dict[str, TradeCase] = {}
+    for case in values:
+        prior = by_identity.get(case.identity)
+        if prior is None:
+            by_identity[case.identity] = case
+            selected.append(case)
+        elif prior != case:
+            raise ValueError("recovered_cases contains different snapshots for one TradeCase")
+    return [build_case_projection(case) for case in selected]
 
 
 def _structure_projection(
@@ -398,6 +589,18 @@ def _projection_tone(state: str) -> str:
         "UNKNOWN": "warning",
         "NO_STRUCTURE": "neutral",
     }.get(state.upper(), "unknown")
+
+
+def _runtime_tone(status: str) -> str:
+    return {
+        "RUNNING": "positive",
+        "COMPLETE": "positive",
+        "STARTING": "warning",
+        "RECOVERING": "warning",
+        "STOPPED": "neutral",
+        "ERROR": "danger",
+        "FAILED": "danger",
+    }.get(status.upper(), "neutral")
 
 
 def _display_value(value: object) -> str:

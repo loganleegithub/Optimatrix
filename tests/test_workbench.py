@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 import pytest
 
+from optimatrix.lifecycle import TradeCase
 from optimatrix.workbench import build_workbench_document, write_workbench
 
 
@@ -101,6 +104,30 @@ def _snapshot() -> dict[str, object]:
     }
 
 
+def _recovered_case(identity_suffix: str, *, minute: int) -> TradeCase:
+    opened_at = datetime(2026, 8, 12, 18, minute, tzinfo=UTC)
+    return cast(
+        TradeCase,
+        SimpleNamespace(
+            truth_layer="SHADOW_PROJECTION",
+            identity=f"sha256:{identity_suffix * 64}",
+            decision_window_id=f"sha256:{str(minute).zfill(2) * 32}",
+            opened_at=opened_at,
+            entry_deadline=opened_at + timedelta(minutes=2),
+            entry_status=None,
+            entry_final=False,
+            entry_observed_at=None,
+            entry_reason=None,
+            position_id=None,
+            position_state=None,
+            last_observed_at=None,
+            gap_observed=False,
+            exit_intent=None,
+            outcome=None,
+        ),
+    )
+
+
 def test_document_projects_one_four_leg_strategy_without_recalculating_values() -> None:
     document = build_workbench_document(_snapshot())
 
@@ -147,6 +174,16 @@ def test_document_projects_one_four_leg_strategy_without_recalculating_values() 
     assert {row["key"]: row["value"] for row in window}[
         "ledger_state"
     ] == "NOT_RECORDED_BY_BOUNDED_SNAPSHOT"
+    assert document["runtime"] == {
+        "available": False,
+        "status": "SNAPSHOT_ONLY",
+        "tone": "neutral",
+        "session_id": "2026-08-13T08:00:00Z",
+        "updated_at": "2026-08-12T18:00:00+00:00",
+        "last_error": "NONE",
+        "facts": [],
+    }
+    assert document["cases"] == []
 
 
 def test_static_export_is_network_free_and_browser_receives_only_presentation_data(
@@ -164,6 +201,10 @@ def test_static_export_is_network_free_and_browser_receives_only_presentation_da
     assert "PUBLIC SHADOW - READ ONLY" in html
     assert "No order · No fill · No account" in html
     assert '<script src="workbench-data.js"></script>' in html
+    assert '<meta http-equiv="refresh" content="10">' in html
+    assert "Runtime and recovery" in html
+    assert "Session population" in html
+    assert "All Shadow Cases" in html
     assert "fetch(" not in script
     assert "XMLHttpRequest" not in script
     assert "WebSocket" not in script
@@ -174,6 +215,104 @@ def test_static_export_is_network_free_and_browser_receives_only_presentation_da
     document = json.loads(data_script.removeprefix(prefix).removesuffix(");\n"))
     assert document["structure"]["legs"][1]["label"] == "Short Put body"
     assert document["warnings"][0]["code"] == "BOUNDED_OPTION_UNIVERSE"
+
+
+def test_legacy_single_trade_case_is_also_the_only_case_in_the_runtime_collection() -> None:
+    trade_case = _recovered_case("c", minute=37)
+
+    document = build_workbench_document(_snapshot(), trade_case=trade_case)
+
+    legacy_case = cast(Mapping[str, object], document["case"])
+    case_views = cast(Sequence[Mapping[str, object]], document["cases"])
+    assert legacy_case["trade_case_id"] == trade_case.identity
+    assert [item["trade_case_id"] for item in case_views] == [trade_case.identity]
+
+
+def test_runtime_population_and_every_recovered_case_are_rendered_as_supplied(
+    tmp_path: Path,
+) -> None:
+    runtime_state = {
+        "status": "RUNNING",
+        "session_id": "2026-08-13T08:00:00Z",
+        "started_at": "2026-08-13T08:00:01Z",
+        "updated_at": "2026-08-13T12:30:03Z",
+        "recovered_case_count": 2,
+        "restart_count": 1,
+        "last_recovery_at": "2026-08-13T11:45:00Z",
+        "current_window_id": "sha256:current-window",
+        "last_error": None,
+    }
+    ledger_population = {
+        "decisions": {
+            "denominator": 96,
+            "recorded": 19,
+            "missing": 77,
+            "complete": False,
+            "result_counts": {"ABSTAIN": 12, "CANDIDATE": 2, "UNKNOWN": 5},
+            "earliest_blocker_counts": {"MARKET_CONTEXT_UNKNOWN": 5},
+        },
+        "outcomes": {
+            "denominator": 96,
+            "recorded": 3,
+            "missing": 93,
+            "complete": False,
+            "future_path_known": 2,
+            "future_path_unknown": 1,
+            "continuous": 2,
+            "discontinuous": 0,
+            "decision_evaluable": 3,
+            "strategy_population_eligible": 2,
+        },
+    }
+    cases = (
+        _recovered_case("a", minute=7),
+        _recovered_case("b", minute=22),
+    )
+
+    document = build_workbench_document(
+        _snapshot(),
+        runtime_state=runtime_state,
+        ledger_population=ledger_population,
+        recovered_cases=cases,
+    )
+
+    runtime = cast(Mapping[str, object], document["runtime"])
+    assert runtime["status"] == "RUNNING"
+    assert runtime["tone"] == "positive"
+    assert runtime["updated_at"] == "2026-08-13T12:30:03Z"
+    runtime_rows = cast(Sequence[Mapping[str, str]], runtime["facts"])
+    assert {row["key"]: row["value"] for row in runtime_rows}["last_error"] == "NONE"
+    population = cast(Mapping[str, object], document["population"])
+    decisions = cast(Mapping[str, object], population["decisions"])
+    outcomes = cast(Mapping[str, object], population["outcomes"])
+    assert (decisions["recorded"], decisions["denominator"]) == ("19", "96")
+    assert (outcomes["recorded"], outcomes["denominator"]) == ("3", "96")
+    decision_breakdowns = cast(Sequence[Mapping[str, object]], decisions["breakdowns"])
+    result_counts = cast(Sequence[Mapping[str, str]], decision_breakdowns[0]["rows"])
+    assert {row["key"]: row["value"] for row in result_counts} == {
+        "ABSTAIN": "12",
+        "CANDIDATE": "2",
+        "UNKNOWN": "5",
+    }
+    case_views = cast(Sequence[Mapping[str, object]], document["cases"])
+    assert [item["trade_case_id"] for item in case_views] == [
+        f"sha256:{'a' * 64}",
+        f"sha256:{'b' * 64}",
+    ]
+    assert document["case"]["available"] is False
+
+    exported = write_workbench(
+        _snapshot(),
+        tmp_path / "runtime-workbench",
+        runtime_state=runtime_state,
+        ledger_population=ledger_population,
+        recovered_cases=cases,
+    )
+    prefix = "window.OPTIMATRIX_WORKBENCH = Object.freeze("
+    data_script = exported.data_path.read_text(encoding="utf-8")
+    exported_document = json.loads(data_script.removeprefix(prefix).removesuffix(");\n"))
+    assert exported_document["runtime"]["status"] == "RUNNING"
+    assert len(exported_document["cases"]) == 2
 
 
 def test_no_structure_and_blockers_remain_truthful() -> None:

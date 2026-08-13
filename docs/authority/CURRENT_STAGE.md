@@ -61,16 +61,23 @@ active task
 - `CaseJournal` stores an append-only accepted TradeCase prefix under a caller-supplied root and can
   discard only an unterminated final write. `ShadowCaseOutcome` keeps terminal economics separate
   from all-Window future-path truth and exposes eight independent eligibility facts.
+- `runtime.py` implements one production-public, manifest-bound BTC Session process. It resumes the
+  manifest Session, recovers every accepted unresolved Case, reconstructs Shadow capacity, records
+  missed or interrupted causal cuts as `UNKNOWN`/Gap, obtains official settlement and future paths,
+  and continuously rewrites a loopback-only Workbench. Its public method allowlist, exact stable
+  root, Policy identity, bounds, and port are fail-closed to the active task.
 - The deterministic acceptance population contains `96/96` DecisionRecords and `96/96`
-  WindowOutcomes. Seven offline scenarios pass, including atomic Entry/exit, Gap preservation,
-  expiry settlement, and duplicate suppression. These fixtures are not market evidence.
+  WindowOutcomes. Seven offline scenarios and the repository gate pass, including fault-injected
+  restart recovery across Window, Case, settlement, and Outcome write boundaries. These fixtures
+  are not market evidence.
 
 The component-Vertical acquisition path, public-Combo discovery gate, buyback-depth hard veto,
 partial/remediation graph, residual-wing lifecycle, and pre-A0 journal codec are absent.
 
-No continuous observation service, stable durable root, private account truth, real Combo order or
-fill lifecycle, account capital reservation, qualified Policy, Edge, Alpha, win-rate, or
-profitability evidence exists.
+The continuous runtime and stable-root implementation now exist, but no complete production
+Session, observed live restart, or trader page acceptance exists yet. No private account truth,
+real Combo order or fill lifecycle, account capital reservation, qualified Policy, Edge, Alpha,
+win-rate, or profitability evidence exists.
 
 **Primary blocker:** `CONTINUOUS_PUBLIC_SHADOW_NOT_OBSERVED` — source can express the complete
 research loop, but no production Deribit Session has yet been continuously recorded, recovered,

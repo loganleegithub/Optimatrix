@@ -9,7 +9,7 @@ from optimatrix.lifecycle import TradeCase
 
 
 class CaseJournal:
-    """Append-only TradeCase snapshots under one caller-supplied offline root."""
+    """Append-only TradeCase snapshots under one caller-supplied root."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -72,17 +72,15 @@ class CaseJournal:
         accepted_bytes = 0
         for index, raw_line in enumerate(lines):
             line_number = index + 1
+            if index == len(lines) - 1 and not raw_line.endswith(b"\n"):
+                if recover_truncated_tail:
+                    _truncate(path, accepted_bytes)
+                    return tuple(output)
+                raise ValueError(f"invalid CaseJournal line {line_number}: unterminated write")
             try:
                 line = raw_line.decode("utf-8")
                 value = json.loads(line)
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                is_unterminated_tail = index == len(lines) - 1 and not raw_line.endswith(b"\n")
-                if recover_truncated_tail and is_unterminated_tail:
-                    with path.open("r+b") as handle:
-                        handle.truncate(accepted_bytes)
-                        handle.flush()
-                        os.fsync(handle.fileno())
-                    return tuple(output)
                 raise ValueError(f"invalid CaseJournal line {line_number}: {exc}") from exc
             if not isinstance(value, dict):
                 raise ValueError(
@@ -107,6 +105,56 @@ class CaseJournal:
         if not snapshots:
             raise ValueError("CaseJournal is empty")
         return snapshots[-1]
+
+    def recover_all(
+        self,
+        *,
+        recoverable_empty_case_ids: frozenset[str] = frozenset(),
+    ) -> tuple[TradeCase, ...]:
+        """Recover every accepted Case prefix after validating the cases directory."""
+
+        for trade_case_id in recoverable_empty_case_ids:
+            require_identity(trade_case_id, "recoverable_empty_case_id")
+        directory = self.root / "cases"
+        if directory.is_symlink():
+            raise ValueError("CaseJournal cases path must be a directory, not a symlink")
+        if not directory.exists():
+            return ()
+        if not directory.is_dir():
+            raise ValueError("CaseJournal cases path must be a directory, not a symlink")
+        entries: list[tuple[Path, str]] = []
+        for path in sorted(directory.iterdir(), key=lambda item: item.name):
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"CaseJournal cases directory contains foreign entry: {path.name}")
+            if path.suffix != ".jsonl":
+                raise ValueError(f"CaseJournal cases directory contains foreign entry: {path.name}")
+            trade_case_id = f"sha256:{path.stem}"
+            try:
+                require_identity(trade_case_id, "case journal filename")
+            except ValueError as exc:
+                raise ValueError(f"invalid CaseJournal filename: {path.name}") from exc
+            if self.path_for(trade_case_id) != path:
+                raise ValueError(f"invalid CaseJournal filename: {path.name}")
+            entries.append((path, trade_case_id))
+        recovered: list[TradeCase] = []
+        for path, trade_case_id in entries:
+            if b"\n" not in path.read_bytes():
+                if trade_case_id not in recoverable_empty_case_ids:
+                    raise ValueError(f"CaseJournal file has no accepted snapshot: {path.name}")
+                path.unlink()
+                continue
+            snapshots = self._read(trade_case_id, recover_truncated_tail=True)
+            if not snapshots:
+                raise ValueError(f"CaseJournal file is empty: {path.name}")
+            recovered.append(snapshots[-1])
+        return tuple(recovered)
+
+
+def _truncate(path: Path, accepted_bytes: int) -> None:
+    with path.open("r+b") as handle:
+        handle.truncate(accepted_bytes)
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def _validate_transition(previous: TradeCase, current: TradeCase) -> None:
@@ -166,6 +214,7 @@ def _validate_transition(previous: TradeCase, current: TradeCase) -> None:
         and not (
             (not previous.entry_final and current.entry_final)
             or (previous.outcome is None and current.outcome is not None)
+            or (not previous.gap_observed and current.gap_observed)
         )
     ):
         raise ValueError("CaseJournal duplicate observation needs a final Entry transition")

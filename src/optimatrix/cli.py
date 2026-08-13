@@ -17,8 +17,16 @@ from optimatrix.policy import (
     DEFAULT_BTC_SHORT_VOL_POLICY_PATH,
     load_btc_short_vol_policy,
 )
+from optimatrix.runtime import (
+    AUTHORIZED_RUNTIME_POLICY_IDENTITY,
+    AUTHORIZED_RUNTIME_ROOT,
+    BtcPublicShadowRuntime,
+    DeribitPublicRuntimeSource,
+)
 from optimatrix.scenarios import run_all_scenarios
 from optimatrix.workbench import write_workbench
+
+_AUTHORIZED_WORKBENCH_PORT = 8765
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -70,6 +78,23 @@ def main(argv: list[str] | None = None) -> int:
     workbench.add_argument("--snapshot", type=Path, required=True)
     workbench.add_argument("--output-dir", type=Path, default=Path("build/workbench"))
 
+    runtime = subparsers.add_parser(
+        "runtime",
+        help="run one complete production Deribit Public Shadow Session",
+    )
+    runtime.add_argument(
+        "--policy",
+        type=Path,
+        default=DEFAULT_BTC_SHORT_VOL_POLICY_PATH,
+    )
+    runtime.add_argument(
+        "--event-state",
+        required=True,
+        choices=tuple(value.value for value in EventState),
+    )
+    runtime.add_argument("--root", type=Path, default=AUTHORIZED_RUNTIME_ROOT)
+    runtime.add_argument("--workbench-port", type=int, default=_AUTHORIZED_WORKBENCH_PORT)
+
     args = parser.parse_args(argv)
     if args.command == "simulate":
         return _simulate(args.policy, args.output, args.ledger_root)
@@ -87,6 +112,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "workbench":
         return _workbench(args.snapshot, args.output_dir)
+    if args.command == "runtime":
+        return _runtime(
+            policy_path=args.policy,
+            event_state=EventState(args.event_state),
+            root=args.root,
+            workbench_port=args.workbench_port,
+        )
     raise AssertionError("unreachable command")
 
 
@@ -200,6 +232,83 @@ def _workbench(snapshot_path: Path, output_dir: Path) -> int:
         )
     )
     return 0
+
+
+def _runtime(
+    *,
+    policy_path: Path,
+    event_state: EventState,
+    root: Path,
+    workbench_port: int,
+) -> int:
+    permission_error = _runtime_permission_error(
+        event_state=event_state,
+        root=root,
+        workbench_port=workbench_port,
+    )
+    if permission_error is not None:
+        print(
+            json.dumps(
+                {"error": permission_error},
+                ensure_ascii=False,
+            )
+        )
+        return 2
+    try:
+        policy = load_btc_short_vol_policy(policy_path)
+        if policy.identity != AUTHORIZED_RUNTIME_POLICY_IDENTITY:
+            print(
+                json.dumps(
+                    {"error": "runtime policy identity is outside the active task authorization"},
+                    ensure_ascii=False,
+                )
+            )
+            return 2
+        source = DeribitPublicRuntimeSource(policy=policy, event_state=event_state)
+        runtime = BtcPublicShadowRuntime(
+            root=root,
+            policy=policy,
+            source=source,
+            event_state=event_state,
+            now=datetime.now(UTC),
+        )
+        print(
+            json.dumps(
+                {
+                    "mode": "PUBLIC SHADOW - READ ONLY",
+                    "root": str(root),
+                    "session_id": runtime.session.session_id,
+                    "workbench": f"http://127.0.0.1:{workbench_port}/",
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        return runtime.run_forever(port=workbench_port)
+    except (DeribitSourceError, OSError, RuntimeError, TypeError, ValueError) as exc:
+        print(json.dumps({"error": f"runtime failed: {exc}"}, ensure_ascii=False))
+        return 2
+
+
+def _runtime_permission_error(
+    *,
+    event_state: EventState,
+    root: Path,
+    workbench_port: int,
+) -> str | None:
+    if event_state is not EventState.NONE:
+        return "runtime event state is outside the active task authorization"
+    if workbench_port != _AUTHORIZED_WORKBENCH_PORT:
+        return "runtime Workbench port is outside the active task authorization"
+    if not root.is_absolute() or root != AUTHORIZED_RUNTIME_ROOT:
+        return "runtime root is outside the active task authorization"
+    current = Path(root.anchor)
+    for part in root.parts[1:]:
+        current /= part
+        if current.is_symlink():
+            return "runtime root and its parents must not be symbolic links"
+    return None
 
 
 if __name__ == "__main__":

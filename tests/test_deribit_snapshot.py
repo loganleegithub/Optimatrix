@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
-from optimatrix.deribit_snapshot import DeribitSourceError, evaluate_live_btc_snapshot
-from optimatrix.market import EventState, EventStateSource
+from optimatrix.decision import schedule_decision_windows
+from optimatrix.deribit_snapshot import (
+    DERIBIT_DELIVERY_PRICE_METHOD_ID,
+    DERIBIT_DELIVERY_PRICE_SOURCE_ID,
+    DERIBIT_INDEX_PATH_METHOD_ID,
+    DERIBIT_PUBLIC_METHOD_ALLOWLIST,
+    DeribitHttpClient,
+    DeribitSourceError,
+    PublicRpcResponse,
+    evaluate_live_btc_snapshot,
+    fetch_btc_expiry_settlement,
+    fetch_btc_index_history,
+    preflight_public_clock,
+    summarize_btc_index_path,
+)
+from optimatrix.market import EventState, EventStateSource, SettlementEvidenceKind
+from optimatrix.products import BTC
 from optimatrix.session import current_deribit_session
 from optimatrix.workbench import build_workbench_document
 
@@ -160,8 +176,292 @@ def test_material_index_history_gap_rejects_snapshot(policy) -> None:
         )
 
 
-def test_http_client_refuses_private_methods_without_network() -> None:
-    from optimatrix.deribit_snapshot import DeribitHttpClient
+def test_http_client_allowlist_matches_b3_runtime_permission() -> None:
+    assert DERIBIT_PUBLIC_METHOD_ALLOWLIST == frozenset(
+        {
+            "public/get_time",
+            "public/get_instruments",
+            "public/get_index_price",
+            "public/get_index_chart_data",
+            "public/get_order_book",
+            "public/get_delivery_prices",
+        }
+    )
 
-    with pytest.raises(ValueError, match="only public"):
-        DeribitHttpClient(base_url="https://invalid.example").call("private/buy", {})
+
+@pytest.mark.parametrize(
+    "method",
+    (
+        "private/buy",
+        "public/auth",
+        "public/get_announcements",
+    ),
+)
+def test_http_client_refuses_methods_outside_b3_allowlist_before_request_construction(
+    method, monkeypatch
+) -> None:
+    request_constructed = False
+    network_called = False
+
+    def unexpected_request(*args, **kwargs):
+        nonlocal request_constructed
+        request_constructed = True
+        raise AssertionError("request must not be constructed for a forbidden method")
+
+    def unexpected_urlopen(*args, **kwargs):
+        nonlocal network_called
+        network_called = True
+        raise AssertionError("network must not be called for a forbidden method")
+
+    monkeypatch.setattr("optimatrix.deribit_snapshot.Request", unexpected_request)
+    monkeypatch.setattr("optimatrix.deribit_snapshot.urlopen", unexpected_urlopen)
+    with pytest.raises(ValueError, match="B3 allowlist"):
+        DeribitHttpClient(base_url="https://invalid.example").call(method, {})
+    assert request_constructed is False
+    assert network_called is False
+
+
+def test_http_client_preserves_validated_production_json_rpc_envelope(monkeypatch) -> None:
+    sent_ms = int(datetime(2026, 8, 12, 18, 7, tzinfo=UTC).timestamp() * 1000)
+    receive_ms = sent_ms + 50
+    server_in_us = sent_ms * 1000 + 10_000
+    server_out_us = sent_ms * 1000 + 20_000
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {"index_price": 100000},
+        "testnet": False,
+        "usIn": server_in_us,
+        "usOut": server_out_us,
+        "usDiff": server_out_us - server_in_us,
+    }
+    requests = []
+
+    class FakeHttpResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(payload).encode("utf-8")
+
+    def fake_urlopen(request, *, timeout):
+        requests.append((request, timeout))
+        return FakeHttpResponse()
+
+    clock = iter((sent_ms / 1000, receive_ms / 1000))
+    monkeypatch.setattr("optimatrix.deribit_snapshot.time.time", lambda: next(clock))
+    monkeypatch.setattr("optimatrix.deribit_snapshot.urlopen", fake_urlopen)
+    response = DeribitHttpClient(timeout_seconds=10).call(
+        "public/get_index_price",
+        {"index_name": "btc_usd"},
+    )
+    assert isinstance(response, PublicRpcResponse)
+    assert response.result == {"index_price": 100000}
+    assert response.testnet is False
+    assert response.local_sent_at_ms == sent_ms
+    assert response.local_received_at_ms == receive_ms
+    assert response.server_processing_us == 10_000
+    request, timeout = requests[0]
+    assert request.get_method() == "POST"
+    assert timeout == 10
+    assert json.loads(request.data) == {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "public/get_index_price",
+        "params": {"index_name": "btc_usd"},
+    }
+
+
+def test_http_client_rejects_nonproduction_envelope(monkeypatch) -> None:
+    boundary_ms = int(datetime(2026, 8, 12, 18, 7, tzinfo=UTC).timestamp() * 1000)
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": boundary_ms,
+        "testnet": True,
+        "usIn": boundary_ms * 1000,
+        "usOut": boundary_ms * 1000 + 100,
+        "usDiff": 100,
+    }
+
+    class FakeHttpResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(payload).encode("utf-8")
+
+    monkeypatch.setattr(
+        "optimatrix.deribit_snapshot.urlopen", lambda *args, **kwargs: FakeHttpResponse()
+    )
+    with pytest.raises(DeribitSourceError, match="not from production"):
+        DeribitHttpClient().call("public/get_time", {})
+
+
+def test_public_clock_preflight_supports_result_only_fake_clients() -> None:
+    local_now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    server_time_ms = int(local_now.timestamp() * 1000) + 75
+
+    class ClockClient:
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            assert method == "public/get_time"
+            assert not params
+            return server_time_ms
+
+    preflight = preflight_public_clock(
+        ClockClient(),
+        local_now=local_now,
+        maximum_clock_skew_ms=100,
+    )
+    assert preflight.clock_skew_ms == 75
+    assert preflight.request_round_trip_ms is None
+    with pytest.raises(DeribitSourceError, match="clock skew"):
+        preflight_public_clock(
+            ClockClient(),
+            local_now=local_now,
+            maximum_clock_skew_ms=50,
+        )
+
+
+def test_snapshot_binds_explicit_target_and_forces_required_books(policy, monkeypatch) -> None:
+    now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    session = current_deribit_session(now, phase_policy=policy.session)
+    target = next(
+        window
+        for window in schedule_decision_windows(
+            session=session,
+            channel_id=policy.channel_id,
+            policy=policy.window,
+        )
+        if window.starts_at <= now < window.ends_at
+    )
+    required_names = (
+        "BTC-X-93000-P",
+        "BTC-X-95000-P",
+        "BTC-X-105000-C",
+        "BTC-X-107000-C",
+    )
+    evaluation = evaluate_live_btc_snapshot(
+        client=FakeDeribitClient(now),
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=4,
+        target_window=target,
+        required_instrument_names=required_names,
+    )
+    assert evaluation.decision_window == target
+    assert {quote.instrument_name for quote in evaluation.quotes} == set(required_names)
+
+    crossed_at = target.ends_at + timedelta(seconds=1)
+    monkeypatch.setattr(
+        "optimatrix.deribit_snapshot.time.time",
+        lambda: crossed_at.timestamp(),
+    )
+    crossed = evaluate_live_btc_snapshot(
+        client=FakeDeribitClient(now),
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=4,
+        target_window=target,
+        required_instrument_names=required_names,
+    )
+    assert crossed.decision_window == target
+    assert "SNAPSHOT_CROSSED_TARGET_WINDOW_BOUNDARY" in crossed.observation.data_health_blockers
+    assert crossed.selection is None
+
+
+def test_snapshot_marks_missing_required_instrument_metadata_unknown(policy) -> None:
+    now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    evaluation = evaluate_live_btc_snapshot(
+        client=FakeDeribitClient(now),
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=8,
+        required_instrument_names=("BTC-X-NOT-CURRENT-C",),
+    )
+    assert "REQUIRED_INSTRUMENT_METADATA_MISSING" in evaluation.observation.data_health_blockers
+    assert evaluation.selection is None
+
+
+def test_history_reader_and_path_summary_expose_outcome_inputs() -> None:
+    now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    client = FakeDeribitClient(now)
+    history = fetch_btc_index_history(client, known_at=now)
+    starts_at = now - timedelta(hours=1)
+    summary = summarize_btc_index_path(
+        history,
+        starts_at=starts_at,
+        ends_at=now,
+    )
+    assert summary is not None
+    assert summary.source_id == "DERIBIT_PUBLIC_GET_INDEX_CHART_DATA_BTC_USD_2D"
+    assert summary.method_id == DERIBIT_INDEX_PATH_METHOD_ID
+    assert summary.observation_count == 13
+    assert Decimal(0) <= summary.maximum_rv_acceleration <= Decimal(1)
+
+    cadence_covered = summarize_btc_index_path(
+        history,
+        starts_at=starts_at + timedelta(minutes=1),
+        ends_at=now - timedelta(minutes=1),
+    )
+    assert cadence_covered is not None
+    assert cadence_covered.starts_at == starts_at + timedelta(minutes=1)
+    assert cadence_covered.ends_at == now - timedelta(minutes=1)
+
+    removed = {
+        int((starts_at + timedelta(minutes=offset)).timestamp() * 1000) for offset in (20, 25, 30)
+    }
+    gapped = tuple(point for point in history if point[0] not in removed)
+    assert summarize_btc_index_path(gapped, starts_at=starts_at, ends_at=now) is None
+
+
+def test_delivery_price_uses_exact_expiry_utc_date_and_official_evidence() -> None:
+    expiry = datetime(2026, 8, 13, 8, tzinfo=UTC)
+
+    class DeliveryClient:
+        def __init__(self, data: list[dict[str, object]]) -> None:
+            self.data = data
+            self.calls: list[tuple[str, Mapping[str, object]]] = []
+
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            self.calls.append((method, params))
+            return {"data": self.data, "records_total": len(self.data)}
+
+    client = DeliveryClient(
+        [
+            {"date": "2026-08-12", "delivery_price": 118000},
+            {"date": "2026-08-13", "delivery_price": "119123.45"},
+        ]
+    )
+    fact = fetch_btc_expiry_settlement(
+        client,
+        expiry=expiry,
+        known_at=expiry + timedelta(minutes=1),
+    )
+    assert fact.product_id is BTC.product_id
+    assert fact.delivery_price_usd == Decimal("119123.45")
+    assert fact.evidence_kind is SettlementEvidenceKind.OFFICIAL_EXCHANGE
+    assert fact.source_id == DERIBIT_DELIVERY_PRICE_SOURCE_ID
+    assert fact.method_id == DERIBIT_DELIVERY_PRICE_METHOD_ID
+    assert client.calls == [
+        (
+            "public/get_delivery_prices",
+            {"index_name": "btc_usd", "offset": 0, "count": 10},
+        )
+    ]
+
+    with pytest.raises(DeribitSourceError, match="exact UTC expiry date"):
+        fetch_btc_expiry_settlement(
+            DeliveryClient([{"date": "2026-08-12", "delivery_price": 118000}]),
+            expiry=expiry,
+            known_at=expiry + timedelta(minutes=1),
+        )

@@ -38,6 +38,7 @@ observation_ledger.py append-once all-Window DecisionRecord and WindowOutcome po
 lifecycle.py         atomic BTC Shadow TradeCase, Position, trigger, terminal, and Outcome rules
 case_journal.py      append-only TradeCase snapshots and accepted-prefix recovery
 engine.py            BTC 0DTE Short Vol path composition
+runtime.py           one manifest-bound BTC public Session scheduler and recovery owner
 workbench.py         read-only display projection
 cli.py               offline and explicitly authorized entrypoints
 scenarios.py         deterministic evidence, not product Authority
@@ -63,8 +64,11 @@ implemented and authorized only when `CURRENT_STAGE.md` says so.
 `CaseJournal` begins only after a Candidate opens a TradeCase. It stores accepted immutable-prefix
 snapshots of the TradeCase, later Entry truth, Position lifecycle, and Case/Position Outcome defined
 by the same contract. It cannot replace the all-Window population or infer missing Window evidence.
-At B3 both records exist only under caller-supplied disposable roots; Stage authorizes no stable
-root or continuous writer.
+At B3 the active runtime task authorizes one exact manifest-bound stable root and one process-
+exclusive continuous writer. The runtime rejects foreign members and cross-Session or cross-Policy
+records, recovers accepted append prefixes, and resumes the manifest Session without backfilling a
+missed causal cut. Outside that exact task boundary, caller-supplied disposable roots remain the
+only authorized record location.
 
 The two records may reference the same immutable identities; neither copies, rewrites, or backfills
 the other's truth. Raw capture is added only when an authorized replay consumer requires it. These
