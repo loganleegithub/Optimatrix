@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 ATOMIC PUBLIC SHADOW — IDLE
+**Status:** B3 PUBLIC SHADOW RUNTIME — ACTIVE
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -8,9 +8,9 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** [`../../tasks/B3_PUBLIC_SHADOW_RUNTIME.md`](../../tasks/B3_PUBLIC_SHADOW_RUNTIME.md)
 
 ## Current permissions
 
@@ -18,15 +18,18 @@ Stage is the permission ceiling; a future active task may only narrow it.
 
 **Offline checks and simulation:** authorized in disposable ignored `build/` roots
 
-**Public market calls:** `NONE_AUTHORIZED`
+**Public market calls:** production Deribit public methods and exact bounds authorized only by the
+active task
 
-**Stable ObservationLedger root:** `NONE_AUTHORIZED`
+**Stable ObservationLedger root:** `/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1`
+for the active task only
 
 **Disposable offline ObservationLedger:** authorized only under caller-supplied ignored roots
 
-**Stable CaseJournal root:** `NONE_AUTHORIZED`
+**Stable CaseJournal root:** the same active-task root, isolated from every legacy or foreign root
 
-**Continuous runtime:** `NONE`
+**Continuous runtime:** one local Python process and one loopback-only Workbench authorized by the
+active task
 
 **Private read-only account permission:** `NONE`
 
@@ -69,8 +72,9 @@ No continuous observation service, stable durable root, private account truth, r
 fill lifecycle, account capital reservation, qualified Policy, Edge, Alpha, win-rate, or
 profitability evidence exists.
 
-**Primary blocker:** `AUTHENTICATED_ACCOUNT_TRUTH_ABSENT` — Public Shadow can now close the complete
-research loop, but there is no authenticated account, margin, order, trade, fee, or Position fact.
+**Primary blocker:** `CONTINUOUS_PUBLIC_SHADOW_NOT_OBSERVED` — source can express the complete
+research loop, but no production Deribit Session has yet been continuously recorded, recovered,
+rendered, and accepted by a trader. The active task must close this before C1 may be activated.
 
 ## Maturity ladder
 
@@ -93,7 +97,8 @@ its predecessor.
 - `D1_OFFLINE_AI_CHALLENGER` — sufficient forward Outcomes support frozen chronological or
   walk-forward Base-versus-Challenger recommendations with human promotion only.
 
-**Next upgrade condition:** a bounded `C1_PRIVATE_READ_ONLY` task must name an exact private
-read-only permission, authenticated evidence source, redaction boundary, and reconciliation
-acceptance. It may not place, edit, cancel, or simulate an order, reserve capital, promote Policy,
-or infer real Position truth from Public Shadow records.
+**Next upgrade condition:** only after the active runtime task closes with one complete production
+Session and explicit trader Workbench acceptance may a bounded `C1_PRIVATE_READ_ONLY` task be
+activated. That task must name an exact private read-only permission, authenticated evidence source,
+redaction boundary, and reconciliation acceptance. It may not place, edit, cancel, or simulate an
+order, reserve capital, promote Policy, or infer real Position truth from Public Shadow records.
