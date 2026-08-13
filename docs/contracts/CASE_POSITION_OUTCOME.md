@@ -113,11 +113,14 @@ stale data, Gap, rejected order, or one failed quote proves neither.
 
 ## Outcome populations
 
-`WindowOutcome` belongs to every DecisionWindow, including no observation, `UNKNOWN`, `ABSTAIN`,
-`REVIEW`, Candidate without Position, and Position. It binds the declared horizon, actual future
-path or missing reason, delivery fact, path continuity, regime/event labels, and exact known-at
-boundary. It is appended to the ObservationLedger and is required to measure selection bias and
-missed opportunity; TradeCase Outcomes alone are not a learning denominator.
+`WindowOutcome` belongs to every DecisionWindow with an authoritative Base DecisionRecord,
+including `UNKNOWN`, `ABSTAIN`, `REVIEW`, Candidate without Position, and Position. A Window missed
+before runtime enrollment has neither a synthetic DecisionRecord nor a synthetic Outcome; its
+absence remains population coverage truth. A WindowOutcome binds the declared horizon, actual
+future path or missing reason, delivery fact, path continuity, regime/event labels, and exact
+known-at boundary. It is appended to the ObservationLedger and is required to measure selection
+bias and missed opportunity among recorded Windows; TradeCase Outcomes alone are not a learning
+denominator.
 
 `ShadowCaseOutcome` contains either the no-Position Entry result and reason or the counterfactual
 entry plus whole-product exit or settlement economics. It also records standard/public fee model,

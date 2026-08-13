@@ -553,7 +553,10 @@ class BtcPublicShadowRuntime:
         self.event_state = event_state
         self.sleep = sleep
         self._audit_lock = Lock()
-        candidate_session = target_session or _next_complete_session(boundary, policy)
+        candidate_session = target_session or current_deribit_session(
+            boundary,
+            phase_policy=policy.session,
+        )
         self.root_owner = StableRuntimeRoot(
             root=root,
             policy=policy,
@@ -907,8 +910,13 @@ class BtcPublicShadowRuntime:
 
     def _finalize_due_windows(self, now: datetime) -> None:
         recorded = {record.window.identity for record in self.ledger.read()}
+        attempted = set(self.progress.attempted_decision_window_ids)
         for window in self.windows:
-            if window.identity in recorded or now < window.input_deadline:
+            if (
+                window.identity in recorded
+                or window.identity not in attempted
+                or now < window.input_deadline
+            ):
                 continue
             evaluation = self.pending_observations.pop(window.identity, None)
             capacity = self._capacity(window, window.input_deadline)
@@ -1216,10 +1224,11 @@ class BtcPublicShadowRuntime:
             known_at = max(known_at, self.settlement_fact.known_at)
         existing = {outcome.decision_window_id for outcome in self.ledger.read_outcomes()}
         records = {record.window.identity: record for record in self.ledger.read()}
+        appended = 0
         for window in self.windows:
-            if window.identity in existing:
+            record = records.get(window.identity)
+            if window.identity in existing or record is None:
                 continue
-            record = records[window.identity]
             start, end = self._outcome_horizon(window)
             path = (
                 summarize_btc_index_path(history, starts_at=start, ends_at=end) if history else None
@@ -1245,7 +1254,13 @@ class BtcPublicShadowRuntime:
                 ),
             )
             self.ledger.append_outcome(outcome)
-        self._audit("WINDOW_OUTCOME_POPULATION_RECORDED", known_at, "count=96")
+            appended += 1
+        if appended:
+            self._audit(
+                "WINDOW_OUTCOME_POPULATION_RECORDED",
+                known_at,
+                f"count={len(self.ledger.read_outcomes())}",
+            )
 
     def _outcome_horizon(self, window: DecisionWindow) -> tuple[datetime, datetime]:
         start = window.ends_at
@@ -1476,13 +1491,6 @@ class _WorkbenchServer:
         self.thread.join(timeout=5)
 
 
-def _next_complete_session(now: datetime, policy: BtcShortVolPolicy) -> DeribitSession:
-    current = current_deribit_session(now, phase_policy=policy.session)
-    if now == current.start:
-        return current
-    return current_deribit_session(current.end, phase_policy=policy.session)
-
-
 def _manifest_session(
     manifest: RuntimeManifest,
     policy: BtcShortVolPolicy,
@@ -1519,7 +1527,7 @@ def _waiting_snapshot(session: DeribitSession, now: datetime) -> dict[str, objec
         "instrument_count": 0,
         "requested_book_count": 0,
         "fetched_book_count": 0,
-        "warnings": ["WAITING_FOR_AUTHORIZED_COMPLETE_SESSION"],
+        "warnings": ["AWAITING_FIRST_CURRENT_MARKET_CUT"],
         "window": {
             "decision_window_id": canonical_identity("PendingDecisionWindow", session.session_id),
             "channel_id": "INVERSE_BTC_SHORT_VOL",
@@ -1529,13 +1537,13 @@ def _waiting_snapshot(session: DeribitSession, now: datetime) -> dict[str, objec
             "ends_at": _iso(session.end),
             "input_deadline": _iso(session.end),
             "observation_id": None,
-            "ledger_state": "WAITING_FOR_SESSION",
+            "ledger_state": "STARTING_CURRENT_SESSION",
         },
         "context": {"knowledge": "UNKNOWN"},
         "projection": {
             "state": "UNKNOWN",
             "phase": "WAITING",
-            "blockers": ["COMPLETE_SESSION_NOT_STARTED"],
+            "blockers": ["FIRST_CURRENT_MARKET_CUT_NOT_OBSERVED"],
             "structure": None,
         },
         "quotes": [],

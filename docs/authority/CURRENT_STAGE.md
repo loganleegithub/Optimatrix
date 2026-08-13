@@ -64,8 +64,10 @@ active task
 - `runtime.py` implements one production-public, manifest-bound BTC Session process. It resumes the
   manifest Session, recovers every accepted unresolved Case, reconstructs Shadow capacity, records
   missed or interrupted causal cuts as `UNKNOWN`/Gap, obtains official settlement and future paths,
-  and continuously rewrites a loopback-only Workbench. Its public method allowlist, exact stable
-  root, Policy identity, bounds, and port are fail-closed to the active task.
+  and continuously rewrites a loopback-only Workbench. A new empty root binds the Session active at
+  process start and observes its current Window immediately; missed earlier Windows remain absent
+  rather than being backfilled, and do not delay the live runtime. Its public method allowlist,
+  exact stable root, Policy identity, bounds, and port are fail-closed to the active task.
 - The deterministic acceptance population contains `96/96` DecisionRecords and `96/96`
   WindowOutcomes. In addition to fault-injected restart recovery, an append-only causal tape of raw
   Deribit-shaped responses now drives every Window through the production public translator. It
@@ -77,14 +79,15 @@ active task
 The component-Vertical acquisition path, public-Combo discovery gate, buyback-depth hard veto,
 partial/remediation graph, residual-wing lifecycle, and pre-A0 journal codec are absent.
 
-The continuous runtime and stable-root implementation now exist, but no complete production
-Session, observed live restart, or trader page acceptance exists yet. No private account truth,
-real Combo order or fill lifecycle, account capital reservation, qualified Policy, Edge, Alpha,
-win-rate, or profitability evidence exists.
+The continuous runtime and stable-root implementation now exist, but current production market
+operation and trader page acceptance have not yet been directly observed. A full 24-hour sample and
+a deliberately forced restart are not product prerequisites. No private account truth, real Combo
+order or fill lifecycle, account capital reservation, qualified Policy, Edge, Alpha, win-rate, or
+profitability evidence exists.
 
-**Primary blocker:** `CONTINUOUS_PUBLIC_SHADOW_NOT_OBSERVED` — source can express the complete
-research loop, but no production Deribit Session has yet been continuously recorded, recovered,
-rendered, and accepted by a trader. The active task must close this before C1 may be activated.
+**Primary blocker:** `CURRENT_PUBLIC_SHADOW_NOT_OBSERVED` — source can express the complete research
+loop, but current production Deribit facts have not yet been driven into the runtime and accepted on
+the trader page. The active task must close this before C1 may be activated.
 
 ## Maturity ladder
 
@@ -107,8 +110,8 @@ its predecessor.
 - `D1_OFFLINE_AI_CHALLENGER` — sufficient forward Outcomes support frozen chronological or
   walk-forward Base-versus-Challenger recommendations with human promotion only.
 
-**Next upgrade condition:** only after the active runtime task closes with one complete production
-Session and explicit trader Workbench acceptance may a bounded `C1_PRIVATE_READ_ONLY` task be
+**Next upgrade condition:** only after current production public market operation and explicit trader
+Workbench acceptance close the active runtime task may a bounded `C1_PRIVATE_READ_ONLY` task be
 activated. That task must name an exact private read-only permission, authenticated evidence source,
 redaction boundary, and reconciliation acceptance. It may not place, edit, cancel, or simulate an
 order, reserve capital, promote Policy, or infer real Position truth from Public Shadow records.

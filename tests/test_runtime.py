@@ -388,6 +388,7 @@ def test_runtime_rejects_foreign_session_decision_record(policy, tmp_path) -> No
         sleep=foreign_source.sleeps.append,
     )
     try:
+        foreign_runtime.tick(foreign_runtime.windows[0].starts_at + timedelta(seconds=1))
         foreign_runtime.tick(foreign_runtime.windows[0].input_deadline)
         foreign_payload = foreign_runtime.ledger.path.read_bytes()
         assert foreign_runtime.ledger.read()
@@ -518,7 +519,7 @@ def test_runtime_without_target_session_resumes_manifest_session_mid_session(
         policy=policy,
         source=source,
         event_state=EventState.NONE,
-        now=session.start - timedelta(minutes=10),
+        now=session.start + timedelta(hours=2),
         sleep=source.sleeps.append,
     )
     try:
@@ -541,6 +542,52 @@ def test_runtime_without_target_session_resumes_manifest_session_mid_session(
         assert {window.market_session_id for window in restarted.windows} == {session.session_id}
     finally:
         restarted.close()
+
+
+def test_runtime_without_target_session_starts_current_partial_session_immediately(
+    policy,
+    tmp_path,
+) -> None:
+    session = _session(policy)
+    now = session.start + timedelta(hours=6, minutes=7)
+    source = FakeRuntimeSource(policy, session)
+    runtime = BtcPublicShadowRuntime(
+        root=tmp_path / "stable",
+        policy=policy,
+        source=source,
+        event_state=EventState.NONE,
+        now=now,
+        sleep=source.sleeps.append,
+    )
+    try:
+        current = current_deribit_session(now, phase_policy=policy.session)
+        assert runtime.session.session_id == current.session_id
+        assert runtime.session.start == current.start
+        assert runtime.session.end == current.end
+        serialized_starting_snapshot = json.dumps(runtime.latest_snapshot, sort_keys=True)
+        assert "AWAITING_FIRST_CURRENT_MARKET_CUT" in serialized_starting_snapshot
+        assert "WAITING_FOR_AUTHORIZED_COMPLETE_SESSION" not in serialized_starting_snapshot
+        assert "COMPLETE_SESSION_NOT_STARTED" not in serialized_starting_snapshot
+        runtime.tick(now)
+        assert source.preflight_calls == 1
+        assert source.snapshot_calls == 1
+        assert runtime.latest_snapshot["session_id"] == session.session_id
+
+        recorded = runtime.ledger.read()
+        current_window = next(
+            window for window in runtime.windows if window.starts_at <= now < window.ends_at
+        )
+        assert recorded == ()
+        assert runtime.progress.status == "RUNNING"
+        assert runtime.cases == {}
+
+        runtime.tick(current_window.input_deadline)
+        recorded = runtime.ledger.read()
+        assert len(recorded) == 1
+        assert recorded[-1].window == current_window
+        assert source.snapshot_calls == 2
+    finally:
+        runtime.close()
 
 
 def test_second_owner_does_not_delete_temporary_file_while_lock_is_held(
@@ -824,6 +871,7 @@ def test_restart_completes_window_outcomes_after_nth_append_crash(
         sleep=source.sleeps.append,
     )
     for window in runtime.windows:
+        runtime.tick(window.starts_at + timedelta(seconds=1))
         runtime.tick(window.input_deadline)
     runtime.tick(session.end + timedelta(minutes=5))
     assert len(runtime.ledger.read()) == 96
@@ -870,7 +918,7 @@ def test_restart_completes_window_outcomes_after_nth_append_crash(
         restarted.close()
 
 
-def test_successful_position_settles_and_populates_every_window_outcome(
+def test_successful_position_settles_and_populates_encountered_window_outcomes(
     policy,
     tmp_path,
 ) -> None:
@@ -893,10 +941,17 @@ def test_successful_position_settles_and_populates_every_window_outcome(
         assert position_id is not None
         assert entered.outcome is None
 
+        runtime.tick(runtime.windows[-1].starts_at + timedelta(seconds=1))
         runtime.tick(runtime.windows[-1].input_deadline)
         decisions = runtime.ledger.summarize(expected_windows=runtime.windows)
-        assert decisions.denominator == decisions.recorded == 96
-        assert decisions.result_counts == (("CANDIDATE", 1), ("UNKNOWN", 95))
+        assert decisions.denominator == 96
+        assert decisions.recorded == 3
+        assert decisions.missing == 93
+        assert decisions.result_counts == (
+            ("ABSTAIN", 1),
+            ("CANDIDATE", 1),
+            ("UNKNOWN", 1),
+        )
         unresolved = runtime.cases[opened.identity]
         assert unresolved.position_id == position_id
         assert unresolved.outcome is None
@@ -916,20 +971,22 @@ def test_successful_position_settles_and_populates_every_window_outcome(
         runtime.tick(runtime.finalization_at)
         outcomes = runtime.ledger.read_outcomes()
         outcome_summary = runtime.ledger.summarize_outcomes(expected_windows=runtime.windows)
-        assert outcome_summary.denominator == outcome_summary.recorded == 96
-        assert outcome_summary.future_path_known == outcome_summary.continuous == 96
-        assert outcome_summary.decision_evaluable == 1
-        assert outcome_summary.strategy_population_eligible == 96
+        assert outcome_summary.denominator == 96
+        assert outcome_summary.recorded == 3
+        assert outcome_summary.missing == 93
+        assert outcome_summary.future_path_known == outcome_summary.continuous == 3
+        assert outcome_summary.decision_evaluable == 2
+        assert outcome_summary.strategy_population_eligible == 3
         assert all(outcome.expiry_settlement == runtime.settlement_fact for outcome in outcomes)
         assert all(outcome.future_path_known for outcome in outcomes)
         assert runtime.journal.recover_all() == (terminal,)
         assert source.preflight_calls == source.history_calls == source.settlement_calls == 1
-        assert runtime.complete
+        assert not runtime.complete
 
         document = _document(root / "workbench/workbench-data.js")
-        assert document["runtime"]["status"] == "COMPLETE_PENDING_TRADER_ACCEPTANCE"
-        assert document["population"]["decisions"]["recorded"] == "96"
-        assert document["population"]["outcomes"]["recorded"] == "96"
+        assert document["runtime"]["status"] == "RUNNING"
+        assert document["population"]["decisions"]["recorded"] == "3"
+        assert document["population"]["outcomes"]["recorded"] == "3"
         rendered_case = next(
             item for item in document["cases"] if item["trade_case_id"] == terminal.identity
         )
@@ -1194,7 +1251,7 @@ def test_restart_marks_interrupted_case_cut_as_gap(
         restarted.close()
 
 
-def test_pending_entry_recovered_after_expiry_terminalizes_and_completes(
+def test_pending_entry_recovered_after_expiry_terminalizes_partial_session(
     policy,
     tmp_path,
 ) -> None:
@@ -1232,7 +1289,9 @@ def test_pending_entry_recovered_after_expiry_terminalizes_and_completes(
 
         recovered.tick(session.end + timedelta(minutes=5))
         recovered.tick(recovered.finalization_at)
-        assert recovered.complete
+        assert not recovered.complete
+        assert len(recovered.ledger.read()) == 2
+        assert len(recovered.ledger.read_outcomes()) == 2
     finally:
         recovered.close()
 

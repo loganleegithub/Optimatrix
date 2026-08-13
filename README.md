@@ -30,5 +30,6 @@ While `B3_PUBLIC_SHADOW_RUNTIME` remains the sole active task, its exact command
 
 The loopback Workbench is then available at `http://127.0.0.1:8765/`. `Ctrl-C` stops the process
 without deleting its accepted Ledger or Journal prefixes; invoking the same command resumes the
-Session bound by the root manifest. The active task remains open until one full production Session,
-an observed restart, and explicit trader acceptance are all directly verified.
+Session bound by the root manifest. A new empty root starts with the currently active Session and
+current Window; earlier Windows remain absent and are never backfilled. The active task remains open
+until current public market operation and explicit trader acceptance are directly verified.

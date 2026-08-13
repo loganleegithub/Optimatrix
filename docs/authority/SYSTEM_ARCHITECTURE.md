@@ -66,9 +66,11 @@ snapshots of the TradeCase, later Entry truth, Position lifecycle, and Case/Posi
 by the same contract. It cannot replace the all-Window population or infer missing Window evidence.
 At B3 the active runtime task authorizes one exact manifest-bound stable root and one process-
 exclusive continuous writer. The runtime rejects foreign members and cross-Session or cross-Policy
-records, recovers accepted append prefixes, and resumes the manifest Session without backfilling a
-missed causal cut. Outside that exact task boundary, caller-supplied disposable roots remain the
-only authorized record location.
+records, binds a new empty root to the Session active at process start, recovers accepted append
+prefixes, and resumes the manifest Session without backfilling a missed causal cut. A Window missed
+before runtime enrollment remains absent rather than becoming a synthetic `UNKNOWN` record, and is
+not a reason to wait for another Session. Outside that exact task boundary, caller-supplied
+disposable roots remain the only authorized record location.
 
 The two records may reference the same immutable identities; neither copies, rewrites, or backfills
 the other's truth. Raw capture is added only when an authorized replay consumer requires it. These

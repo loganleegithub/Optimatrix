@@ -8,7 +8,7 @@
 
 **Runtime implementation:** REQUIRED — one local Python process only
 
-**Live commands:** `optimatrix-shadow runtime --event-state NONE --root "/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1" --workbench-port 8765`; one production Deribit Session from its `08:00 UTC` start through the following `08:00 UTC` settlement boundary, plus at most one bounded preflight before that Session; public methods only; no more than 32 option instruments per observation, depth 20, one Decision observation per 15-minute Window, one lifecycle observation per open Case per 60-second monitoring cadence, one settlement lookup after expiry, 10-second request timeout, at most three attempts with bounded backoff per observation boundary; every exhausted or invalid market input remains a recorded `UNKNOWN` or Gap and is never retried into an earlier causal boundary
+**Live commands:** `optimatrix-shadow runtime --event-state NONE --root "/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1" --workbench-port 8765`; bind a new empty root to the Deribit Session active at process start, run one bounded public clock preflight immediately, and begin with the currently active 15-minute Window instead of waiting for the next `08:00 UTC` boundary; public methods only; no more than 32 option instruments per observation, depth 20, one Decision observation per encountered 15-minute Window, one lifecycle observation per open Case per 60-second monitoring cadence, one settlement lookup after expiry, 10-second request timeout, at most three attempts with bounded backoff per observation boundary; earlier same-Session Windows remain missing and are never backfilled as observations or synthetic `UNKNOWN` Decisions, and neither their count nor a complete 24-hour sample is a runtime or trader-acceptance prerequisite
 
 **Owning authority/contract:** [`../docs/authority/SYSTEM_ARCHITECTURE.md`](../docs/authority/SYSTEM_ARCHITECTURE.md), [`../docs/contracts/BTC_0DTE_TWO_SIDED_SHORT_VOL.md`](../docs/contracts/BTC_0DTE_TWO_SIDED_SHORT_VOL.md), and [`../docs/contracts/CASE_POSITION_OUTCOME.md`](../docs/contracts/CASE_POSITION_OUTCOME.md)
 
@@ -18,15 +18,15 @@ No placeholder remains. Stage links this file as the only active non-template ta
 
 **Given:** commit `7e4c40414e9582b572ba891d767850947e00b6e6` passes the complete offline B1–B3 gate but has no continuous service, authorized public market population, stable record root, restart recovery, or continuously refreshed Workbench
 
-**When:** one production Deribit Session is driven from its first pre-registered Window through expiry by one local process using the frozen Window and lifecycle cadences, including an observed restart recovery before the Session ends
+**When:** one local process starts against the production Deribit Session that is already active, immediately captures its current Window, and then keeps driving each encountered Window and open Case at the frozen cadences
 
-**Then:** the stable root contains exactly one DecisionRecord for every Session Window, every opened TradeCase has a terminal accepted prefix after exit or official settlement, WindowOutcome coverage truthfully reports every Window, the Workbench continuously exposes current runtime, Window, market, Case, recovery, blocker, and population state, and the trader explicitly accepts that page before this task closes
+**Then:** the stable root contains records only for Windows actually encountered by the runtime, every opened TradeCase is continuously monitored and recoverable, the Workbench exposes current runtime, Window, market, Case, recovery, blocker, and population state, and the trader explicitly accepts that the page shows the system working on current public market data before this task closes
 
-**Affected identity and population:** all 96 `DecisionWindowId` values in the accepted Session and their causal `MarketObservationId` values; zero or one `TradeCaseId` per Candidate Window; every resulting `PositionId`; no `OpportunityEpisodeId`
+**Affected identity and population:** the 96 scheduled `DecisionWindowId` values still define the Session denominator, but only Windows encountered after runtime start may bind causal `MarketObservationId` values; zero or one `TradeCaseId` per live Candidate Window; every resulting `PositionId`; no `OpportunityEpisodeId`
 
-**Baseline and denominator:** offline deterministic baseline `96/96` DecisionRecords and `96/96` WindowOutcomes; real production denominator `NOT_YET_MEASURED` until the runtime starts at an `08:00 UTC` Session boundary, after which it is exactly the 96 frozen Windows for that Session
+**Baseline and denominator:** offline deterministic tests retain `96/96` DecisionRecords and `96/96` WindowOutcomes to falsify scheduling and lifecycle behavior. Production retains the 96 frozen Window identities for honest missingness measurement, but sample completeness, evaluable count, elapsed runtime, and presence of a naturally occurring Candidate are observations rather than acceptance gates
 
-**Primary blocker and expected delta:** `CONTINUOUS_PUBLIC_SHADOW_NOT_OBSERVED` becomes one trader-accepted, restart-recovered, complete real public Session without creating private-execution truth
+**Primary blocker and expected delta:** `CURRENT_PUBLIC_SHADOW_NOT_OBSERVED` becomes a trader-accepted current public market runtime without creating private-execution truth
 
 **Known-at and DataHealth boundary:** each Window uses only a market cut observed inside that Window and known no later than its input deadline; lifecycle evidence must be strictly later where the contracts require it; Deribit source timestamps, local receive boundaries, universe completeness, continuity, freshness, and response environment are validated; timeout, source failure, parse failure, cadence miss, restart gap, or incomplete universe remains `UNKNOWN`/Gap and never becomes a Candidate, trigger, Entry, exit, or valid zero
 
@@ -52,6 +52,6 @@ No placeholder remains. Stage links this file as the only active non-template ta
 
 **Repository gate:** `make check`
 
-**External evidence:** the exact authorized runtime command completes one production `08:00–08:00 UTC` Session with 96/96 DecisionRecords, truthful WindowOutcome coverage, no unresolved same-Session Case after settlement, an observed restart recovery, public-method audit only, and explicit trader acceptance of the loopback Workbench; until all facts exist this closure remains `UNVERIFIED`
+**External evidence:** after the exact authorized runtime command starts, its audit contains only authorized public calls, at least one current Window has a real causal market cut and DecisionRecord, the loopback Workbench continuously shows that market and any resulting Case state, restart recovery remains available rather than being deliberately exercised as ceremony, and the trader explicitly accepts the page; no fixed wait, complete 24-hour sample, `96/96` count, naturally occurring Candidate, or forced restart is required
 
 Close only after directly observing the declared delta. Replace Stage with the post-task snapshot and remove this file; do not append completion history.

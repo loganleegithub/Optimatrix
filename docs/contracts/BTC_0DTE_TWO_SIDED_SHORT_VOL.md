@@ -30,10 +30,12 @@ product identity
 
 The frozen schedule defines cadence, alignment, and input grace before Outcomes exist; Authority
 does not hard-code a minute interval. A Session may contain many Windows, so materially later market
-regimes can be evaluated independently. Each scheduled Window produces exactly one authoritative
-Base DecisionRecord. Missing data, no Candidate, and no trade still consume the Window. Re-runs
-reuse its identity. Each Base or Challenger DecisionRecord separately binds its frozen
-DecisionPolicyId without changing the shared Window.
+regimes can be evaluated independently. Each Window encountered by an enrolled runtime produces
+exactly one authoritative Base DecisionRecord. A Window missed before enrollment remains measured
+as missing and is never backfilled; a Window attempted by the runtime but lacking valid data becomes
+`UNKNOWN`. No Candidate and no trade still consume an encountered Window. Re-runs reuse its
+identity. Each Base or Challenger DecisionRecord separately binds its frozen DecisionPolicyId
+without changing the shared Window.
 
 `OpportunityEpisodeId` content-binds its grouping Policy and ordered DecisionWindowIds. It is an
 optional, future-blind grouping for re-entry control or research stratification, not a learning
@@ -130,7 +132,7 @@ state. It belongs to private stages and cannot be inferred from Shadow allocatio
 
 ## Decision result and TradeCase boundary
 
-The BTC contract owns the all-Window `DecisionRecord`: it freezes DecisionWindow, Base Policy,
+The BTC contract owns each enrolled-Window `DecisionRecord`: it freezes DecisionWindow, Base Policy,
 known-at boundary, input and proxy identities, DataHealth, result, blockers, risk-allocation result,
 and selected structure or exact non-selection reason. One Window produces exactly one Base result:
 

@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
 
     runtime = subparsers.add_parser(
         "runtime",
-        help="run one complete production Deribit Public Shadow Session",
+        help="run the current production Deribit Public Shadow Session",
     )
     runtime.add_argument(
         "--policy",
