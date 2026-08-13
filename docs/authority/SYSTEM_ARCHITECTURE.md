@@ -8,7 +8,7 @@ Optimatrix is one Python modular monolith. The intended business path is:
 
 ```text
 pre-registered DecisionWindow
-→ causal MarketObservation and all-Window DecisionRecord
+→ causal MarketObservation and enrolled-Window DecisionRecord
 → optional OpportunityEpisode
 → selected TradeCase
 → TradeCase and Position journal
@@ -34,7 +34,7 @@ structure.py         BTC 0DTE whole-four-leg discovery and ranking
 risk.py              BTC ShadowRiskAllocation
 radar.py             BTC Window Decision evaluation
 decision.py          DecisionWindow, MarketObservation, and DecisionRecord identities
-observation_ledger.py append-once all-Window DecisionRecord and WindowOutcome populations
+observation_ledger.py Session coverage plus append-once enrolled DecisionRecord/WindowOutcome facts
 lifecycle.py         atomic BTC Shadow TradeCase, Position, trigger, terminal, and Outcome rules
 case_journal.py      append-only TradeCase snapshots and accepted-prefix recovery
 engine.py            BTC 0DTE Short Vol path composition
@@ -56,14 +56,15 @@ fact. Only the owning contract may define how a known risk fact changes a Decisi
 
 ## Record boundaries
 
-`ObservationLedger` is the intended all-Window record. It stores the DecisionRecord defined by
-`../contracts/BTC_0DTE_TWO_SIDED_SHORT_VOL.md` and WindowOutcome defined by
-`../contracts/CASE_POSITION_OUTCOME.md`; it owns no order, trade, account, or TradeCase fact. It is
-implemented and authorized only when `CURRENT_STAGE.md` says so.
+`ObservationLedger` measures the scheduled Session denominator and stores the enrolled-Window
+DecisionRecord defined by `../contracts/BTC_0DTE_TWO_SIDED_SHORT_VOL.md` and WindowOutcome defined
+by `../contracts/CASE_POSITION_OUTCOME.md`; missing pre-enrollment Windows remain coverage facts. It
+owns no order, trade, account, or TradeCase fact. It is implemented and authorized only when
+`CURRENT_STAGE.md` says so.
 
 `CaseJournal` begins only after a Candidate opens a TradeCase. It stores accepted immutable-prefix
 snapshots of the TradeCase, later Entry truth, Position lifecycle, and Case/Position Outcome defined
-by the same contract. It cannot replace the all-Window population or infer missing Window evidence.
+by the same contract. It cannot replace Session coverage or infer missing Window evidence.
 At B3 the active runtime task authorizes one exact manifest-bound stable root and one process-
 exclusive continuous writer. The runtime rejects foreign members and cross-Session or cross-Policy
 records, binds a new empty root to the Session active at process start, recovers accepted append

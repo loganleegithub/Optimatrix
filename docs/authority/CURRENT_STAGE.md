@@ -40,8 +40,9 @@ active task
 ## Current implementation truth
 
 - `DecisionWindow` is a Policy-scheduled, Session-aligned denominator. The current 15-minute
-  schedule produces 96 immutable Windows per Deribit Session; missing observations still produce
-  one `UNKNOWN` DecisionRecord.
+  schedule produces 96 immutable Windows per Deribit Session. An encountered Window produces at
+  most one DecisionRecord; a pre-enrollment Window remains missing, while an attempted unhealthy
+  observation produces `UNKNOWN`.
 - `MarketObservation` binds one bounded universe, causal timestamps, DataHealth Policy, public
   facts, and named proxies. `ObservationLedger` appends at most one DecisionRecord and one distinct
   WindowOutcome per Window under a caller-supplied root.
@@ -60,7 +61,7 @@ active task
   strictly later whole-product estimate or a matching typed expiry-settlement fact terminalizes it.
 - `CaseJournal` stores an append-only accepted TradeCase prefix under a caller-supplied root and can
   discard only an unterminated final write. `ShadowCaseOutcome` keeps terminal economics separate
-  from all-Window future-path truth and exposes eight independent eligibility facts.
+  from enrolled-Window future-path truth and exposes eight independent eligibility facts.
 - `runtime.py` implements one production-public, manifest-bound BTC Session process. It resumes the
   manifest Session, recovers every accepted unresolved Case, reconstructs Shadow capacity, records
   missed or interrupted causal cuts as `UNKNOWN`/Gap, obtains official settlement and future paths,
