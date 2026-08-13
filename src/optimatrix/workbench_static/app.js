@@ -2,7 +2,7 @@
   'use strict';
 
   const documentValue = window.OPTIMATRIX_WORKBENCH;
-  if (!documentValue || documentValue.schema_version !== 1) {
+  if (!documentValue || documentValue.schema_version !== 2) {
     document.body.textContent = 'Unsupported or missing Workbench export.';
     return;
   }
@@ -89,17 +89,15 @@
 
   const product = documentValue.product;
   const snapshot = documentValue.snapshot;
-  const decision = documentValue.decision;
+  const projection = documentValue.projection;
   setText('product-title', product.title);
   setText('strategy-name', product.strategy);
   setText('boundary-label', documentValue.boundary.label);
   setText('session-id', snapshot.session_id);
   setText('observed-at', snapshot.observed_at);
-  setText('public-combo', snapshot.public_combo_id);
-  setText('decision-state', decision.state);
-  setText('decision-phase', decision.phase);
-  setText('decision-identity', decision.identity);
-  byId('decision-state').dataset.tone = decision.tone;
+  setText('projection-state', projection.state);
+  setText('projection-phase', projection.phase);
+  byId('projection-state').dataset.tone = projection.tone;
 
   const boundaryList = byId('boundary-statements');
   boundaryList.replaceChildren();
@@ -107,12 +105,25 @@
 
   setText('warning-count', String(documentValue.warnings.length));
   renderList('warning-list', documentValue.warnings, 'No snapshot warnings were reported.');
-  renderList('blocker-list', decision.blockers, 'No decision blocker was reported.');
-  renderRows('funnel-values', documentValue.funnel);
-  renderRows('score-values', documentValue.score);
+  renderList('blocker-list', projection.blockers, 'No projection blocker was reported.');
+  renderRows('window-values', documentValue.window);
   renderRows('context-values', documentValue.context);
   renderRows('methodology-values', documentValue.methodology);
   renderStructure(documentValue.structure);
+  const caseValue = documentValue.case;
+  setText('case-message', caseValue.message);
+  renderRows('case-facts', caseValue.facts);
+  renderRows('case-exit-intent', caseValue.exit_intent);
+  renderRows('case-outcome', caseValue.outcome);
+  const eligibility = byId('case-eligibility');
+  eligibility.replaceChildren();
+  if (!caseValue.eligibility.length) {
+    eligibility.append(element('li', 'none', 'No terminal eligibility facts.'));
+  } else {
+    caseValue.eligibility.forEach(fact => {
+      eligibility.append(element('li', '', `${fact.label}: ${fact.value} · ${fact.reason}`));
+    });
+  }
 
   document.querySelectorAll('[data-theme]').forEach(button => {
     button.addEventListener('click', () => {

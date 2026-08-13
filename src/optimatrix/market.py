@@ -5,7 +5,8 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from optimatrix.products import ProductSpec
+from optimatrix.identity import canonical_identity
+from optimatrix.products import ProductId, ProductSpec
 
 
 class OptionType(StrEnum):
@@ -21,11 +22,72 @@ class EventState(StrEnum):
     UNSCHEDULED_SHOCK = "UNSCHEDULED_SHOCK"
 
 
-class BreakoutState(StrEnum):
-    MEAN_REVERTING = "MEAN_REVERTING"
-    NEUTRAL = "NEUTRAL"
-    APPROACHING_CONCENTRATED_STRIKE = "APPROACHING_CONCENTRATED_STRIKE"
-    BREAKING_CONCENTRATED_STRIKE = "BREAKING_CONCENTRATED_STRIKE"
+class SettlementEvidenceKind(StrEnum):
+    OFFICIAL_EXCHANGE = "OFFICIAL_EXCHANGE"
+    DETERMINISTIC_ACCEPTANCE_FIXTURE = "DETERMINISTIC_ACCEPTANCE_FIXTURE"
+
+
+@dataclass(frozen=True)
+class ExpirySettlementFact:
+    """One product-level expiry settlement fact, independent of any strategy."""
+
+    product_id: ProductId
+    expiry: datetime
+    delivery_price_usd: Decimal
+    known_at: datetime
+    evidence_kind: SettlementEvidenceKind
+    source_id: str
+    method_id: str
+
+    def __post_init__(self) -> None:
+        if self.expiry.tzinfo is None or self.known_at.tzinfo is None:
+            raise ValueError("settlement boundaries must be timezone-aware")
+        if self.known_at < self.expiry:
+            raise ValueError("settlement cannot be known before expiry")
+        if not self.delivery_price_usd.is_finite() or self.delivery_price_usd <= 0:
+            raise ValueError("settlement delivery price must be finite and positive")
+        if not self.source_id or not self.method_id:
+            raise ValueError("settlement source and method must be non-empty")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("ExpirySettlementFactV1", self)
+
+    def as_object(self) -> dict[str, object]:
+        return {
+            "settlement_fact_id": self.identity,
+            "product_id": self.product_id.value,
+            "expiry": self.expiry.isoformat(),
+            "delivery_price_usd": str(self.delivery_price_usd),
+            "known_at": self.known_at.isoformat(),
+            "evidence_kind": self.evidence_kind.value,
+            "source_id": self.source_id,
+            "method_id": self.method_id,
+        }
+
+    @classmethod
+    def from_object(cls, value: object) -> ExpirySettlementFact:
+        if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+            raise ValueError("settlement fact must be an object")
+        source_id = value.get("source_id")
+        method_id = value.get("method_id")
+        if not isinstance(source_id, str) or not isinstance(method_id, str):
+            raise ValueError("settlement source and method must be text")
+        try:
+            fact = cls(
+                product_id=ProductId(value["product_id"]),
+                expiry=datetime.fromisoformat(str(value["expiry"]).replace("Z", "+00:00")),
+                delivery_price_usd=Decimal(str(value["delivery_price_usd"])),
+                known_at=datetime.fromisoformat(str(value["known_at"]).replace("Z", "+00:00")),
+                evidence_kind=SettlementEvidenceKind(value["evidence_kind"]),
+                source_id=source_id,
+                method_id=method_id,
+            )
+        except (KeyError, ValueError) as exc:
+            raise ValueError(f"invalid settlement fact: {exc}") from exc
+        if value.get("settlement_fact_id") != fact.identity:
+            raise ValueError("settlement fact identity mismatch")
+        return fact
 
 
 class MarketContextKnowledge(StrEnum):
@@ -33,7 +95,7 @@ class MarketContextKnowledge(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
-class PhysicalVarianceMethod(StrEnum):
+class RealizedVarianceMethod(StrEnum):
     TRAILING_MATCHED_HORIZON_INDEX_REALIZED_VARIANCE_PROXY = (
         "TRAILING_MATCHED_HORIZON_INDEX_REALIZED_VARIANCE_PROXY"
     )
@@ -58,7 +120,7 @@ class EventStateSource(StrEnum):
 class MarketContextEvidence:
     """Transient proof that the numeric MarketContext has a causal public-data basis."""
 
-    physical_variance_method: PhysicalVarianceMethod | None
+    realized_variance_method: RealizedVarianceMethod | None
     implied_variance_method: ImpliedVarianceMethod | None
     event_state_source: EventStateSource | None
     required_history_start_ms: int | None
@@ -78,7 +140,7 @@ class MarketContextEvidence:
     @classmethod
     def unknown(cls, *, maximum_market_age_ms: int = 5_000) -> MarketContextEvidence:
         return cls(
-            physical_variance_method=None,
+            realized_variance_method=None,
             implied_variance_method=None,
             event_state_source=None,
             required_history_start_ms=None,
@@ -132,7 +194,7 @@ class MarketContextEvidence:
     def blockers_at(self, *, known_at_ms: int) -> tuple[str, ...]:
         blockers: list[str] = []
         required_text = (
-            (self.physical_variance_method, "PHYSICAL_VARIANCE_METHOD_UNKNOWN"),
+            (self.realized_variance_method, "REALIZED_VARIANCE_METHOD_UNKNOWN"),
             (self.implied_variance_method, "IMPLIED_VARIANCE_METHOD_UNKNOWN"),
             (self.event_state_source, "EVENT_STATE_SOURCE_UNKNOWN"),
         )
@@ -359,13 +421,12 @@ class MarketContext:
     now: datetime
     index_price: Decimal
     forward_price: Decimal
-    physical_variance_forecast: Decimal
-    same_session_implied_variance: Decimal
+    trailing_realized_variance_proxy: Decimal
+    same_session_implied_variance_proxy: Decimal
     rv_acceleration: Decimal
     jump_share: Decimal
     directional_persistence: Decimal
     event_state: EventState
-    breakout_state: BreakoutState
     concentrated_strike: Decimal | None
     concentration_strength: Decimal
     evidence: MarketContextEvidence
@@ -376,8 +437,8 @@ class MarketContext:
         for value, field_name in (
             (self.index_price, "index_price"),
             (self.forward_price, "forward_price"),
-            (self.physical_variance_forecast, "physical_variance_forecast"),
-            (self.same_session_implied_variance, "same_session_implied_variance"),
+            (self.trailing_realized_variance_proxy, "trailing_realized_variance_proxy"),
+            (self.same_session_implied_variance_proxy, "same_session_implied_variance_proxy"),
         ):
             if not value.is_finite() or value <= 0:
                 raise ValueError(f"{field_name} must be finite and positive")

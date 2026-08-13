@@ -4,210 +4,232 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from optimatrix.market import MarketContext, OptionQuote, OptionType
+from optimatrix.decision import MarketObservation
+from optimatrix.identity import canonical_identity
+from optimatrix.market import OptionQuote, OptionType
 from optimatrix.policy import BtcShortVolPolicy
-from optimatrix.pricing import (
-    Action,
-    IronCondorExecution,
-    VerticalExecution,
-    combine_condor,
-    execute_leg,
-    price_credit_vertical,
-)
+from optimatrix.pricing import Btc0DteCondorPricing, price_btc_0dte_condor
+from optimatrix.products import BTC
+from optimatrix.session import current_deribit_session
 
 
 @dataclass(frozen=True)
-class VerticalCandidate:
-    short_quote: OptionQuote
-    long_quote: OptionQuote
-    execution: VerticalExecution
-
-
-@dataclass(frozen=True)
-class IronCondorCandidate:
+class Btc0DteCondorCandidate:
+    observation_id: str
     long_put: OptionQuote
     short_put: OptionQuote
     short_call: OptionQuote
     long_call: OptionQuote
-    execution: IronCondorExecution
+    option_amount: Decimal
+    pricing: Btc0DteCondorPricing
     net_delta: Decimal
     put_body_distance_sigma: Decimal
     call_body_distance_sigma: Decimal
-    minimum_body_distance_sigma: Decimal
-    average_spread_quality: Decimal
-    depth_quality: Decimal
+    policy_blockers: tuple[str, ...]
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity(
+            "Btc0DteCondorCandidateV1",
+            self.observation_id,
+            self.long_put.instrument_name,
+            self.short_put.instrument_name,
+            self.short_call.instrument_name,
+            self.long_call.instrument_name,
+            self.option_amount,
+            self.pricing,
+            self.net_delta,
+            self.put_body_distance_sigma,
+            self.call_body_distance_sigma,
+            self.policy_blockers,
+        )
 
     @property
     def expiry(self) -> datetime:
         return self.short_put.expiry
 
+    @property
+    def minimum_body_distance_sigma(self) -> Decimal:
+        return min(self.put_body_distance_sigma, self.call_body_distance_sigma)
+
+    @property
+    def close_depth_coverage(self) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+        return (
+            self.pricing.close_long_put.depth.coverage,
+            self.pricing.close_short_put.depth.coverage,
+            self.pricing.close_short_call.depth.coverage,
+            self.pricing.close_long_call.depth.coverage,
+        )
+
 
 @dataclass(frozen=True)
-class StructureSelection:
-    selected: IronCondorCandidate | None
-    considered_put_verticals: int
-    considered_call_verticals: int
-    considered_condors: int
-    hard_eligible_condors: int
+class Btc0DteCondorSelection:
+    selected: Btc0DteCondorCandidate | None
+    retained_alternatives: tuple[Btc0DteCondorCandidate, ...]
+    legal_structure_count: int
+    price_evaluable_count: int
+    policy_eligible_count: int
     blockers: tuple[str, ...]
 
 
-def select_iron_condor(
+def select_btc_0dte_condor(
     *,
-    quotes: tuple[OptionQuote, ...],
-    context: MarketContext,
+    observation: MarketObservation,
     policy: BtcShortVolPolicy,
-) -> StructureSelection:
-    if not quotes:
-        return StructureSelection(
-            selected=None,
-            considered_put_verticals=0,
-            considered_call_verticals=0,
-            considered_condors=0,
-            hard_eligible_condors=0,
-            blockers=("NO_CURRENT_SESSION_QUOTES",),
-        )
-    expiries = {quote.expiry for quote in quotes}
-    if len(expiries) != 1:
-        return StructureSelection(
-            selected=None,
-            considered_put_verticals=0,
-            considered_call_verticals=0,
-            considered_condors=0,
-            hard_eligible_condors=0,
-            blockers=("MIXED_EXPIRY_INPUT",),
-        )
-    relevant = tuple(quote for quote in quotes if _short_delta_eligible(quote, policy))
-    put_shorts = tuple(
-        quote
-        for quote in relevant
-        if quote.option_type is OptionType.PUT and quote.strike < context.forward_price
-    )
-    call_shorts = tuple(
-        quote
-        for quote in relevant
-        if quote.option_type is OptionType.CALL and quote.strike > context.forward_price
-    )
-    put_verticals = _vertical_candidates(
-        short_quotes=put_shorts,
-        all_quotes=quotes,
-        context=context,
-        policy=policy,
-    )
-    call_verticals = _vertical_candidates(
-        short_quotes=call_shorts,
-        all_quotes=quotes,
-        context=context,
-        policy=policy,
-    )
-    blockers: list[str] = []
-    if not put_shorts:
-        blockers.append("NO_ELIGIBLE_SHORT_PUT")
-    if not call_shorts:
-        blockers.append("NO_ELIGIBLE_SHORT_CALL")
-    if put_shorts and not put_verticals:
-        blockers.append("NO_EXECUTABLE_PUT_VERTICAL")
-    if call_shorts and not call_verticals:
-        blockers.append("NO_EXECUTABLE_CALL_VERTICAL")
-    if blockers:
-        return StructureSelection(
-            selected=None,
-            considered_put_verticals=len(put_verticals),
-            considered_call_verticals=len(call_verticals),
-            considered_condors=0,
-            hard_eligible_condors=0,
-            blockers=tuple(blockers),
-        )
+) -> Btc0DteCondorSelection:
+    if observation.channel_id is not policy.channel_id:
+        raise ValueError("MarketObservation does not match the Policy channel")
+    if observation.data_health_blockers:
+        raise ValueError("structure selection requires healthy MarketObservation data")
+    quotes = tuple(sorted(observation.quotes, key=lambda item: item.instrument_name))
+    puts = tuple(quote for quote in quotes if quote.option_type is OptionType.PUT)
+    calls = tuple(quote for quote in quotes if quote.option_type is OptionType.CALL)
+    context = observation.context
+    physical_sigma = context.trailing_realized_variance_proxy.sqrt()
+    expected_expiry = current_deribit_session(
+        observation.observed_at,
+        phase_policy=policy.session,
+    ).end
 
-    candidates: list[IronCondorCandidate] = []
-    eligible: list[IronCondorCandidate] = []
-    rejected_blockers: list[str] = []
-    for put in put_verticals:
-        for call in call_verticals:
-            if put.short_quote.expiry != call.short_quote.expiry:
+    legal_count = 0
+    evaluable_count = 0
+    eligible: list[Btc0DteCondorCandidate] = []
+    rejected: list[str] = []
+    for long_put in puts:
+        for short_put in puts:
+            if not _legal_put_pair(long_put, short_put, context.forward_price, policy):
                 continue
-            legs = (
-                put.long_quote,
-                put.short_quote,
-                call.short_quote,
-                call.long_quote,
-            )
-            if not _four_leg_coherent(legs, policy=policy):
-                continue
-            execution = combine_condor(put.execution, call.execution)
-            net_delta = _condor_net_delta(
-                put_short=put.short_quote,
-                put_long=put.long_quote,
-                call_short=call.short_quote,
-                call_long=call.long_quote,
-            )
-            physical_sigma = context.physical_variance_forecast.sqrt()
-            put_distance = _log_distance_sigma(
-                strike=put.short_quote.strike,
-                forward=context.forward_price,
-                physical_sigma=physical_sigma,
-            )
-            call_distance = _log_distance_sigma(
-                strike=call.short_quote.strike,
-                forward=context.forward_price,
-                physical_sigma=physical_sigma,
-            )
-            candidate = IronCondorCandidate(
-                long_put=put.long_quote,
-                short_put=put.short_quote,
-                short_call=call.short_quote,
-                long_call=call.long_quote,
-                execution=execution,
-                net_delta=net_delta,
-                put_body_distance_sigma=put_distance,
-                call_body_distance_sigma=call_distance,
-                minimum_body_distance_sigma=min(put_distance, call_distance),
-                average_spread_quality=sum(
-                    (_spread_quality(quote) for quote in legs),
-                    Decimal(0),
-                )
-                / Decimal(4),
-                depth_quality=_depth_quality(execution),
-            )
-            candidates.append(candidate)
-            hard_blockers = _joint_hard_blockers(
-                candidate,
-                context=context,
-                policy=policy,
-            )
-            if hard_blockers:
-                rejected_blockers.extend(hard_blockers)
-            else:
-                eligible.append(candidate)
-    if not candidates:
-        return StructureSelection(
-            selected=None,
-            considered_put_verticals=len(put_verticals),
-            considered_call_verticals=len(call_verticals),
-            considered_condors=0,
-            hard_eligible_condors=0,
-            blockers=("NO_COHERENT_COMBINABLE_TWO_SIDED_STRUCTURE",),
+            for short_call in calls:
+                if not _short_call_eligible(short_call, context.forward_price, policy):
+                    continue
+                for long_call in calls:
+                    if not _legal_call_pair(short_call, long_call, policy):
+                        continue
+                    if not _same_product_and_expiry(
+                        long_put,
+                        short_put,
+                        short_call,
+                        long_call,
+                        expected_expiry=expected_expiry,
+                    ):
+                        continue
+                    legal_count += 1
+                    pricing = price_btc_0dte_condor(
+                        long_put=long_put,
+                        short_put=short_put,
+                        short_call=short_call,
+                        long_call=long_call,
+                        amount=policy.structure.option_amount,
+                        boundary_index_price=context.index_price,
+                    )
+                    if pricing is None:
+                        continue
+                    evaluable_count += 1
+                    net_delta = _net_delta(long_put, short_put, short_call, long_call)
+                    put_distance = _log_distance_sigma(
+                        strike=short_put.strike,
+                        forward=context.forward_price,
+                        physical_sigma=physical_sigma,
+                    )
+                    call_distance = _log_distance_sigma(
+                        strike=short_call.strike,
+                        forward=context.forward_price,
+                        physical_sigma=physical_sigma,
+                    )
+                    blockers = _policy_blockers(
+                        pricing=pricing,
+                        net_delta=net_delta,
+                        minimum_body_distance=min(put_distance, call_distance),
+                        policy=policy,
+                    )
+                    candidate = Btc0DteCondorCandidate(
+                        observation_id=observation.identity,
+                        long_put=long_put,
+                        short_put=short_put,
+                        short_call=short_call,
+                        long_call=long_call,
+                        option_amount=policy.structure.option_amount,
+                        pricing=pricing,
+                        net_delta=net_delta,
+                        put_body_distance_sigma=put_distance,
+                        call_body_distance_sigma=call_distance,
+                        policy_blockers=blockers,
+                    )
+                    if blockers:
+                        rejected.extend(blockers)
+                    else:
+                        eligible.append(candidate)
+
+    if legal_count == 0:
+        return Btc0DteCondorSelection(None, (), 0, 0, 0, ("NO_LEGAL_FOUR_LEG_STRUCTURE",))
+    if evaluable_count == 0:
+        return Btc0DteCondorSelection(
+            None,
+            (),
+            legal_count,
+            0,
+            0,
+            ("NO_PRICE_EVALUABLE_FOUR_LEG_STRUCTURE",),
         )
     if not eligible:
-        return StructureSelection(
-            selected=None,
-            considered_put_verticals=len(put_verticals),
-            considered_call_verticals=len(call_verticals),
-            considered_condors=len(candidates),
-            hard_eligible_condors=0,
-            blockers=(
-                "NO_JOINT_CANDIDATE_PASSES_HARD_UNDERWRITING",
-                *tuple(dict.fromkeys(rejected_blockers)),
-            ),
+        return Btc0DteCondorSelection(
+            None,
+            (),
+            legal_count,
+            evaluable_count,
+            0,
+            ("NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE", *tuple(dict.fromkeys(rejected))),
         )
-    selected = min(eligible, key=_condor_rank_key)
-    return StructureSelection(
+    ordered = tuple(sorted(eligible, key=_rank_key))
+    selected = ordered[0]
+    alternatives = ordered[1 : 1 + policy.structure.maximum_retained_alternatives]
+    return Btc0DteCondorSelection(
         selected=selected,
-        considered_put_verticals=len(put_verticals),
-        considered_call_verticals=len(call_verticals),
-        considered_condors=len(candidates),
-        hard_eligible_condors=len(eligible),
+        retained_alternatives=alternatives,
+        legal_structure_count=legal_count,
+        price_evaluable_count=evaluable_count,
+        policy_eligible_count=len(eligible),
         blockers=(),
+    )
+
+
+def _legal_put_pair(
+    long_put: OptionQuote,
+    short_put: OptionQuote,
+    forward: Decimal,
+    policy: BtcShortVolPolicy,
+) -> bool:
+    width = short_put.strike - long_put.strike
+    return (
+        long_put.instrument_name != short_put.instrument_name
+        and long_put.strike < short_put.strike < forward
+        and policy.structure.minimum_wing_width_usd
+        <= width
+        <= policy.structure.maximum_wing_width_usd
+        and _short_delta_eligible(short_put, policy)
+    )
+
+
+def _short_call_eligible(
+    short_call: OptionQuote,
+    forward: Decimal,
+    policy: BtcShortVolPolicy,
+) -> bool:
+    return short_call.strike > forward and _short_delta_eligible(short_call, policy)
+
+
+def _legal_call_pair(
+    short_call: OptionQuote,
+    long_call: OptionQuote,
+    policy: BtcShortVolPolicy,
+) -> bool:
+    width = long_call.strike - short_call.strike
+    return (
+        short_call.instrument_name != long_call.instrument_name
+        and short_call.strike < long_call.strike
+        and policy.structure.minimum_wing_width_usd
+        <= width
+        <= policy.structure.maximum_wing_width_usd
     )
 
 
@@ -216,191 +238,80 @@ def _short_delta_eligible(quote: OptionQuote, policy: BtcShortVolPolicy) -> bool
     return policy.structure.short_delta_min <= absolute <= policy.structure.short_delta_max
 
 
-def _vertical_candidates(
-    *,
-    short_quotes: tuple[OptionQuote, ...],
-    all_quotes: tuple[OptionQuote, ...],
-    context: MarketContext,
-    policy: BtcShortVolPolicy,
-) -> tuple[VerticalCandidate, ...]:
-    output: list[VerticalCandidate] = []
-    for short in short_quotes:
-        for long in all_quotes:
-            if (
-                long.product != short.product
-                or long.expiry != short.expiry
-                or long.option_type is not short.option_type
-                or long.instrument_name == short.instrument_name
-            ):
-                continue
-            width = abs(long.strike - short.strike)
-            if not (
-                policy.structure.minimum_wing_width_usd
-                <= width
-                <= policy.structure.maximum_wing_width_usd
-            ):
-                continue
-            if short.option_type is OptionType.PUT and long.strike >= short.strike:
-                continue
-            if short.option_type is OptionType.CALL and long.strike <= short.strike:
-                continue
-            if not _quote_pair_coherent(short, long, policy=policy):
-                continue
-            execution = price_credit_vertical(
-                short_quote=short,
-                long_quote=long,
-                quantity=policy.structure.target_quantity,
-                index_price=context.index_price,
-            )
-            if execution is None:
-                continue
-            output.append(
-                VerticalCandidate(
-                    short_quote=short,
-                    long_quote=long,
-                    execution=execution,
-                )
-            )
-    return tuple(output)
-
-
-def _quote_pair_coherent(
-    first: OptionQuote,
-    second: OptionQuote,
-    *,
-    policy: BtcShortVolPolicy,
+def _same_product_and_expiry(
+    *legs: OptionQuote,
+    expected_expiry: datetime,
 ) -> bool:
     return (
-        first.continuity_epoch == second.continuity_epoch
-        and abs(first.source_timestamp_ms - second.source_timestamp_ms)
-        <= policy.shadow.maximum_pair_source_skew_ms
-        and abs(first.received_timestamp_ms - second.received_timestamp_ms)
-        <= policy.shadow.maximum_pair_receive_skew_ms
+        all(leg.product == BTC for leg in legs)
+        and len({leg.expiry for leg in legs}) == 1
+        and legs[0].expiry == expected_expiry
     )
 
 
-def _four_leg_coherent(
-    legs: tuple[OptionQuote, OptionQuote, OptionQuote, OptionQuote],
-    *,
-    policy: BtcShortVolPolicy,
-) -> bool:
+def _net_delta(*legs: OptionQuote) -> Decimal:
+    long_put, short_put, short_call, long_call = legs
     return (
-        len({quote.continuity_epoch for quote in legs}) == 1
-        and max(quote.source_timestamp_ms for quote in legs)
-        - min(quote.source_timestamp_ms for quote in legs)
-        <= policy.shadow.maximum_pair_source_skew_ms
-        and max(quote.received_timestamp_ms for quote in legs)
-        - min(quote.received_timestamp_ms for quote in legs)
-        <= policy.shadow.maximum_pair_receive_skew_ms
+        long_put.signed_delta
+        - short_put.signed_delta
+        - short_call.signed_delta
+        + long_call.signed_delta
     )
 
 
-def _joint_hard_blockers(
-    candidate: IronCondorCandidate,
+def _log_distance_sigma(
     *,
-    context: MarketContext,
-    policy: BtcShortVolPolicy,
-) -> tuple[str, ...]:
-    execution = candidate.execution
-    blockers: list[str] = []
-    if candidate.minimum_body_distance_sigma < policy.radar.minimum_body_distance_sigma:
-        blockers.append("BODY_DISTANCE_TOO_SMALL")
-    if abs(candidate.net_delta) > policy.radar.maximum_abs_net_delta:
-        blockers.append("NET_DELTA_TOO_DIRECTIONAL")
-    if execution.usd_net_credit < policy.underwriting.minimum_combined_net_credit_usd:
-        blockers.append("COMBINED_NET_CREDIT_TOO_SMALL")
-    credit_ratio = execution.usd_net_credit / execution.maximum_side_payoff_cap_usd
-    if credit_ratio < policy.underwriting.minimum_credit_to_max_side_payoff:
-        blockers.append("CREDIT_TO_MAX_SIDE_PAYOFF_TOO_SMALL")
-    if execution.entry_boundary_max_loss_usd > policy.underwriting.maximum_entry_boundary_loss_usd:
-        blockers.append("ENTRY_BOUNDARY_MAX_LOSS_TOO_HIGH")
-    fee_fraction = execution.usd_total_fee / execution.usd_gross_credit
-    if fee_fraction > policy.underwriting.maximum_total_fee_fraction_of_credit:
-        blockers.append("FOUR_LEG_FEE_BURDEN_TOO_HIGH")
-    if (
-        execute_leg(
-            candidate.short_put,
-            action=Action.BUY,
-            quantity=policy.structure.target_quantity,
-            index_price=context.index_price,
-        )
-        is None
-    ):
-        blockers.append("PUT_SHORT_BUYBACK_DEPTH_INSUFFICIENT")
-    if (
-        execute_leg(
-            candidate.short_call,
-            action=Action.BUY,
-            quantity=policy.structure.target_quantity,
-            index_price=context.index_price,
-        )
-        is None
-    ):
-        blockers.append("CALL_SHORT_BUYBACK_DEPTH_INSUFFICIENT")
-    return tuple(blockers)
-
-
-def _condor_rank_key(candidate: IronCondorCandidate) -> tuple[object, ...]:
-    execution = candidate.execution
-    credit_ratio = (
-        execution.usd_net_credit / execution.maximum_side_payoff_cap_usd
-        if execution.maximum_side_payoff_cap_usd > 0
-        else Decimal(0)
-    )
-    fee_fraction = execution.usd_total_fee / execution.usd_gross_credit
-    return (
-        -credit_ratio,
-        -execution.usd_net_credit,
-        fee_fraction,
-        -candidate.average_spread_quality,
-        -candidate.depth_quality,
-        candidate.short_put.instrument_name,
-        candidate.short_call.instrument_name,
-    )
-
-
-def _condor_net_delta(
-    *,
-    put_short: OptionQuote,
-    put_long: OptionQuote,
-    call_short: OptionQuote,
-    call_long: OptionQuote,
+    strike: Decimal,
+    forward: Decimal,
+    physical_sigma: Decimal,
 ) -> Decimal:
-    return (
-        -put_short.signed_delta
-        + put_long.signed_delta
-        - call_short.signed_delta
-        + call_long.signed_delta
-    )
-
-
-def _log_distance_sigma(*, strike: Decimal, forward: Decimal, physical_sigma: Decimal) -> Decimal:
     if physical_sigma <= 0:
-        raise ValueError("physical_sigma must be positive")
+        raise ValueError("trailing realized-variance proxy must be positive")
     return abs((strike / forward).ln()) / physical_sigma
 
 
-def _spread_quality(quote: OptionQuote) -> Decimal:
-    if not quote.bid or not quote.ask:
-        return Decimal(0)
-    best_bid = quote.bid[0].price
-    best_ask = quote.ask[0].price
-    if best_ask <= best_bid:
-        return Decimal(0)
-    distance = quote.tick_schedule.tick_distance(best_bid, best_ask)
-    return _clamp(Decimal(1) - (distance - Decimal(1)) / Decimal(9))
+def _policy_blockers(
+    *,
+    pricing: Btc0DteCondorPricing,
+    net_delta: Decimal,
+    minimum_body_distance: Decimal,
+    policy: BtcShortVolPolicy,
+) -> tuple[str, ...]:
+    blockers: list[str] = []
+    if minimum_body_distance < policy.structure.minimum_body_distance_sigma:
+        blockers.append("BODY_DISTANCE_TOO_SMALL")
+    if abs(net_delta) > policy.structure.maximum_abs_net_delta:
+        blockers.append("NET_DELTA_TOO_DIRECTIONAL")
+    underwriting = policy.underwriting
+    if pricing.boundary_net_credit_usd < underwriting.minimum_boundary_net_credit_usd:
+        blockers.append("BOUNDARY_NET_CREDIT_TOO_SMALL")
+    if (
+        pricing.boundary_net_credit_usd / pricing.maximum_contractual_payoff_cap_usd
+        < underwriting.minimum_credit_to_payoff_cap
+    ):
+        blockers.append("CREDIT_TO_PAYOFF_CAP_TOO_SMALL")
+    if pricing.boundary_reference_loss_usd > underwriting.maximum_boundary_reference_loss_usd:
+        blockers.append("BOUNDARY_REFERENCE_LOSS_TOO_HIGH")
+    if (
+        pricing.combo_standard_fee_native / pricing.native_gross_credit
+        > underwriting.maximum_combo_fee_fraction_of_credit
+    ):
+        blockers.append("COMBO_FEE_BURDEN_TOO_HIGH")
+    return tuple(blockers)
 
 
-def _depth_quality(execution: IronCondorExecution) -> Decimal:
-    levels = (
-        execution.put_vertical.short_leg.stressed.levels
-        + execution.put_vertical.long_leg.stressed.levels
-        + execution.call_vertical.short_leg.stressed.levels
-        + execution.call_vertical.long_leg.stressed.levels
+def _rank_key(candidate: Btc0DteCondorCandidate) -> tuple[Decimal | str, ...]:
+    pricing = candidate.pricing
+    credit_ratio = pricing.boundary_net_credit_usd / pricing.maximum_contractual_payoff_cap_usd
+    fee_fraction = pricing.combo_standard_fee_native / pricing.native_gross_credit
+    minimum_close_coverage = min(candidate.close_depth_coverage)
+    return (
+        -credit_ratio,
+        -pricing.native_net_credit,
+        fee_fraction,
+        -minimum_close_coverage,
+        candidate.long_put.instrument_name,
+        candidate.short_put.instrument_name,
+        candidate.short_call.instrument_name,
+        candidate.long_call.instrument_name,
     )
-    count = len(levels)
-    return _clamp(Decimal(1) - Decimal(max(0, count - 4)) / Decimal(12))
-
-
-def _clamp(value: Decimal) -> Decimal:
-    return min(Decimal(1), max(Decimal(0), value))

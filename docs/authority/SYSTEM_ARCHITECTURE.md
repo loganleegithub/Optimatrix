@@ -2,61 +2,71 @@
 
 **Status:** ACTIVE ARCHITECTURE AUTHORITY
 
-## Shape and dependency direction
+## One dependency path
 
-Optimatrix is one Python modular monolith. Data moves through one causal path:
+Optimatrix is one Python modular monolith. The intended business path is:
 
 ```text
-bounded typed market facts
-→ product, Session, pricing, and risk calculators
-→ joint structure selection and one Decision
-→ product funnel
-→ Decision Case and Position lifecycle
-→ journal recovery and read-only presentation
+pre-registered DecisionWindow
+→ causal MarketObservation and all-Window DecisionRecord
+→ optional OpportunityEpisode
+→ selected TradeCase
+→ TradeCase and Position journal
+→ Window/Case/Position Outcome and read-only presentation
 ```
 
 Lower-level facts and calculators do not depend on strategy composition or presentation. The engine
-composes existing owners; it does not reimplement their formulas. Workbench renders validated
-objects and owns no business calculation.
+composes owners; it does not copy their formulas. Workbench renders validated projections and owns
+no business calculation. Current source deviations and maturity belong to `CURRENT_STAGE.md`.
 
-## Module owners
+## Current module owners
 
 ```text
-identity.py          canonical content identities
+identity.py          content identities
 products.py          inverse BTC product arithmetic
-channels.py          fixed Channel descriptors and implemented flag
-session.py           Deribit Session identity and phase classification
-market.py            typed market facts, evidence, and source validation
-deribit_snapshot.py  one bounded public-response translator
-pricing.py           depth, tick, fee, Vertical, payoff, valuation, settlement math
-policy.py            fixed BTC Short Vol thresholds and causal budgets
-structure.py         bounded joint Put/Call structure generation and selection
-radar.py             one Decision evaluation and blocker vector
-product_funnel.py    SessionDecisionUnit stages, denominators, and earliest blocker
-lifecycle.py         Entry classification, Position duties, remediation, and terminal state
-persistence.py       sole append-only Decision journal codec and recovery
-engine.py            composition of the one implemented product path
-workbench.py         static display projection
-cli.py               offline and explicitly authorized command entrypoints
-scenarios.py         deterministic acceptance evidence, not product authority
+channels.py          fixed Channel descriptors
+session.py           Deribit Session and phase classification
+market.py            typed market facts, settlement facts, and evidence validation
+deribit_snapshot.py  bounded public-response translation
+pricing.py           neutral depth projections plus fee, payoff, valuation, and settlement math
+policy.py            fixed launch hypotheses and causal budgets
+structure.py         BTC 0DTE whole-four-leg discovery and ranking
+risk.py              BTC ShadowRiskAllocation
+radar.py             BTC Window Decision evaluation
+decision.py          DecisionWindow, MarketObservation, and DecisionRecord identities
+observation_ledger.py append-once all-Window DecisionRecord and WindowOutcome populations
+lifecycle.py         atomic BTC Shadow TradeCase, Position, trigger, terminal, and Outcome rules
+case_journal.py      append-only TradeCase snapshots and accepted-prefix recovery
+engine.py            BTC 0DTE Short Vol path composition
+workbench.py         read-only display projection
+cli.py               offline and explicitly authorized entrypoints
+scenarios.py         deterministic evidence, not product Authority
 ```
 
-Decision and Entry definitions are owned by
-`../contracts/BTC_0DTE_TWO_SIDED_SHORT_VOL.md`; lifecycle definitions are owned by
-`../contracts/SHADOW_LIFECYCLE.md`. Exact thresholds remain in the content-identified Policy and
-source.
+Business definitions live in the two contracts, not this table. Exact Policy values and formulas
+remain in their content-identified source owners.
 
-## State boundaries
+## Data health is not trading risk
 
-Instrument catalogs, books, market context, scores, candidates, blockers, funnel snapshots,
-unselected attempts, public snapshots, and presentation projections are bounded transient state.
-The public adapter translates data into the same typed facts and calls the same engine; it is not a
-second Policy, persistence path, or continuous service.
+`DataHealth` describes source completeness, freshness, continuity, coherence, and known-at status.
+`TradingRisk` describes known market or Position exposure. Missing or unhealthy data produces
+`UNKNOWN` or a Gap; it cannot synthesize a market-risk trigger, Entry, Position, close, or terminal
+fact. Only the owning contract may define how a known risk fact changes a Decision or Position.
 
-The only durable product path is the append-only Decision journal. It begins at
-`DECISION_OPENED`, accepts only lifecycle-owned facts, and recovers only that Case and its continuing
-duties. Before that event, authoritative durable business record count is zero. A journal root must
-be explicitly supplied and must satisfy the product's legacy isolation boundary.
+## Record boundaries
 
-Current authorization for public calls, roots, continuous processes, private methods, accounts, and
-deployment belongs only to `CURRENT_STAGE.md` and its active task; architecture does not grant it.
+`ObservationLedger` is the intended all-Window record. It stores the DecisionRecord defined by
+`../contracts/BTC_0DTE_TWO_SIDED_SHORT_VOL.md` and WindowOutcome defined by
+`../contracts/CASE_POSITION_OUTCOME.md`; it owns no order, trade, account, or TradeCase fact. It is
+implemented and authorized only when `CURRENT_STAGE.md` says so.
+
+`CaseJournal` begins only after a Candidate opens a TradeCase. It stores accepted immutable-prefix
+snapshots of the TradeCase, later Entry truth, Position lifecycle, and Case/Position Outcome defined
+by the same contract. It cannot replace the all-Window population or infer missing Window evidence.
+At B3 both records exist only under caller-supplied disposable roots; Stage authorizes no stable
+root or continuous writer.
+
+The two records may reference the same immutable identities; neither copies, rewrites, or backfills
+the other's truth. Raw capture is added only when an authorized replay consumer requires it. These
+boundaries authorize no database, bus, schema registry, replay service, retention system, migration,
+or dual-write protocol.

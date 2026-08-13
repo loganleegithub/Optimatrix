@@ -37,7 +37,7 @@
     <section class="snapshot-strip" aria-label="Snapshot identity">
       <div><span>Deribit session</span><strong id="session-id">—</strong></div>
       <div><span>Observed at</span><strong id="observed-at">—</strong></div>
-      <div><span>Public combo diagnostic</span><strong id="public-combo">—</strong></div>
+      <div><span>Mode</span><strong>Bounded public observation</strong></div>
     </section>
 
     <section id="warning-panel" class="warning-panel" aria-labelledby="warning-heading">
@@ -52,30 +52,29 @@
     </section>
 
     <div class="primary-grid">
-      <section class="panel decision-panel" aria-labelledby="decision-heading">
+      <section class="panel projection-panel" aria-labelledby="projection-heading">
         <div class="section-heading">
           <div>
-            <span class="section-kicker">Fixed policy result</span>
-            <h2 id="decision-heading">Decision</h2>
+            <span class="section-kicker">Bounded snapshot only</span>
+            <h2 id="projection-heading">Structure projection</h2>
           </div>
-          <span id="decision-state" class="state-badge">UNKNOWN</span>
+          <span id="projection-state" class="state-badge">UNKNOWN</span>
         </div>
         <dl class="key-values two-column">
-          <div><dt>Session phase</dt><dd id="decision-phase">—</dd></div>
-          <div><dt>Decision identity</dt><dd id="decision-identity" class="mono">—</dd></div>
+          <div><dt>Session phase</dt><dd id="projection-phase">—</dd></div>
         </dl>
         <h3>Blockers</h3>
         <ul id="blocker-list" class="chip-list"></ul>
       </section>
 
-      <section class="panel funnel-panel" aria-labelledby="funnel-heading">
+      <section class="panel window-panel" aria-labelledby="window-heading">
         <div class="section-heading">
           <div>
-            <span class="section-kicker">One observation boundary</span>
-            <h2 id="funnel-heading">Snapshot funnel</h2>
+            <span class="section-kicker">Pre-registered denominator</span>
+            <h2 id="window-heading">Decision Window record</h2>
           </div>
         </div>
-        <dl id="funnel-values" class="key-values"></dl>
+        <dl id="window-values" class="key-values"></dl>
       </section>
     </div>
 
@@ -94,16 +93,6 @@
     </section>
 
     <div class="evidence-grid">
-      <section class="panel" aria-labelledby="score-heading">
-        <div class="section-heading">
-          <div>
-            <span class="section-kicker">Server-owned output</span>
-            <h2 id="score-heading">Score</h2>
-          </div>
-        </div>
-        <dl id="score-values" class="key-values"></dl>
-      </section>
-
       <section class="panel" aria-labelledby="context-heading">
         <div class="section-heading">
           <div>
@@ -119,6 +108,22 @@
       <summary>Snapshot methodology</summary>
       <dl id="methodology-values" class="key-values"></dl>
     </details>
+
+    <section class="panel" aria-labelledby="case-heading">
+      <div class="section-heading">
+        <div>
+          <span class="section-kicker">Whole-product lifecycle</span>
+          <h2 id="case-heading">Shadow Case / Position / Outcome</h2>
+          <p id="case-message">No TradeCase projection loaded.</p>
+        </div>
+      </div>
+      <div class="evidence-grid">
+        <div><h3>Case and Position</h3><dl id="case-facts" class="key-values"></dl></div>
+        <div><h3>First exit intent</h3><dl id="case-exit-intent" class="key-values"></dl></div>
+        <div><h3>Terminal Outcome</h3><dl id="case-outcome" class="key-values"></dl></div>
+        <div><h3>Eligibility</h3><ul id="case-eligibility" class="chip-list"></ul></div>
+      </div>
+    </section>
   </main>
 
   <footer>

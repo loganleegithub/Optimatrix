@@ -14,8 +14,12 @@ from typing import Protocol
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from optimatrix.decision import (
+    DecisionWindow,
+    MarketObservation,
+    schedule_decision_windows,
+)
 from optimatrix.market import (
-    BreakoutState,
     EventState,
     EventStateSource,
     ImpliedVarianceMethod,
@@ -23,19 +27,17 @@ from optimatrix.market import (
     MarketContextEvidence,
     OptionQuote,
     OptionType,
-    PhysicalVarianceMethod,
     PriceLevel,
+    RealizedVarianceMethod,
     TickSchedule,
     TickStep,
 )
 from optimatrix.policy import BtcShortVolPolicy
-from optimatrix.product_funnel import ProductFunnelSnapshot, project_product_funnel
 from optimatrix.products import BTC
-from optimatrix.radar import RadarDecision, evaluate_radar_unit
 from optimatrix.session import current_deribit_session
 from optimatrix.structure import (
-    IronCondorCandidate,
-    StructureSelection,
+    Btc0DteCondorSelection,
+    select_btc_0dte_condor,
 )
 
 DEFAULT_DERIBIT_API = "https://www.deribit.com/api/v2"
@@ -55,7 +57,6 @@ class SnapshotMethodology:
     concentration_method: str
     index_history_cadence_ms: int
     book_fetch_mode: str
-    combo_diagnostic_method: str
 
     def as_object(self) -> dict[str, object]:
         return {
@@ -63,7 +64,6 @@ class SnapshotMethodology:
             "concentration_method": self.concentration_method,
             "index_history_cadence_ms": self.index_history_cadence_ms,
             "book_fetch_mode": self.book_fetch_mode,
-            "combo_diagnostic_method": self.combo_diagnostic_method,
         }
 
 
@@ -76,16 +76,30 @@ class PublicSnapshotEvaluation:
     fetched_book_count: int
     quotes: tuple[OptionQuote, ...]
     context: MarketContext
-    decision: RadarDecision
-    selection: StructureSelection | None
+    observation: MarketObservation
+    selection: Btc0DteCondorSelection | None
     methodology: SnapshotMethodology
-    public_combo_id: str | None
     warnings: tuple[str, ...]
-    product_funnel: ProductFunnelSnapshot
+    decision_window: DecisionWindow
 
     def as_object(self) -> dict[str, object]:
-        score = self.decision.score
-        structure = self.decision.structure
+        structure = self.selection.selected if self.selection is not None else None
+        projection_state = (
+            "UNKNOWN"
+            if self.observation.data_health_blockers
+            else "STRUCTURE_FOUND"
+            if structure is not None
+            else "NO_STRUCTURE"
+        )
+        blockers = (
+            self.observation.data_health_blockers
+            if self.observation.data_health_blockers
+            else ("BOUNDED_SNAPSHOT_IS_NOT_A_DECISION_RECORD",)
+            if structure is not None
+            else self.selection.blockers
+            if self.selection is not None
+            else ("STRUCTURE_NOT_EVALUATED",)
+        )
         return {
             "observed_at": self.observed_at.isoformat(),
             "session_id": self.session_id,
@@ -93,9 +107,9 @@ class PublicSnapshotEvaluation:
             "requested_book_count": self.requested_book_count,
             "fetched_book_count": self.fetched_book_count,
             "methodology": {
-                "physical_variance_method": (
-                    self.context.evidence.physical_variance_method.value
-                    if self.context.evidence.physical_variance_method is not None
+                "realized_variance_method": (
+                    self.context.evidence.realized_variance_method.value
+                    if self.context.evidence.realized_variance_method is not None
                     else None
                 ),
                 "implied_variance_method": (
@@ -110,47 +124,50 @@ class PublicSnapshotEvaluation:
                 ),
                 **self.methodology.as_object(),
             },
-            "public_combo_id": self.public_combo_id,
             "warnings": list(self.warnings),
-            "funnel": self.product_funnel.as_object(),
+            "window": {
+                **self.decision_window.as_object(),
+                "observation_id": self.observation.identity,
+                "ledger_state": "NOT_RECORDED_BY_BOUNDED_SNAPSHOT",
+            },
             "market_counts": {
                 "current_session_instruments": self.instrument_count,
                 "books_requested": self.requested_book_count,
                 "usable_quotes": len(self.quotes),
-                "put_verticals": (
-                    self.selection.considered_put_verticals if self.selection is not None else None
-                ),
-                "call_verticals": (
-                    self.selection.considered_call_verticals if self.selection is not None else None
-                ),
-                "condors": self.selection.considered_condors
+                "legal_structures": self.selection.legal_structure_count
                 if self.selection is not None
                 else None,
-                "hard_eligible_condors": self.selection.hard_eligible_condors
+                "price_evaluable_structures": self.selection.price_evaluable_count
                 if self.selection is not None
                 else None,
-                "decision": self.decision.decision.value,
+                "policy_eligible_structures": self.selection.policy_eligible_count
+                if self.selection is not None
+                else None,
+                "projection": projection_state,
             },
             "context": {
                 "knowledge": self.context.knowledge.value,
                 "index_price": str(self.context.index_price),
                 "forward_price": str(self.context.forward_price),
-                "physical_variance_forecast": str(self.context.physical_variance_forecast),
-                "same_session_implied_variance": str(self.context.same_session_implied_variance),
+                "trailing_realized_variance_proxy": str(
+                    self.context.trailing_realized_variance_proxy
+                ),
+                "same_session_implied_variance_proxy": str(
+                    self.context.same_session_implied_variance_proxy
+                ),
                 "rv_acceleration": str(self.context.rv_acceleration),
                 "jump_share": str(self.context.jump_share),
                 "directional_persistence": str(self.context.directional_persistence),
                 "event_state": self.context.event_state.value,
-                "breakout_state": self.context.breakout_state.value,
                 "concentrated_strike": (
                     str(self.context.concentrated_strike)
                     if self.context.concentrated_strike is not None
                     else None
                 ),
                 "concentration_strength": str(self.context.concentration_strength),
-                "physical_variance_method": (
-                    self.context.evidence.physical_variance_method.value
-                    if self.context.evidence.physical_variance_method is not None
+                "realized_variance_method": (
+                    self.context.evidence.realized_variance_method.value
+                    if self.context.evidence.realized_variance_method is not None
                     else None
                 ),
                 "implied_variance_method": (
@@ -173,37 +190,30 @@ class PublicSnapshotEvaluation:
                 "market_received_max_ms": self.context.evidence.market_received_max_ms,
                 "event_state_known_at_ms": self.context.evidence.event_state_known_at_ms,
             },
-            "decision": {
-                "decision_identity": self.decision.decision_identity,
-                "state": self.decision.decision.value,
-                "phase": self.decision.phase.value,
-                "blockers": list(self.decision.blockers),
-                "score": (
-                    {
-                        "vrp_ratio": str(score.vrp_ratio),
-                        "theta_capture_proxy": str(score.theta_capture_proxy),
-                        "premium_edge": str(score.premium_edge),
-                        "gamma_safety": str(score.gamma_safety),
-                        "range_quality": str(score.range_quality),
-                        "execution_quality": str(score.execution_quality),
-                        "final_score": str(score.final_score),
-                    }
-                    if score is not None
-                    else None
-                ),
+            "projection": {
+                "state": projection_state,
+                "phase": current_deribit_session(self.observed_at).phase.value,
+                "blockers": list(blockers),
                 "structure": (
                     {
                         "long_put": structure.long_put.instrument_name,
                         "short_put": structure.short_put.instrument_name,
                         "short_call": structure.short_call.instrument_name,
                         "long_call": structure.long_call.instrument_name,
-                        "combined_net_credit_usd": str(structure.execution.usd_net_credit),
-                        "entry_boundary_max_loss_usd": str(
-                            structure.execution.entry_boundary_max_loss_usd
+                        "boundary_net_credit_usd": str(structure.pricing.boundary_net_credit_usd),
+                        "boundary_reference_loss_usd": str(
+                            structure.pricing.boundary_reference_loss_usd
+                        ),
+                        "native_net_credit_btc": str(structure.pricing.native_net_credit),
+                        "combo_standard_fee_btc": str(structure.pricing.combo_standard_fee_native),
+                        "maximum_contractual_payoff_cap_usd": str(
+                            structure.pricing.maximum_contractual_payoff_cap_usd
                         ),
                         "net_delta": str(structure.net_delta),
                         "minimum_body_distance_sigma": str(structure.minimum_body_distance_sigma),
-                        "short_buyback_depth_ready": True,
+                        "minimum_observed_close_depth_coverage": str(
+                            min(structure.close_depth_coverage)
+                        ),
                     }
                     if structure is not None
                     else None
@@ -321,7 +331,7 @@ def evaluate_live_btc_snapshot(
     )
     horizon_minutes = max(
         5,
-        session.minutes_to_expiry - policy.position.latest_short_risk_exit_minutes_to_expiry,
+        session.minutes_to_expiry - policy.lifecycle.latest_exit_minutes_to_expiry,
     )
     history_cadence_ms = _history_cadence_ms(history, horizon_minutes=horizon_minutes)
     physical_variance, acceleration, jump_share, persistence = _physical_path_context(
@@ -337,19 +347,11 @@ def evaluate_live_btc_snapshot(
     )
     warnings.extend(implied_warnings)
     concentrated_strike, concentration_strength = _concentration(tuple(quotes))
-    breakout = _breakout_state(
-        concentrated_strike=concentrated_strike,
-        concentration_strength=concentration_strength,
-        forward_price=forward,
-        physical_variance=physical_variance,
-        directional_persistence=persistence,
-    )
     methodology = SnapshotMethodology(
         delta_method="DERIBIT_ORDER_BOOK_GREEKS",
         concentration_method=("SHORTLISTED_PUBLIC_OPEN_INTEREST_TIMES_ABSOLUTE_GAMMA"),
         index_history_cadence_ms=history_cadence_ms,
         book_fetch_mode="BOUNDED_CONCURRENT_PUBLIC_GET_ORDER_BOOK",
-        combo_diagnostic_method="PUBLIC_GET_COMBOS_EXACT_LEG_SET_ONLY",
     )
     request_boundary_ms = int(normalized_now.timestamp() * 1000)
     known_at_ms = max(request_boundary_ms, int(time.time() * 1000))
@@ -365,8 +367,8 @@ def evaluate_live_btc_snapshot(
     ):
         evidence_blockers.append("SNAPSHOT_CROSSED_SESSION_BOUNDARY")
     evidence = MarketContextEvidence(
-        physical_variance_method=(
-            PhysicalVarianceMethod.TRAILING_MATCHED_HORIZON_INDEX_REALIZED_VARIANCE_PROXY
+        realized_variance_method=(
+            RealizedVarianceMethod.TRAILING_MATCHED_HORIZON_INDEX_REALIZED_VARIANCE_PROXY
         ),
         implied_variance_method=(
             ImpliedVarianceMethod.NEAREST_ATM_CALL_PUT_MARK_IV_SQUARED_TIMES_RISK_HORIZON
@@ -381,7 +383,7 @@ def evaluate_live_btc_snapshot(
         market_received_min_ms=min(quote.received_timestamp_ms for quote in quotes),
         market_received_max_ms=max(quote.received_timestamp_ms for quote in quotes),
         event_state_known_at_ms=request_boundary_ms,
-        maximum_market_age_ms=policy.shadow.maximum_position_quote_age_ms,
+        maximum_market_age_ms=policy.observation.maximum_age_ms,
         requested_books=requested_books,
         usable_books=usable_books,
         declared_blockers=tuple(evidence_blockers),
@@ -390,55 +392,36 @@ def evaluate_live_btc_snapshot(
         now=known_at,
         index_price=index_price,
         forward_price=forward,
-        physical_variance_forecast=physical_variance,
-        same_session_implied_variance=implied_variance,
+        trailing_realized_variance_proxy=physical_variance,
+        same_session_implied_variance_proxy=implied_variance,
         rv_acceleration=acceleration,
         jump_share=jump_share,
         directional_persistence=persistence,
         event_state=event_state,
-        breakout_state=breakout,
         concentrated_strike=concentrated_strike,
         concentration_strength=concentration_strength,
         evidence=evidence,
     )
-    decision, selection = evaluate_radar_unit(
+    windows = schedule_decision_windows(
         session=session,
+        channel_id=policy.channel_id,
+        policy=policy.window,
+    )
+    decision_window = next(
+        (window for window in windows if window.starts_at <= context.now < window.ends_at),
+        windows[-1],
+    )
+    observation = MarketObservation.capture(
+        channel_id=policy.channel_id,
+        policy=policy.observation,
         context=context,
         quotes=tuple(quotes),
-        policy=policy,
     )
-    if selection is None:
-        public_combo_id = None
-    else:
-        try:
-            combo_result = client.call(
-                "public/get_combos",
-                {"currency": BTC.public_currency},
-            )
-            public_combo_id = _matching_public_combo_id(
-                combo_result,
-                structure=selection.selected,
-            )
-        except DeribitSourceError:
-            public_combo_id = None
-            warnings.append("PUBLIC_COMBO_DIAGNOSTIC_UNAVAILABLE")
-    if selection is not None and selection.selected is not None:
-        selected_quotes = (
-            selection.selected.long_put,
-            selection.selected.short_put,
-            selection.selected.short_call,
-            selection.selected.long_call,
-        )
-        source_span = max(q.source_timestamp_ms for q in selected_quotes) - min(
-            q.source_timestamp_ms for q in selected_quotes
-        )
-        receive_span = max(q.received_timestamp_ms for q in selected_quotes) - min(
-            q.received_timestamp_ms for q in selected_quotes
-        )
-        if source_span > policy.shadow.entry_acquisition_window_ms:
-            warnings.append("SELECTED_FOUR_LEG_SOURCE_SPAN_EXCEEDS_ENTRY_WINDOW")
-        if receive_span > policy.shadow.entry_acquisition_window_ms:
-            warnings.append("SELECTED_FOUR_LEG_RECEIVE_SPAN_EXCEEDS_ENTRY_WINDOW")
+    selection = (
+        None
+        if observation.data_health_blockers
+        else select_btc_0dte_condor(observation=observation, policy=policy)
+    )
     return PublicSnapshotEvaluation(
         observed_at=known_at,
         session_id=session.session_id,
@@ -447,15 +430,11 @@ def evaluate_live_btc_snapshot(
         fetched_book_count=len(quotes),
         quotes=tuple(quotes),
         context=context,
-        decision=decision,
+        observation=observation,
         selection=selection,
         methodology=methodology,
-        public_combo_id=public_combo_id,
         warnings=tuple(sorted(set((*warnings, "OI_GAMMA_CONCENTRATION_IS_SHORTLIST_ONLY")))),
-        product_funnel=project_product_funnel(
-            decision,
-            policy_identity=policy.identity,
-        ),
+        decision_window=decision_window,
     )
 
 
@@ -502,53 +481,6 @@ def _fetch_books(
                 forwards.append(forward)
     quotes.sort(key=lambda quote: (quote.strike, quote.option_type.value, quote.instrument_name))
     return quotes, forwards, tuple(warnings)
-
-
-def _matching_public_combo_id(
-    value: object,
-    *,
-    structure: IronCondorCandidate | None,
-) -> str | None:
-    if structure is None:
-        return None
-    if not isinstance(value, list):
-        raise DeribitSourceError("combo result must be an array")
-    desired = {
-        structure.long_put.instrument_name: Decimal(1),
-        structure.short_put.instrument_name: Decimal(-1),
-        structure.short_call.instrument_name: Decimal(-1),
-        structure.long_call.instrument_name: Decimal(1),
-    }
-    for raw in value:
-        item = _mapping(raw, "combo")
-        if item.get("state") != "active":
-            continue
-        combo_id = item.get("id")
-        legs = item.get("legs")
-        if not isinstance(combo_id, str) or not combo_id or not isinstance(legs, list):
-            continue
-        observed: dict[str, Decimal] = {}
-        malformed = False
-        for raw_leg in legs:
-            try:
-                leg = _mapping(raw_leg, "combo leg")
-                name = _text(leg.get("instrument_name"), "combo leg instrument")
-                amount = _decimal(leg.get("amount"), "combo leg amount")
-            except DeribitSourceError:
-                malformed = True
-                break
-            if amount == 0 or name in observed:
-                malformed = True
-                break
-            observed[name] = amount
-        if malformed or set(observed) != set(desired):
-            continue
-        scales: list[Decimal] = []
-        for name, desired_amount in desired.items():
-            scales.append(observed[name] / desired_amount)
-        if scales and all(scale == scales[0] for scale in scales) and scales[0] != 0:
-            return combo_id
-    return None
 
 
 def _instrument_metadata(value: object, *, session_end_ms: int) -> tuple[dict[str, object], ...]:
@@ -838,27 +770,6 @@ def _concentration(
         return None, Decimal(0)
     strike, weight = max(by_strike.items(), key=lambda item: item[1])
     return strike, _clamp(weight / total)
-
-
-def _breakout_state(
-    *,
-    concentrated_strike: Decimal | None,
-    concentration_strength: Decimal,
-    forward_price: Decimal,
-    physical_variance: Decimal,
-    directional_persistence: Decimal,
-) -> BreakoutState:
-    if concentrated_strike is None or concentration_strength == 0:
-        return BreakoutState.NEUTRAL
-    sigma = physical_variance.sqrt()
-    distance = abs((concentrated_strike / forward_price).ln()) / sigma
-    if distance <= Decimal("0.25") and directional_persistence <= Decimal("0.30"):
-        return BreakoutState.MEAN_REVERTING
-    if distance <= Decimal("0.25") and directional_persistence >= Decimal("0.65"):
-        return BreakoutState.BREAKING_CONCENTRATED_STRIKE
-    if distance <= Decimal("0.50"):
-        return BreakoutState.APPROACHING_CONCENTRATED_STRIKE
-    return BreakoutState.NEUTRAL
 
 
 def _log_returns(points: Sequence[tuple[int, Decimal]]) -> tuple[Decimal, ...]:

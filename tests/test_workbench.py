@@ -23,71 +23,31 @@ def _snapshot() -> dict[str, object]:
         "instrument_count": 40,
         "requested_book_count": 12,
         "fetched_book_count": 12,
-        "public_combo_id": None,
-        "warnings": ["PUBLIC_COMBO_DIAGNOSTIC_UNAVAILABLE"],
-        "funnel": {
-            "unit_identity": "sha256:funnel",
-            "session_id": "2026-08-13T08:00:00Z",
-            "decision_window_identity": "2026-08-13T08:00:00Z:600",
-            "policy_identity": "sha256:policy",
-            "current_node": "ENTRY_ATTEMPT_SELECTED",
-            "primary_blocker": None,
-            "stages": [
-                {
-                    "name": name,
-                    "status": "PASSED",
-                    "denominator": 1,
-                    "numerator": 1,
-                    "blockers": [],
-                }
-                for name in (
-                    "APPLICABLE_SESSION_DECISION",
-                    "MARKET_CONTEXT_KNOWN",
-                    "VRP_THETA_QUALIFIED",
-                    "GAMMA_JUMP_BREAKOUT_RISK_ACCEPTABLE",
-                    "TWO_SIDED_STRUCTURE_EVALUABLE",
-                    "ENTRY_ROUTE_EVALUABLE",
-                    "ENTRY_ATTEMPT_SELECTED",
-                )
-            ]
-            + [
-                {
-                    "name": "DECISION_CASE_OPENED",
-                    "status": "NOT_REACHED",
-                    "denominator": 1,
-                    "numerator": 0,
-                    "blockers": [],
-                },
-                {
-                    "name": "ENTRY_RESULT_KNOWN",
-                    "status": "NOT_REACHED",
-                    "denominator": 0,
-                    "numerator": 0,
-                    "blockers": [],
-                },
-                {
-                    "name": "DECISION_CASE_OUTCOME_KNOWN",
-                    "status": "NOT_REACHED",
-                    "denominator": 0,
-                    "numerator": 0,
-                    "blockers": [],
-                },
-            ],
+        "warnings": ["BOUNDED_OPTION_UNIVERSE"],
+        "window": {
+            "decision_window_id": "sha256:window",
+            "channel_id": "INVERSE_BTC_SHORT_VOL",
+            "market_session_id": "2026-08-13T08:00:00Z",
+            "schedule_policy_id": "sha256:schedule",
+            "starts_at": "2026-08-12T18:00:00Z",
+            "ends_at": "2026-08-12T18:15:00Z",
+            "input_deadline": "2026-08-12T18:16:00Z",
+            "observation_id": "sha256:observation",
+            "ledger_state": "NOT_RECORDED_BY_BOUNDED_SNAPSHOT",
         },
         "context": {
             "knowledge": "KNOWN",
             "index_price": "100000",
             "forward_price": "100050",
-            "physical_variance_forecast": "0.0018",
-            "same_session_implied_variance": "0.0032",
+            "trailing_realized_variance_proxy": "0.0018",
+            "same_session_implied_variance_proxy": "0.0032",
             "rv_acceleration": "0.12",
             "jump_share": "0.04",
             "directional_persistence": "0.08",
             "event_state": "NONE",
-            "breakout_state": "CALM",
             "concentrated_strike": None,
             "concentration_strength": "0.10",
-            "physical_variance_method": "TRAILING_MATCHED_HORIZON_REALIZED_VARIANCE_PROXY",
+            "realized_variance_method": "TRAILING_MATCHED_HORIZON_REALIZED_VARIANCE_PROXY",
             "implied_variance_method": "ATM_MARK_VARIANCE_PROXY",
             "event_state_source": "DETERMINISTIC_SCENARIO_INPUT",
             "required_history_start_ms": 1_786_535_700_000,
@@ -100,30 +60,23 @@ def _snapshot() -> dict[str, object]:
             "market_received_max_ms": 1_786_543_200_050,
             "event_state_known_at_ms": 1_786_543_200_000,
         },
-        "decision": {
-            "decision_identity": "sha256:decision",
-            "state": "CANDIDATE",
+        "projection": {
+            "state": "STRUCTURE_FOUND",
             "phase": "CORE_CARRY",
             "blockers": [],
-            "score": {
-                "vrp_ratio": "1.77",
-                "theta_capture_proxy": "0.61",
-                "premium_edge": "0.72",
-                "gamma_safety": "0.81",
-                "range_quality": "0.76",
-                "execution_quality": "0.84",
-                "final_score": "0.78",
-            },
             "structure": {
                 "long_put": legs[0][0],
                 "short_put": legs[1][0],
                 "short_call": legs[2][0],
                 "long_call": legs[3][0],
-                "combined_net_credit_usd": "38.25",
-                "entry_boundary_max_loss_usd": "161.75",
+                "boundary_net_credit_usd": "38.25",
+                "boundary_reference_loss_usd": "161.75",
+                "native_net_credit_btc": "0.0003825",
+                "combo_standard_fee_btc": "0.00006",
+                "maximum_contractual_payoff_cap_usd": "200",
                 "net_delta": "0.00",
                 "minimum_body_distance_sigma": "2.14",
-                "short_buyback_depth_ready": True,
+                "minimum_observed_close_depth_coverage": "0.5",
             },
         },
         "quotes": [
@@ -142,7 +95,7 @@ def _snapshot() -> dict[str, object]:
             for name, strike, option_type, delta in legs
         ],
         "methodology": {
-            "physical_variance_method": "TRAILING_MATCHED_HORIZON_INDEX_REALIZED_VARIANCE_PROXY",
+            "realized_variance_method": "TRAILING_MATCHED_HORIZON_INDEX_REALIZED_VARIANCE_PROXY",
             "delta_method": "DERIBIT_ORDER_BOOK_GREEKS",
         },
     }
@@ -161,10 +114,10 @@ def test_document_projects_one_four_leg_strategy_without_recalculating_values() 
         ],
     }
     snapshot_view = cast(Mapping[str, object], document["snapshot"])
-    decision_view = cast(Mapping[str, object], document["decision"])
+    projection_view = cast(Mapping[str, object], document["projection"])
     assert snapshot_view["session_id"] == "2026-08-13T08:00:00Z"
-    assert decision_view["state"] == "CANDIDATE"
-    assert decision_view["blockers"] == []
+    assert projection_view["state"] == "STRUCTURE_FOUND"
+    assert projection_view["blockers"] == []
     structure = cast(Mapping[str, object], document["structure"])
     assert structure["kind"] == "ASYMMETRIC_IRON_CONDOR"
     legs = cast(Sequence[Mapping[str, object]], structure["legs"])
@@ -182,20 +135,18 @@ def test_document_projects_one_four_leg_strategy_without_recalculating_values() 
     ]
     structure_metrics = cast(Sequence[Mapping[str, object]], structure["metrics"])
     assert {row["key"]: row["value"] for row in structure_metrics}[
-        "combined_net_credit_usd"
+        "boundary_net_credit_usd"
     ] == "38.25"
     assert {row["key"]: row["value"] for row in structure_metrics}[
-        "short_buyback_depth_ready"
-    ] == "YES"
-    score = cast(Sequence[Mapping[str, object]], document["score"])
+        "minimum_observed_close_depth_coverage"
+    ] == "0.5"
     context = cast(Sequence[Mapping[str, object]], document["context"])
-    assert {row["key"]: row["value"] for row in score}["final_score"] == "0.78"
     assert {row["key"]: row["value"] for row in context}["jump_share"] == "0.04"
     assert {row["key"]: row["value"] for row in context}["knowledge"] == "KNOWN"
-    funnel = cast(Sequence[Mapping[str, object]], document["funnel"])
-    assert {row["key"]: row["value"] for row in funnel}[
-        "TWO_SIDED_STRUCTURE_EVALUABLE"
-    ] == "PASSED · 1/1"
+    window = cast(Sequence[Mapping[str, object]], document["window"])
+    assert {row["key"]: row["value"] for row in window}[
+        "ledger_state"
+    ] == "NOT_RECORDED_BY_BOUNDED_SNAPSHOT"
 
 
 def test_static_export_is_network_free_and_browser_receives_only_presentation_data(
@@ -217,22 +168,21 @@ def test_static_export_is_network_free_and_browser_receives_only_presentation_da
     assert "XMLHttpRequest" not in script
     assert "WebSocket" not in script
     assert "final_score" not in script
-    assert "combined_net_credit_usd" not in script
+    assert "boundary_net_credit_usd" not in script
     prefix = "window.OPTIMATRIX_WORKBENCH = Object.freeze("
     assert data_script.startswith(prefix)
     document = json.loads(data_script.removeprefix(prefix).removesuffix(");\n"))
     assert document["structure"]["legs"][1]["label"] == "Short Put body"
-    assert document["warnings"][0]["code"] == "PUBLIC_COMBO_DIAGNOSTIC_UNAVAILABLE"
+    assert document["warnings"][0]["code"] == "BOUNDED_OPTION_UNIVERSE"
 
 
 def test_no_structure_and_blockers_remain_truthful() -> None:
     snapshot = _snapshot()
-    decision = dict(cast(Mapping[str, object], snapshot["decision"]))
-    decision["state"] = "ABSTAIN"
-    decision["blockers"] = ["GAMMA_SAFETY_BELOW_MINIMUM", "EVENT_STATE_BLOCKED"]
-    decision["score"] = None
-    decision["structure"] = None
-    snapshot["decision"] = decision
+    projection = dict(cast(Mapping[str, object], snapshot["projection"]))
+    projection["state"] = "NO_STRUCTURE"
+    projection["blockers"] = ["RV_ACCELERATION_TOO_HIGH", "EVENT_OR_SHOCK_IN_PROGRESS"]
+    projection["structure"] = None
+    snapshot["projection"] = projection
 
     document = build_workbench_document(snapshot)
 
@@ -243,36 +193,33 @@ def test_no_structure_and_blockers_remain_truthful() -> None:
         "legs": [],
         "metrics": [],
     }
-    assert document["score"] == []
-    decision_view = cast(Mapping[str, object], document["decision"])
-    blockers = cast(Sequence[Mapping[str, object]], decision_view["blockers"])
+    projection_view = cast(Mapping[str, object], document["projection"])
+    blockers = cast(Sequence[Mapping[str, object]], projection_view["blockers"])
     assert [item["code"] for item in blockers] == [
-        "GAMMA_SAFETY_BELOW_MINIMUM",
-        "EVENT_STATE_BLOCKED",
+        "RV_ACCELERATION_TOO_HIGH",
+        "EVENT_OR_SHOCK_IN_PROGRESS",
     ]
 
 
-def test_unknown_market_context_is_visible_without_a_score_or_structure() -> None:
+def test_unknown_market_context_is_visible_without_a_structure() -> None:
     snapshot = _snapshot()
     context = dict(cast(Mapping[str, object], snapshot["context"]))
     context["knowledge"] = "UNKNOWN"
     snapshot["context"] = context
-    decision = dict(cast(Mapping[str, object], snapshot["decision"]))
-    decision["state"] = "UNKNOWN"
-    decision["blockers"] = [
-        "MARKET_CONTEXT_EVIDENCE_NOT_BOUND",
+    projection = dict(cast(Mapping[str, object], snapshot["projection"]))
+    projection["state"] = "UNKNOWN"
+    projection["blockers"] = [
+        "REALIZED_VARIANCE_METHOD_UNKNOWN",
         "EVENT_STATE_SOURCE_UNKNOWN",
     ]
-    decision["score"] = None
-    decision["structure"] = None
-    snapshot["decision"] = decision
+    projection["structure"] = None
+    snapshot["projection"] = projection
 
     document = build_workbench_document(snapshot)
 
-    decision_view = cast(Mapping[str, object], document["decision"])
-    assert decision_view["state"] == "UNKNOWN"
-    assert decision_view["tone"] == "warning"
-    assert document["score"] == []
+    projection_view = cast(Mapping[str, object], document["projection"])
+    assert projection_view["state"] == "UNKNOWN"
+    assert projection_view["tone"] == "warning"
     structure = cast(Mapping[str, object], document["structure"])
     assert structure["available"] is False
     assert structure["kind"] == "NOT_EVALUATED"
@@ -282,11 +229,11 @@ def test_unknown_market_context_is_visible_without_a_score_or_structure() -> Non
 
 def test_structure_requires_four_distinct_correctly_typed_legs() -> None:
     duplicate = _snapshot()
-    duplicate_decision = dict(cast(Mapping[str, object], duplicate["decision"]))
-    duplicate_structure = dict(cast(Mapping[str, object], duplicate_decision["structure"]))
+    duplicate_projection = dict(cast(Mapping[str, object], duplicate["projection"]))
+    duplicate_structure = dict(cast(Mapping[str, object], duplicate_projection["structure"]))
     duplicate_structure["long_call"] = duplicate_structure["short_call"]
-    duplicate_decision["structure"] = duplicate_structure
-    duplicate["decision"] = duplicate_decision
+    duplicate_projection["structure"] = duplicate_structure
+    duplicate["projection"] = duplicate_projection
     with pytest.raises(ValueError, match="duplicate instrument"):
         build_workbench_document(duplicate)
 

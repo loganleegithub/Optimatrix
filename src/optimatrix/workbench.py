@@ -6,45 +6,36 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-WORKBENCH_SCHEMA_VERSION = 1
+from optimatrix.lifecycle import TradeCase
+
+WORKBENCH_SCHEMA_VERSION = 2
 _ASSET_ROOT = Path(__file__).with_name("workbench_static")
 _STATIC_ASSETS = ("index.html", "styles.css", "app.js")
 
-_FUNNEL_STAGE_LABELS = {
-    "APPLICABLE_SESSION_DECISION": "Applicable Session decision",
-    "MARKET_CONTEXT_KNOWN": "Market context known",
-    "VRP_THETA_QUALIFIED": "VRP and Theta qualified",
-    "GAMMA_JUMP_BREAKOUT_RISK_ACCEPTABLE": "Path and event risk acceptable",
-    "TWO_SIDED_STRUCTURE_EVALUABLE": "Two-sided structure evaluable",
-    "ENTRY_ROUTE_EVALUABLE": "Entry route evaluable",
-    "ENTRY_ATTEMPT_SELECTED": "Entry attempt selected",
-    "DECISION_CASE_OPENED": "Decision Case opened",
-    "ENTRY_RESULT_KNOWN": "Entry result known",
-    "DECISION_CASE_OUTCOME_KNOWN": "Decision Case Outcome known",
-}
-_SCORE_LABELS = {
-    "vrp_ratio": "ATM mark / trailing-RV ratio",
-    "theta_capture_proxy": "Theta capture proxy",
-    "premium_edge": "Premium/time heuristic",
-    "gamma_safety": "Path-risk heuristic",
-    "range_quality": "Range quality",
-    "execution_quality": "Execution quality",
-    "final_score": "Experimental rank score",
+_WINDOW_LABELS = {
+    "decision_window_id": "Decision Window identity",
+    "channel_id": "Product and strategy",
+    "market_session_id": "Market Session",
+    "schedule_policy_id": "Window schedule Policy",
+    "starts_at": "Scheduled start",
+    "ends_at": "Scheduled end",
+    "input_deadline": "Input deadline",
+    "observation_id": "Market Observation identity",
+    "ledger_state": "All-Window ledger state",
 }
 _CONTEXT_LABELS = {
     "knowledge": "Market-context evidence",
     "index_price": "BTC index price",
     "forward_price": "Forward price",
-    "physical_variance_forecast": "Trailing matched-horizon RV proxy",
-    "same_session_implied_variance": "Same-session ATM mark-variance proxy",
+    "trailing_realized_variance_proxy": "Trailing matched-horizon RV proxy",
+    "same_session_implied_variance_proxy": "Same-session ATM mark-variance proxy",
     "rv_acceleration": "Realized-volatility acceleration",
     "jump_share": "Jump share",
     "directional_persistence": "Directional persistence",
     "event_state": "Event state",
-    "breakout_state": "Breakout state",
     "concentrated_strike": "Concentrated strike",
     "concentration_strength": "Concentration strength",
-    "physical_variance_method": "Physical-side method",
+    "realized_variance_method": "Realized-variance method",
     "implied_variance_method": "Implied-side method",
     "event_state_source": "Event-state source",
     "required_history_start_ms": "Required history start (ms)",
@@ -58,11 +49,14 @@ _CONTEXT_LABELS = {
     "event_state_known_at_ms": "Event state known at (ms)",
 }
 _STRUCTURE_METRIC_LABELS = {
-    "combined_net_credit_usd": "Four-leg net credit at observation boundary",
-    "entry_boundary_max_loss_usd": "Defined maximum loss at observation boundary",
+    "boundary_net_credit_usd": "Boundary-valued four-leg net credit",
+    "boundary_reference_loss_usd": "Boundary-valued reference loss",
+    "native_net_credit_btc": "Native BTC net credit",
+    "combo_standard_fee_btc": "Standard Combo fee in BTC",
+    "maximum_contractual_payoff_cap_usd": "Maximum contractual payoff cap in USD",
     "net_delta": "Four-leg net Delta",
     "minimum_body_distance_sigma": "Nearest short strike distance",
-    "short_buyback_depth_ready": "Both shorts full-quantity buyback depth ready",
+    "minimum_observed_close_depth_coverage": "Minimum current close-depth coverage",
 }
 _LEG_DEFINITIONS = (
     ("long_put", "Long Put wing", "LONG", "PUT"),
@@ -97,22 +91,26 @@ class WorkbenchExport:
     script_path: Path
 
 
-def build_workbench_document(snapshot: Mapping[str, object]) -> dict[str, object]:
+def build_workbench_document(
+    snapshot: Mapping[str, object],
+    *,
+    trade_case: TradeCase | None = None,
+) -> dict[str, object]:
     """Build the complete presentation model for one public Deribit snapshot.
 
     All joins, ordering, labels, and state tones are resolved here. The browser receives a display
-    document and never recomputes strategy, score, structure, or lifecycle truth.
+    document and never recomputes strategy, structure, or lifecycle truth.
     """
 
     root = _mapping(snapshot, "snapshot")
     session_id = _required_text(root.get("session_id"), "snapshot.session_id")
     observed_at = _required_text(root.get("observed_at"), "snapshot.observed_at")
-    funnel = _mapping(root.get("funnel"), "snapshot.funnel")
+    window = _mapping(root.get("window"), "snapshot.window")
     context = _mapping(root.get("context"), "snapshot.context")
-    decision = _mapping(root.get("decision"), "snapshot.decision")
-    state = _required_text(decision.get("state"), "snapshot.decision.state")
-    phase = _required_text(decision.get("phase"), "snapshot.decision.phase")
-    blockers = _text_sequence(decision.get("blockers"), "snapshot.decision.blockers")
+    projection = _mapping(root.get("projection"), "snapshot.projection")
+    state = _required_text(projection.get("state"), "snapshot.projection.state")
+    phase = _required_text(projection.get("phase"), "snapshot.projection.phase")
+    blockers = _text_sequence(projection.get("blockers"), "snapshot.projection.blockers")
     warnings = _text_sequence(root.get("warnings"), "snapshot.warnings")
     quote_index = _quote_index(root.get("quotes"))
 
@@ -130,38 +128,38 @@ def build_workbench_document(snapshot: Mapping[str, object]) -> dict[str, object
         "snapshot": {
             "session_id": session_id,
             "observed_at": observed_at,
-            "public_combo_id": _display_value(root.get("public_combo_id")),
             "instrument_count": _display_value(root.get("instrument_count")),
             "requested_book_count": _display_value(root.get("requested_book_count")),
             "fetched_book_count": _display_value(root.get("fetched_book_count")),
         },
         "warnings": [{"code": warning, "tone": "warning"} for warning in warnings],
-        "funnel": _funnel_rows(funnel),
-        "decision": {
-            "identity": _display_value(decision.get("decision_identity")),
+        "window": _display_rows(window, _WINDOW_LABELS),
+        "projection": {
             "state": state,
             "phase": phase,
-            "tone": _decision_tone(state),
+            "tone": _projection_tone(state),
             "blockers": [{"code": blocker, "tone": "danger"} for blocker in blockers],
         },
         "structure": _structure_projection(
-            decision.get("structure"),
+            projection.get("structure"),
             quote_index,
-            decision_state=state,
+            projection_state=state,
         ),
-        "score": _optional_display_rows(decision.get("score"), _SCORE_LABELS),
         "context": _display_rows(context, _CONTEXT_LABELS),
         "methodology": _optional_display_rows(root.get("methodology"), {}),
+        "case": build_case_projection(trade_case),
     }
 
 
 def write_workbench(
     snapshot: Mapping[str, object],
     output_dir: str | Path,
+    *,
+    trade_case: TradeCase | None = None,
 ) -> WorkbenchExport:
     """Write a self-contained, network-free Workbench directory for one snapshot mapping."""
 
-    document = build_workbench_document(snapshot)
+    document = build_workbench_document(snapshot, trade_case=trade_case)
     destination = Path(output_dir).expanduser().resolve()
     if destination == _ASSET_ROOT.resolve():
         raise ValueError("output_dir cannot overwrite the Workbench source assets")
@@ -191,14 +189,105 @@ def write_workbench(
     )
 
 
+def build_case_projection(case: TradeCase | None) -> dict[str, object]:
+    if case is None:
+        return {
+            "available": False,
+            "message": "This bounded snapshot did not open a TradeCase.",
+            "facts": [],
+            "exit_intent": [],
+            "outcome": [],
+            "eligibility": [],
+        }
+    facts = {
+        "truth_layer": case.truth_layer,
+        "trade_case_id": case.identity,
+        "decision_window_id": case.decision_window_id,
+        "entry_status": case.entry_status.value if case.entry_status is not None else None,
+        "entry_final": case.entry_final,
+        "position_id": case.position_id,
+        "position_state": case.position_state.value if case.position_state is not None else None,
+        "gap_observed": case.gap_observed,
+    }
+    intent = (
+        {
+            "category": case.exit_intent.category,
+            "reason": case.exit_intent.reason,
+            "observed_at": case.exit_intent.observed_at.isoformat(),
+            "scope": case.exit_intent.scope,
+        }
+        if case.exit_intent is not None
+        else None
+    )
+    outcome = case.outcome
+    outcome_values = (
+        {
+            "terminal_method": outcome.terminal_method.value,
+            "terminal_at": outcome.terminal_at.isoformat(),
+            "native_result_btc": (
+                str(outcome.native_result_btc) if outcome.native_result_btc is not None else None
+            ),
+            "boundary_reference_result_usd": (
+                str(outcome.boundary_reference_result_usd)
+                if outcome.boundary_reference_result_usd is not None
+                else None
+            ),
+            "terminal_source": outcome.terminal_source,
+            "data_gap_observed": outcome.data_gap_observed,
+            "reason": outcome.reason,
+        }
+        if outcome is not None
+        else None
+    )
+    eligibility = (
+        [
+            {
+                "key": name,
+                "label": name.replace("_", " ").title(),
+                "value": ("UNKNOWN" if fact.value is None else "YES" if fact.value else "NO"),
+                "reason": fact.reason,
+            }
+            for name, fact in (
+                ("decision_evaluable", outcome.eligibility.decision_evaluable),
+                ("future_path_known", outcome.eligibility.future_path_known),
+                ("future_path_continuous", outcome.eligibility.future_path_continuous),
+                ("shadow_entry_evaluable", outcome.eligibility.shadow_entry_evaluable),
+                (
+                    "terminal_economics_evaluable",
+                    outcome.eligibility.terminal_economics_evaluable,
+                ),
+                (
+                    "live_execution_attributable",
+                    outcome.eligibility.live_execution_attributable,
+                ),
+                (
+                    "strategy_population_eligible",
+                    outcome.eligibility.strategy_population_eligible,
+                ),
+                ("qualification_eligible", outcome.eligibility.qualification_eligible),
+            )
+        ]
+        if outcome is not None
+        else []
+    )
+    return {
+        "available": True,
+        "message": "Counterfactual whole-product lifecycle; no order, fill, or account Position.",
+        "facts": _display_rows(facts, {}),
+        "exit_intent": _optional_display_rows(intent, {}),
+        "outcome": _optional_display_rows(outcome_values, {}),
+        "eligibility": eligibility,
+    }
+
+
 def _structure_projection(
     value: object,
     quote_index: Mapping[str, Mapping[str, object]],
     *,
-    decision_state: str,
+    projection_state: str,
 ) -> dict[str, object]:
     if value is None:
-        if decision_state.upper() == "UNKNOWN":
+        if projection_state.upper() == "UNKNOWN":
             return {
                 "available": False,
                 "kind": "NOT_EVALUATED",
@@ -216,7 +305,7 @@ def _structure_projection(
             "legs": [],
             "metrics": [],
         }
-    structure = _mapping(value, "snapshot.decision.structure")
+    structure = _mapping(value, "snapshot.projection.structure")
     legs: list[dict[str, object]] = []
     seen: set[str] = set()
     for position, (field, label, action, option_type) in enumerate(_LEG_DEFINITIONS, start=1):
@@ -243,7 +332,7 @@ def _structure_projection(
     return {
         "available": True,
         "kind": "ASYMMETRIC_IRON_CONDOR",
-        "message": "One same-session, equal-quantity, defined-risk four-leg candidate.",
+        "message": "One same-session, equal-amount, USD-payoff-capped four-leg candidate.",
         "legs": legs,
         "metrics": _display_rows(structure, _STRUCTURE_METRIC_LABELS, exclude_leg_fields=True),
     }
@@ -275,50 +364,6 @@ def _optional_display_rows(
     return _display_rows(_mapping(value, "optional display object"), labels)
 
 
-def _funnel_rows(value: Mapping[str, object]) -> list[dict[str, str]]:
-    rows = [
-        {
-            "key": "current_node",
-            "label": "Current product node",
-            "value": _display_value(value.get("current_node")),
-        },
-        {
-            "key": "primary_blocker",
-            "label": "Earliest material blocker",
-            "value": _display_value(value.get("primary_blocker")),
-        },
-    ]
-    raw_stages = value.get("stages")
-    if isinstance(raw_stages, (str, bytes)) or not isinstance(raw_stages, Sequence):
-        raise TypeError("snapshot.funnel.stages must be an array")
-    seen: set[str] = set()
-    for index, raw_stage in enumerate(raw_stages):
-        stage = _mapping(raw_stage, f"snapshot.funnel.stages[{index}]")
-        name = _required_text(stage.get("name"), f"snapshot.funnel.stages[{index}].name")
-        status = _required_text(stage.get("status"), f"snapshot.funnel.stages[{index}].status")
-        if name in seen:
-            raise ValueError(f"snapshot funnel contains duplicate stage: {name}")
-        seen.add(name)
-        denominator = _non_negative_int(
-            stage.get("denominator"), f"snapshot.funnel.stages[{index}].denominator"
-        )
-        numerator = _non_negative_int(
-            stage.get("numerator"), f"snapshot.funnel.stages[{index}].numerator"
-        )
-        blockers = _text_sequence(
-            stage.get("blockers"), f"snapshot.funnel.stages[{index}].blockers"
-        )
-        suffix = f" · {', '.join(blockers)}" if blockers else ""
-        rows.append(
-            {
-                "key": name,
-                "label": _FUNNEL_STAGE_LABELS.get(name, name.replace("_", " ").title()),
-                "value": f"{status} · {numerator}/{denominator}{suffix}",
-            }
-        )
-    return rows
-
-
 def _display_rows(
     values: Mapping[str, object],
     labels: Mapping[str, str],
@@ -347,12 +392,11 @@ def _display_rows(
     return rows
 
 
-def _decision_tone(state: str) -> str:
+def _projection_tone(state: str) -> str:
     return {
-        "CANDIDATE": "positive",
-        "REVIEW": "warning",
+        "STRUCTURE_FOUND": "positive",
         "UNKNOWN": "warning",
-        "ABSTAIN": "neutral",
+        "NO_STRUCTURE": "neutral",
     }.get(state.upper(), "unknown")
 
 
@@ -381,12 +425,6 @@ def _mapping(value: object, field: str) -> Mapping[str, object]:
 def _required_text(value: object, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field} must be a non-empty string")
-    return value
-
-
-def _non_negative_int(value: object, field: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError(f"{field} must be a non-negative integer")
     return value
 
 

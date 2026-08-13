@@ -1,419 +1,488 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
 
-from optimatrix.engine import ShadowEngine
+from optimatrix.case_journal import CaseJournal
+from optimatrix.engine import Btc0DteShortVolEngine
 from optimatrix.lifecycle import (
-    EntryStatus,
-    ExitReason,
-    ExitScope,
-    PositionRiskAction,
+    FuturePathSummary,
+    ObservationStatus,
+    PositionAction,
     PositionState,
+    ShadowEntryStatus,
+    TerminalMethod,
+    WindowOutcome,
+    evaluate_shadow_entry,
+    evaluate_shadow_exit,
+    monitor_shadow_position,
+    open_trade_case,
+    settle_shadow_position,
+    window_outcome_eligibility,
 )
-from optimatrix.radar import Decision
-from optimatrix.scenarios import (
-    _opened_position,
-    _remove_ask,
-    _remove_bid,
-    _update_delta,
-    base_chain,
-    current_expiry,
-    market_context,
-    restamp_quotes,
+from optimatrix.market import (
+    EventState,
+    ExpirySettlementFact,
+    MarketContextEvidence,
+    PriceLevel,
+    SettlementEvidenceKind,
 )
+from optimatrix.observation_ledger import ObservationLedger
+from optimatrix.products import BTC
+from optimatrix.risk import ShadowCapacity
+from optimatrix.scenarios import base_chain, current_expiry, market_context
+from optimatrix.workbench import build_case_projection
 
 
-def test_risk_trigger_and_exit_price_projection_use_separate_boundaries(
+def _candidate(policy, tmp_path):
+    decision_at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    engine = Btc0DteShortVolEngine(policy=policy)
+    window = next(
+        item
+        for item in engine.decision_windows(at=decision_at)
+        if item.starts_at <= decision_at < item.ends_at
+    )
+    observation = engine.capture_observation(
+        quotes=base_chain(expiry=current_expiry(decision_at), observed_at=decision_at),
+        context=market_context(decision_at),
+    )
+    assessment = engine.assess_window(
+        ledger=ObservationLedger(tmp_path / "ledger"),
+        window=window,
+        observation=observation,
+        capacity=ShadowCapacity.empty(
+            channel_id=policy.channel_id,
+            market_session_id=window.market_session_id,
+            known_at=window.input_deadline,
+        ),
+        known_at=window.input_deadline,
+    )
+    case = open_trade_case(assessment.record, policy)
+    return engine, assessment.record, case
+
+
+def _observation(engine, at, *, event=EventState.NONE, quotes=None, evidence=None):
+    bound_quotes = quotes or base_chain(expiry=current_expiry(at), observed_at=at)
+    return engine.capture_observation(
+        quotes=bound_quotes,
+        context=market_context(
+            at,
+            event=event,
+            evidence=evidence,
+            book_names=tuple(quote.instrument_name for quote in bound_quotes),
+        ),
+    )
+
+
+def _entered_case(policy, tmp_path):
+    engine, record, case = _candidate(policy, tmp_path)
+    entry_at = record.known_at + timedelta(seconds=30)
+    observation = _observation(engine, entry_at)
+    entered, evaluation = evaluate_shadow_entry(
+        case,
+        observation=observation,
+        policy=policy,
+        known_at=observation.known_at,
+    )
+    assert evaluation.status is ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE
+    return engine, entered
+
+
+def test_atomic_entry_creates_one_whole_product_shadow_position(policy, tmp_path) -> None:
+    _engine, case = _entered_case(policy, tmp_path)
+
+    assert case.entry_final
+    assert case.position_id is not None
+    assert case.position_state is PositionState.MONITORING
+    assert case.entry_native_net_credit is not None
+    assert not hasattr(case, "put_side")
+    assert not hasattr(case, "residual_wings")
+
+
+def test_entry_requires_frozen_legs_and_strictly_future_quote_boundaries(
     policy,
     tmp_path,
 ) -> None:
-    now, engine, position, quotes = _opened_position(policy, tmp_path)
-    risk_at = now + timedelta(hours=2)
-    risk_quotes = _update_delta(
-        quotes,
-        put_delta=Decimal("-0.58"),
-        call_delta=Decimal("0.10"),
-        observed_at=risk_at,
+    engine, record, case = _candidate(policy, tmp_path)
+    boundary_cut = record.known_at + timedelta(seconds=1)
+    boundary_observation = _observation(engine, boundary_cut)
+    unknown, evaluation = evaluate_shadow_entry(
+        case,
+        observation=boundary_observation,
+        policy=policy,
+        known_at=boundary_observation.known_at,
     )
-    observation = engine.observe_position(
-        position=position,
-        quotes=risk_quotes,
-        context=market_context(risk_at, index=Decimal("96000")),
-    )
-    assert observation.action is PositionRiskAction.EXIT_DUTY_ARMED
-    assert observation.instruction is not None
-    assert observation.instruction.scope is ExitScope.BOTH_SIDES
-    assert observation.instruction.reason is ExitReason.PUT_SIDE_DELTA
-    assert position.put_side.short_open and position.call_side.short_open
+    assert evaluation.status is ShadowEntryStatus.UNKNOWN
+    assert evaluation.reason == "ENTRY_QUOTES_NOT_STRICTLY_FUTURE"
+    assert unknown.position_id is None
 
-    same_boundary = engine.observe_position(
-        position=position,
-        quotes=risk_quotes,
-        context=market_context(risk_at, index=Decimal("96000")),
+    later = record.known_at + timedelta(seconds=30)
+    altered = tuple(
+        replace(quote, strike=quote.strike + Decimal("1"))
+        if quote.instrument_name.endswith("95000-P")
+        else quote
+        for quote in base_chain(expiry=current_expiry(later), observed_at=later)
     )
-    assert same_boundary.action is PositionRiskAction.EXIT_DUTY_PENDING
-    assert any("NOT_STRICTLY_FUTURE" in blocker for blocker in same_boundary.blockers)
-    assert position.put_side.short_open and position.call_side.short_open
-
-    exit_at = risk_at + timedelta(minutes=1)
-    exit_quotes = restamp_quotes(risk_quotes, exit_at)
-    exit_quotes = _remove_bid(exit_quotes, instrument_suffix="93000-P")
-    exit_quotes = _remove_bid(exit_quotes, instrument_suffix="107000-C")
-    projected = engine.observe_position(
-        position=position,
-        quotes=exit_quotes,
-        context=market_context(exit_at, index=Decimal("96000")),
+    altered_observation = _observation(engine, later, quotes=altered)
+    unknown, evaluation = evaluate_shadow_entry(
+        case,
+        observation=altered_observation,
+        policy=policy,
+        known_at=altered_observation.known_at,
     )
-    assert projected.action is PositionRiskAction.SHORT_RISK_FLAT
-    assert not position.has_short_risk
-    assert position.residual_wing_count == 2
-    assert position.state is PositionState.SHORT_RISK_FLAT
-    assert position.outcome is None
+    assert evaluation.status is ShadowEntryStatus.UNKNOWN
+    assert evaluation.reason == "SELECTED_STRUCTURE_QUOTES_MISSING"
+    assert unknown.position_id is None
 
 
-def test_full_condor_risk_trigger_exits_both_sides_as_one_base_duty(policy, tmp_path) -> None:
-    now, engine, position, quotes = _opened_position(policy, tmp_path)
-    down_at = now + timedelta(hours=2)
-    first = engine.observe_position(
-        position=position,
-        quotes=_update_delta(
-            quotes,
-            put_delta=Decimal("-0.6"),
-            call_delta=Decimal("0.08"),
-            observed_at=down_at,
-        ),
-        context=market_context(down_at, index=Decimal("96000")),
-    )
-    exit_at = down_at + timedelta(minutes=1)
-    second = engine.observe_position(
-        position=position,
-        quotes=restamp_quotes(quotes, exit_at),
-        context=market_context(exit_at, index=Decimal("96000")),
-    )
-    assert first.action is PositionRiskAction.EXIT_DUTY_ARMED
-    assert first.instruction is not None and first.instruction.scope is ExitScope.BOTH_SIDES
-    assert second.action is PositionRiskAction.PORTFOLIO_TERMINAL
-    assert position.outcome is not None
-    assert position.state is PositionState.TERMINAL
-
-
-@pytest.mark.parametrize(
-    ("missing_wing", "expected_status", "expected_scope"),
-    (
-        ("107000-C", EntryStatus.PUT_SIDE_ONLY, ExitScope.PUT_SIDE),
-        ("93000-P", EntryStatus.CALL_SIDE_ONLY, ExitScope.CALL_SIDE),
-    ),
-)
-def test_partial_entry_is_immediate_remediation_not_strategy_carry(
+def test_missing_leg_stays_unknown_and_terminalizes_without_position_at_deadline(
     policy,
     tmp_path,
-    missing_wing,
-    expected_status,
-    expected_scope,
 ) -> None:
-    at = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(at)
-    engine = ShadowEngine(policy=policy, case_root=tmp_path)
-    chain = base_chain(expiry=current_expiry(at), observed_at=at)
-    decision = engine.evaluate(quotes=chain, context=context)
-    assert decision.decision is Decision.CANDIDATE
-    case = engine.open_decision_case(decision=decision, opened_at=at)
-    entry_at = at + timedelta(minutes=1)
-    result, position = engine.attempt_entry(
-        case=case,
-        quotes=restamp_quotes(
-            _remove_ask(chain, instrument_suffix=missing_wing),
-            entry_at,
+    engine, record, case = _candidate(policy, tmp_path)
+    observed_at = record.known_at + timedelta(seconds=30)
+    quotes = base_chain(expiry=current_expiry(observed_at), observed_at=observed_at)[:-1]
+    observation = _observation(engine, observed_at, quotes=quotes)
+
+    provisional, first = evaluate_shadow_entry(
+        case,
+        observation=observation,
+        policy=policy,
+        known_at=observation.known_at,
+    )
+    assert first.status is ShadowEntryStatus.UNKNOWN
+    assert not first.final
+    assert provisional.position_id is None
+
+    terminal, final = evaluate_shadow_entry(
+        provisional,
+        observation=observation,
+        policy=policy,
+        known_at=case.entry_deadline,
+    )
+    assert final.status is ShadowEntryStatus.UNKNOWN
+    assert final.final
+    assert terminal.position_id is None
+    assert terminal.outcome is not None
+    assert terminal.outcome.terminal_method is TerminalMethod.NO_POSITION
+
+
+def test_complete_but_shallow_entry_is_not_evaluable_and_never_partial(
+    policy,
+    tmp_path,
+) -> None:
+    engine, record, case = _candidate(policy, tmp_path)
+    observed_at = record.known_at + timedelta(seconds=30)
+    quotes = tuple(
+        replace(quote, bid=(PriceLevel(quote.bid[0].price, Decimal("0.05")),))
+        if quote.instrument_name.endswith("95000-P")
+        else quote
+        for quote in base_chain(expiry=current_expiry(observed_at), observed_at=observed_at)
+    )
+    observation = _observation(engine, observed_at, quotes=quotes)
+
+    terminal, evaluation = evaluate_shadow_entry(
+        case,
+        observation=observation,
+        policy=policy,
+        known_at=observation.known_at,
+    )
+    assert evaluation.status is ShadowEntryStatus.SHADOW_ATOMIC_NOT_EVALUABLE
+    assert terminal.position_id is None
+    assert terminal.outcome is not None
+    assert terminal.outcome.eligibility.shadow_entry_evaluable.value is False
+
+
+def test_data_gap_preserves_position_and_cannot_create_exit_intent(policy, tmp_path) -> None:
+    engine, case = _entered_case(policy, tmp_path)
+    gap_at = case.entry_observed_at + timedelta(seconds=policy.lifecycle.monitoring_cadence_seconds)
+    unknown_evidence = MarketContextEvidence.unknown()
+    gap = _observation(engine, gap_at, evidence=unknown_evidence)
+
+    updated, evaluation = monitor_shadow_position(
+        case,
+        observation=gap,
+        policy=policy,
+    )
+    assert evaluation.observation_status is ObservationStatus.UNKNOWN
+    assert evaluation.management_action is None
+    assert updated.position_id == case.position_id
+    assert updated.exit_intent is None
+    assert updated.gap_observed
+
+
+def test_first_trigger_is_immutable_and_exit_requires_strictly_later_cut(
+    policy,
+    tmp_path,
+) -> None:
+    engine, case = _entered_case(policy, tmp_path)
+    trigger_at = case.entry_observed_at + timedelta(
+        seconds=policy.lifecycle.monitoring_cadence_seconds
+    )
+    trigger = _observation(engine, trigger_at, event=EventState.LIVE_EVENT)
+    armed, monitor = monitor_shadow_position(case, observation=trigger, policy=policy)
+    assert monitor.management_action is PositionAction.EXIT_WHOLE_PRODUCT
+    assert armed.exit_intent is not None
+    assert armed.exit_intent.reason == "EVENT_OR_SHOCK"
+
+    with pytest.raises(ValueError, match="strictly later"):
+        evaluate_shadow_exit(armed, observation=trigger, policy=policy)
+
+    exit_at = trigger_at + timedelta(seconds=2)
+    later = _observation(engine, exit_at)
+    terminal, exit_evaluation = evaluate_shadow_exit(
+        armed,
+        observation=later,
+        policy=policy,
+    )
+    assert exit_evaluation.terminal
+    assert terminal.position_state is PositionState.TERMINAL
+    assert terminal.exit_intent == armed.exit_intent
+    assert terminal.outcome is not None
+    assert terminal.outcome.terminal_method is TerminalMethod.WHOLE_PRODUCT_EXIT
+    assert terminal.outcome.native_result_btc is not None
+    assert terminal.outcome.shadow_model_id == "SYNTHETIC_FOUR_LEG_COMPONENT_BOOK_ESTIMATE_V1"
+    assert terminal.outcome.eligibility.future_path_known.value is None
+    assert terminal.outcome.eligibility.future_path_continuous.value is None
+    assert terminal.outcome.eligibility.strategy_population_eligible.value is None
+    projection = build_case_projection(terminal)
+    assert projection["available"] is True
+    eligibility = projection["eligibility"]
+    assert isinstance(eligibility, list)
+    assert len(eligibility) == 8
+    assert "realized" not in json.dumps(projection).lower()
+
+
+def test_close_depth_unknown_is_not_a_data_gap(policy, tmp_path) -> None:
+    engine, case = _entered_case(policy, tmp_path)
+    trigger_at = case.entry_observed_at + timedelta(
+        seconds=policy.lifecycle.monitoring_cadence_seconds
+    )
+    armed, _ = monitor_shadow_position(
+        case,
+        observation=_observation(engine, trigger_at, event=EventState.LIVE_EVENT),
+        policy=policy,
+    )
+    exit_at = trigger_at + timedelta(seconds=2)
+    shallow = tuple(
+        replace(quote, ask=(PriceLevel(quote.ask[0].price, Decimal("0.05")),))
+        if quote.instrument_name.endswith("95000-P")
+        else quote
+        for quote in base_chain(expiry=current_expiry(exit_at), observed_at=exit_at)
+    )
+    unresolved, evaluation = evaluate_shadow_exit(
+        armed,
+        observation=_observation(engine, exit_at, quotes=shallow),
+        policy=policy,
+    )
+    assert evaluation.observation_status is ObservationStatus.UNKNOWN
+    assert not evaluation.terminal
+    assert not unresolved.gap_observed
+    assert unresolved.position_id == armed.position_id
+    assert unresolved.exit_intent == armed.exit_intent
+
+
+def test_unknown_exit_preserves_intent_then_official_settlement_can_terminalize(
+    policy,
+    tmp_path,
+) -> None:
+    engine, case = _entered_case(policy, tmp_path)
+    trigger_at = case.entry_observed_at + timedelta(
+        seconds=policy.lifecycle.monitoring_cadence_seconds
+    )
+    armed, _ = monitor_shadow_position(
+        case,
+        observation=_observation(engine, trigger_at, event=EventState.LIVE_EVENT),
+        policy=policy,
+    )
+    gap_at = trigger_at + timedelta(seconds=1)
+    gap = _observation(engine, gap_at, evidence=MarketContextEvidence.unknown())
+    unresolved, evaluation = evaluate_shadow_exit(armed, observation=gap, policy=policy)
+    assert not evaluation.terminal
+    assert unresolved.position_id == armed.position_id
+    assert unresolved.exit_intent == armed.exit_intent
+
+    expiry = current_expiry(gap_at)
+    terminal = settle_shadow_position(
+        unresolved,
+        settlement=ExpirySettlementFact(
+            product_id=BTC.product_id,
+            expiry=expiry,
+            delivery_price_usd=Decimal("110000"),
+            known_at=expiry,
+            evidence_kind=SettlementEvidenceKind.DETERMINISTIC_ACCEPTANCE_FIXTURE,
+            source_id="DETERMINISTIC_DELIVERY_FIXTURE",
+            method_id="FIXED_DELIVERY_PRICE_V1",
         ),
-        context=replace(context, now=entry_at),
-        attempted_at=entry_at,
+        policy=policy,
     )
-    assert result.status is expected_status
-    assert position is not None and position.has_short_risk
-    assert position.state is PositionState.EXIT_REQUIRED
-    assert position.first_instruction is not None
-    assert position.first_instruction.scope is expected_scope
-    assert position.first_instruction.reason is ExitReason.ENTRY_ACQUISITION_INCOMPLETE
-
-    exit_at = entry_at + timedelta(minutes=1)
-    observation = engine.observe_position(
-        position=position,
-        quotes=restamp_quotes(chain, exit_at),
-        context=replace(context, now=exit_at),
-    )
-    assert observation.instruction is not None
-    assert observation.instruction.reason is ExitReason.ENTRY_ACQUISITION_INCOMPLETE
-    assert not position.has_short_risk
-    assert position.outcome is not None
-    assert not position.outcome.strategy_outcome_eligible
-    assert position.outcome.outcome_population == "ENTRY_ACQUISITION_OPERATIONAL"
+    assert terminal.position_state is PositionState.TERMINAL
+    assert terminal.outcome is not None
+    assert terminal.outcome.terminal_method is TerminalMethod.CONTRACT_SETTLEMENT
+    assert terminal.outcome.eligibility.future_path_continuous.value is False
+    assert terminal.outcome.eligibility.terminal_economics_evaluable.value is True
 
 
-def test_full_entry_requires_four_leg_attempt_coherence(policy, tmp_path) -> None:
-    at = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(at)
-    chain = base_chain(expiry=current_expiry(at), observed_at=at)
-    engine = ShadowEngine(policy=policy, case_root=tmp_path)
-    case = engine.open_decision_case(
-        decision=engine.evaluate(quotes=chain, context=context),
-        opened_at=at,
+def test_expiry_uses_frozen_structure_and_requires_matching_settlement_fact(
+    policy,
+    tmp_path,
+) -> None:
+    engine, case = _entered_case(policy, tmp_path)
+    expiry = current_expiry(case.entry_observed_at)
+    at_expiry = _observation(engine, expiry)
+    preserved, evaluation = monitor_shadow_position(
+        case,
+        observation=at_expiry,
+        policy=policy,
     )
-    entry_at = at + timedelta(minutes=1)
-    entry_quotes = list(restamp_quotes(chain, entry_at))
-    for index in (0, 1):
-        entry_quotes[index] = replace(
-            entry_quotes[index],
-            source_timestamp_ms=entry_quotes[index].source_timestamp_ms - 6500,
-            received_timestamp_ms=entry_quotes[index].received_timestamp_ms - 4500,
+    assert evaluation.management_action is PositionAction.SETTLE_AT_EXPIRY
+    assert preserved.position_id == case.position_id
+    assert preserved.outcome is None
+
+    wrong_expiry = expiry + timedelta(days=1)
+    with pytest.raises(ValueError, match="expiry does not match"):
+        settle_shadow_position(
+            case,
+            settlement=ExpirySettlementFact(
+                product_id=BTC.product_id,
+                expiry=wrong_expiry,
+                delivery_price_usd=Decimal("110000"),
+                known_at=wrong_expiry,
+                evidence_kind=SettlementEvidenceKind.DETERMINISTIC_ACCEPTANCE_FIXTURE,
+                source_id="DETERMINISTIC_DELIVERY_FIXTURE",
+                method_id="FIXED_DELIVERY_PRICE_V1",
+            ),
+            policy=policy,
         )
-    result, position = engine.attempt_entry(
-        case=case,
-        quotes=tuple(entry_quotes),
-        context=replace(context, now=entry_at),
-        attempted_at=entry_at,
-    )
-    assert result.status is EntryStatus.TWO_SIDES_INCOHERENT
-    assert result.blockers == ("FOUR_LEG_ENTRY_NOT_COHERENT",)
-    assert position is not None and position.has_short_risk
-    assert position.state is PositionState.EXIT_REQUIRED
-    assert position.first_instruction is not None
-    assert position.first_instruction.scope is ExitScope.BOTH_SIDES
-    assert position.first_instruction.reason is ExitReason.ENTRY_ACQUISITION_INCOMPLETE
 
 
-def test_coherent_full_entry_stays_normal_strategy_carry(policy, tmp_path) -> None:
-    _now, _engine, position, _quotes = _opened_position(policy, tmp_path)
-    assert position.entry_status is EntryStatus.FULL_ENTRY
-    assert position.state is PositionState.MONITORING
-    assert position.first_instruction is None
-
-
-def test_full_entry_outcome_remains_strategy_eligible_after_two_sided_risk_exit(
+def test_case_journal_is_idempotent_recovers_prefix_and_rejects_tampering(
     policy,
     tmp_path,
 ) -> None:
-    now, engine, position, quotes = _opened_position(policy, tmp_path)
-    down_at = now + timedelta(hours=2)
-    engine.observe_position(
-        position=position,
-        quotes=_update_delta(
-            quotes,
-            put_delta=Decimal("-0.60"),
-            call_delta=Decimal("0.08"),
-            observed_at=down_at,
+    engine, record, case = _candidate(policy, tmp_path)
+    journal = CaseJournal(tmp_path / "case-journal")
+    assert journal.append(case)
+    assert not journal.append(case)
+    entry_at = record.known_at + timedelta(seconds=30)
+    entered, _ = engine.evaluate_entry(
+        journal=journal,
+        case=case,
+        observation=_observation(engine, entry_at),
+        known_at=entry_at,
+    )
+    assert journal.recover(case.identity) == entered
+    assert len(journal.read(case.identity)) == 2
+
+    path = journal.path_for(case.identity)
+    with path.open("ab") as handle:
+        handle.write(b'{"sequence":2')
+    assert journal.recover(case.identity) == entered
+    monitor_at = entry_at + timedelta(seconds=policy.lifecycle.monitoring_cadence_seconds)
+    monitored, _ = engine.monitor_position(
+        journal=journal,
+        case=entered,
+        observation=_observation(engine, monitor_at),
+    )
+    assert journal.recover(case.identity) == monitored
+    assert len(journal.read(case.identity)) == 3
+
+    records = path.read_text(encoding="utf-8").splitlines()
+    tampered = json.loads(records[-1])
+    tampered["previous_snapshot_id"] = "sha256:" + "0" * 64
+    records[-1] = json.dumps(tampered, sort_keys=True)
+    path.write_text("\n".join(records) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="chain is broken"):
+        journal.recover(case.identity)
+
+
+def test_case_journal_finalizes_same_observation_and_recovers_truncated_tail(
+    policy,
+    tmp_path,
+) -> None:
+    engine, record, case = _candidate(policy, tmp_path)
+    journal = CaseJournal(tmp_path / "case-journal")
+    journal.append(case)
+    observed_at = record.known_at + timedelta(seconds=30)
+    quotes = base_chain(expiry=current_expiry(observed_at), observed_at=observed_at)[:-1]
+    observation = _observation(engine, observed_at, quotes=quotes)
+    provisional, _ = engine.evaluate_entry(
+        journal=journal,
+        case=case,
+        observation=observation,
+        known_at=observation.known_at,
+    )
+    terminal, _ = engine.evaluate_entry(
+        journal=journal,
+        case=provisional,
+        observation=observation,
+        known_at=case.entry_deadline,
+    )
+    assert terminal.outcome is not None
+    assert len(journal.read(case.identity)) == 3
+
+    path = journal.path_for(case.identity)
+    with path.open("ab") as handle:
+        handle.write(b'{"sequence":3')
+    assert journal.recover(case.identity) == terminal
+    assert path.read_bytes().endswith(b"\n")
+    assert len(journal.read(case.identity)) == 3
+
+
+def test_case_journal_rejects_mutation_of_frozen_case_facts(policy, tmp_path) -> None:
+    _engine, _record, case = _candidate(policy, tmp_path)
+    journal = CaseJournal(tmp_path / "case-journal")
+    journal.append(case)
+    with pytest.raises(ValueError, match="frozen TradeCase facts"):
+        journal.append(replace(case, entry_deadline=case.entry_deadline + timedelta(seconds=1)))
+
+
+def test_window_outcome_is_distinct_append_once_population(policy, tmp_path) -> None:
+    _engine, record, _case = _candidate(policy, tmp_path)
+    ledger = ObservationLedger(tmp_path / "outcomes")
+    ledger.append(record)
+    horizon = record.window.ends_at + timedelta(hours=1)
+    outcome = WindowOutcome(
+        decision_window_id=record.window.identity,
+        horizon_starts_at=record.window.ends_at,
+        horizon_ends_at=horizon,
+        known_at=horizon,
+        future_path_known=True,
+        future_path_continuous=True,
+        expiry_settlement=None,
+        future_path=FuturePathSummary(
+            source_id="DETERMINISTIC_PUBLIC_PATH_FIXTURE",
+            method_id="WINDOW_TO_PLUS_ONE_HOUR_SUMMARY_V1",
+            starts_at=record.window.ends_at,
+            ends_at=horizon,
+            observation_count=2,
+            start_index_price_usd=Decimal("100000"),
+            end_index_price_usd=Decimal("101000"),
+            minimum_index_price_usd=Decimal("99000"),
+            maximum_index_price_usd=Decimal("102000"),
+            maximum_rv_acceleration=Decimal("0.2"),
         ),
-        context=market_context(down_at, index=Decimal("96000")),
+        regime_labels=("DETERMINISTIC_FORWARD_PATH",),
+        reason=None,
+        eligibility=window_outcome_eligibility(
+            decision_evaluable=True,
+            future_path_known=True,
+            future_path_continuous=True,
+        ),
     )
-    exit_at = down_at + timedelta(minutes=1)
-    engine.observe_position(
-        position=position,
-        quotes=restamp_quotes(quotes, exit_at),
-        context=market_context(exit_at, index=Decimal("96000")),
-    )
-    assert position.outcome is not None
-    assert position.outcome.strategy_outcome_eligible
-    assert position.outcome.outcome_population == "IRON_CONDOR_STRATEGY"
-    assert position.outcome.strategy_ineligibility_reason is None
+    assert ledger.append_outcome(outcome)
+    assert not ledger.append_outcome(outcome)
+    assert ledger.read_outcomes() == (outcome,)
+    assert ledger.read() == (record,)
+    summary = ledger.summarize_outcomes(expected_windows=(record.window,))
+    assert summary.denominator == summary.recorded == 1
+    assert summary.future_path_known == summary.continuous == 1
+    assert summary.strategy_population_eligible == 1
 
-
-def test_decision_and_entry_are_single_terminal_transitions(policy, tmp_path) -> None:
-    at = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(at)
-    chain = base_chain(expiry=current_expiry(at), observed_at=at)
-    engine = ShadowEngine(policy=policy, case_root=tmp_path)
-    decision = engine.evaluate(quotes=chain, context=context)
-    case = engine.open_decision_case(decision=decision, opened_at=at)
-    with pytest.raises(ValueError, match="already exists"):
-        engine.open_decision_case(decision=decision, opened_at=at)
-
-    entry_at = at + timedelta(minutes=1)
-    entry_quotes = restamp_quotes(chain, entry_at)
-    result, position = engine.attempt_entry(
-        case=case,
-        quotes=entry_quotes,
-        context=replace(context, now=entry_at),
-        attempted_at=entry_at,
-    )
-    assert result.status is EntryStatus.FULL_ENTRY
-    assert position is not None
-    with pytest.raises(ValueError, match="terminal entry result"):
-        engine.attempt_entry(
-            case=case,
-            quotes=entry_quotes,
-            context=replace(context, now=entry_at),
-            attempted_at=entry_at,
-        )
-
-
-def test_settlement_is_idempotent_and_not_journaled_twice(policy, tmp_path) -> None:
-    now, engine, position, _quotes = _opened_position(policy, tmp_path)
-    settled_at = current_expiry(now)
-    first = engine.settle(
-        position=position,
-        delivery_price=Decimal("101000"),
-        settled_at=settled_at,
-    )
-    journal_path = next(tmp_path.glob("*.jsonl"))
-    before = journal_path.read_text(encoding="utf-8")
-    second = engine.settle(
-        position=position,
-        delivery_price=Decimal("99000"),
-        settled_at=settled_at + timedelta(minutes=1),
-    )
-    after = journal_path.read_text(encoding="utf-8")
-    assert second is first
-    assert after == before
-
-
-def test_pending_exit_respects_in_process_retry_cadence(policy, tmp_path) -> None:
-    now, engine, position, quotes = _opened_position(policy, tmp_path)
-    first_at = now + timedelta(hours=2)
-    risk_quotes = _update_delta(
-        quotes,
-        put_delta=Decimal("-0.58"),
-        call_delta=Decimal("0.10"),
-        observed_at=first_at,
-    )
-    first = engine.observe_position(
-        position=position,
-        quotes=risk_quotes,
-        context=market_context(first_at, index=Decimal("96000")),
-    )
-    assert first.action is PositionRiskAction.EXIT_DUTY_ARMED
-    assert position.put_side.short_open
-
-    first_attempt_at = first_at + timedelta(seconds=1)
-    unavailable = _remove_ask(
-        restamp_quotes(risk_quotes, first_attempt_at),
-        instrument_suffix="95000-P",
-    )
-    attempted = engine.observe_position(
-        position=position,
-        quotes=unavailable,
-        context=market_context(first_attempt_at, index=Decimal("96000")),
-    )
-    assert attempted.action is PositionRiskAction.SHORT_RISK_REDUCED
-    assert position.put_side.short_open
-    assert not position.call_side.short_open
-
-    too_soon = first_attempt_at + timedelta(seconds=10)
-    available_soon = _update_delta(
-        quotes,
-        put_delta=Decimal("-0.58"),
-        call_delta=Decimal("0.10"),
-        observed_at=too_soon,
-    )
-    engine.observe_position(
-        position=position,
-        quotes=available_soon,
-        context=market_context(too_soon, index=Decimal("96000")),
-    )
-    assert position.put_side.short_open
-
-    after_retry = first_attempt_at + timedelta(seconds=31)
-    available_later = _update_delta(
-        quotes,
-        put_delta=Decimal("-0.58"),
-        call_delta=Decimal("0.10"),
-        observed_at=after_retry,
-    )
-    engine.observe_position(
-        position=position,
-        quotes=available_later,
-        context=market_context(after_retry, index=Decimal("96000")),
-    )
-    assert not position.put_side.short_open
-
-
-def test_live_shock_after_entry_requires_both_side_risk_exit(policy, tmp_path) -> None:
-    from optimatrix.market import EventState
-
-    now, engine, position, quotes = _opened_position(policy, tmp_path)
-    shock_at = now + timedelta(hours=2)
-    observation = engine.observe_position(
-        position=position,
-        quotes=restamp_quotes(quotes, shock_at),
-        context=market_context(shock_at, event=EventState.UNSCHEDULED_SHOCK),
-    )
-    assert observation.instruction is not None
-    assert observation.instruction.scope is ExitScope.BOTH_SIDES
-    assert observation.instruction.reason is ExitReason.EVENT_OR_SHOCK
-    assert position.has_short_risk
-    assert position.state is PositionState.EXIT_REQUIRED
-
-    exit_at = shock_at + timedelta(minutes=1)
-    projected = engine.observe_position(
-        position=position,
-        quotes=restamp_quotes(quotes, exit_at),
-        context=market_context(exit_at, event=EventState.UNSCHEDULED_SHOCK),
-    )
-    assert projected.action is PositionRiskAction.PORTFOLIO_TERMINAL
-    assert not position.has_short_risk
-
-
-def test_missing_short_quote_is_unknown_and_arms_two_sided_exit(policy, tmp_path) -> None:
-    now, engine, position, quotes = _opened_position(policy, tmp_path)
-    observed_at = now + timedelta(hours=2)
-    incomplete = tuple(
-        quote
-        for quote in restamp_quotes(quotes, observed_at)
-        if not quote.instrument_name.endswith("95000-P")
-    )
-    observation = engine.observe_position(
-        position=position,
-        quotes=incomplete,
-        context=market_context(observed_at),
-    )
-    assert not observation.risk_context_known
-    assert observation.action is PositionRiskAction.EXIT_DUTY_ARMED
-    assert observation.instruction is not None
-    assert observation.instruction.reason is ExitReason.RISK_CONTEXT_UNKNOWN
-    assert observation.instruction.scope is ExitScope.BOTH_SIDES
-    assert "PUT_SHORT_RISK_QUOTE_MISSING" in observation.blockers
-    assert position.put_side.short_open and position.call_side.short_open
-
-
-def test_entry_deadline_and_future_quote_boundaries_are_enforced(policy, tmp_path) -> None:
-    at = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(at)
-    chain = base_chain(expiry=current_expiry(at), observed_at=at)
-    engine = ShadowEngine(policy=policy, case_root=tmp_path)
-    decision = engine.evaluate(quotes=chain, context=context)
-    case = engine.open_decision_case(decision=decision, opened_at=at)
-
-    late = at + timedelta(milliseconds=policy.shadow.entry_acquisition_window_ms + 1)
-    result, position = engine.attempt_entry(
-        case=case,
-        quotes=restamp_quotes(chain, late),
-        context=replace(context, now=late),
-        attempted_at=late,
-    )
-    assert result.status is EntryStatus.NO_ENTRY
-    assert result.blockers == ("ENTRY_ACQUISITION_DEADLINE_EXCEEDED",)
-    assert position is None
-
-
-def test_pending_decision_case_survives_process_restart(policy, tmp_path) -> None:
-    at = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(at)
-    chain = base_chain(expiry=current_expiry(at), observed_at=at)
-    first = ShadowEngine(policy=policy, case_root=tmp_path)
-    decision = first.evaluate(quotes=chain, context=context)
-    case = first.open_decision_case(decision=decision, opened_at=at)
-
-    restarted = ShadowEngine(policy=policy, case_root=tmp_path)
-    recovered = restarted.recover_decision_case(case.case_identity)
-    assert recovered == case
-    entry_at = at + timedelta(minutes=1)
-    result, position = restarted.attempt_entry(
-        case=recovered,
-        quotes=restamp_quotes(chain, entry_at),
-        context=replace(context, now=entry_at),
-        attempted_at=entry_at,
-    )
-    assert result.status is EntryStatus.FULL_ENTRY
-    assert position is not None
+    orphan = ObservationLedger(tmp_path / "orphan")
+    with pytest.raises(ValueError, match="matching DecisionRecord"):
+        orphan.append_outcome(outcome)

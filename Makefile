@@ -40,7 +40,7 @@ simulate: clean-build
 	$(PYTHON) -m optimatrix simulate \
 		--scenario all \
 		--output build/business-acceptance.json \
-		--case-root build/simulation-cases
+		--ledger-root build/simulation-ledger
 
 check-core: compile test simulate
 

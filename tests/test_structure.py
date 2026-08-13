@@ -1,66 +1,86 @@
 from __future__ import annotations
 
+import random
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from optimatrix.engine import ShadowEngine
+from optimatrix.engine import Btc0DteShortVolEngine
 from optimatrix.market import PriceLevel
-from optimatrix.product_funnel import FunnelStageName, FunnelStageStatus, project_product_funnel
-from optimatrix.radar import Decision
 from optimatrix.scenarios import (
     all_joint_adversarial_chain,
     base_chain,
     current_expiry,
     market_context,
 )
-from optimatrix.structure import select_iron_condor
+from optimatrix.structure import select_btc_0dte_condor
 
 
-def test_all_joint_search_finds_the_only_hard_eligible_condor(policy) -> None:
-    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(now)
-    selection = select_iron_condor(
-        quotes=all_joint_adversarial_chain(
-            expiry=current_expiry(now),
-            observed_at=now,
+def _observation(policy, quotes, at):
+    return Btc0DteShortVolEngine(policy=policy).capture_observation(
+        quotes=quotes,
+        context=market_context(
+            at,
+            book_names=tuple(quote.instrument_name for quote in quotes),
         ),
-        context=context,
+    )
+
+
+def test_direct_four_leg_selection_is_order_invariant_and_bounded(policy) -> None:
+    at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    quotes = all_joint_adversarial_chain(expiry=current_expiry(at), observed_at=at)
+    baseline = select_btc_0dte_condor(
+        observation=_observation(policy, quotes, at),
         policy=policy,
     )
+    assert baseline.selected is not None
+    assert baseline.legal_structure_count > 0
+    assert baseline.price_evaluable_count > 0
+    assert baseline.policy_eligible_count > 0
+    assert len(baseline.retained_alternatives) <= policy.structure.maximum_retained_alternatives
+    for seed in range(30):
+        shuffled = list(quotes)
+        random.Random(seed).shuffle(shuffled)
+        selected = select_btc_0dte_condor(
+            observation=_observation(policy, tuple(shuffled), at),
+            policy=policy,
+        )
+        assert selected.selected is not None
+        assert selected.selected.identity == baseline.selected.identity
+        assert selected.legal_structure_count == baseline.legal_structure_count
+        assert selected.price_evaluable_count == baseline.price_evaluable_count
 
-    assert selection.considered_put_verticals == 4
-    assert selection.considered_call_verticals == 1
-    assert selection.considered_condors == 4
-    assert selection.hard_eligible_condors == 1
-    assert selection.selected is not None
-    assert selection.selected.long_put.instrument_name == "BTC-X-93000-P"
-    assert selection.selected.net_delta == 0
 
-
-def test_short_buyback_depth_is_a_route_gate_not_a_structure_absence(
-    policy,
-    tmp_path,
-) -> None:
-    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    quotes = list(base_chain(expiry=current_expiry(now), observed_at=now))
-    short_put = quotes[1]
-    quotes[1] = replace(
-        short_put,
-        ask=(PriceLevel(short_put.ask[0].price, Decimal("0.05")),),
+def test_shallow_reverse_depth_is_diagnostic_not_a_hard_veto(policy) -> None:
+    at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    quotes = tuple(
+        replace(quote, ask=(PriceLevel(quote.ask[0].price, Decimal("0.05")),))
+        if quote.instrument_name.endswith("95000-P") or quote.instrument_name.endswith("105000-C")
+        else quote
+        for quote in base_chain(expiry=current_expiry(at), observed_at=at)
     )
-    engine = ShadowEngine(policy=policy, case_root=tmp_path)
-    decision = engine.evaluate(quotes=tuple(quotes), context=market_context(now))
-    funnel = project_product_funnel(decision, policy_identity=policy.identity)
+    selection = select_btc_0dte_condor(
+        observation=_observation(policy, quotes, at),
+        policy=policy,
+    )
+    assert selection.selected is not None
+    assert min(selection.selected.close_depth_coverage) == Decimal("0.5")
+    assert selection.selected.pricing.observed_close_native_debit is None
+    assert not any("BUYBACK" in blocker for blocker in selection.blockers)
 
-    assert decision.decision is Decision.ABSTAIN
-    assert decision.structure is None
-    assert "NO_JOINT_CANDIDATE_PASSES_HARD_UNDERWRITING" in decision.blockers
-    assert "PUT_SHORT_BUYBACK_DEPTH_INSUFFICIENT" in decision.blockers
-    structure_stage = funnel.stages[4]
-    route_stage = funnel.stages[5]
-    assert structure_stage.name is FunnelStageName.TWO_SIDED_STRUCTURE_EVALUABLE
-    assert structure_stage.status is FunnelStageStatus.PASSED
-    assert route_stage.name is FunnelStageName.ENTRY_ROUTE_EVALUABLE
-    assert route_stage.status is FunnelStageStatus.BLOCKED
-    assert funnel.primary_blocker == "NO_JOINT_CANDIDATE_PASSES_HARD_UNDERWRITING"
+
+def test_entry_depth_failure_preserves_legal_structure_count(policy) -> None:
+    at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    quotes = tuple(
+        replace(quote, bid=(PriceLevel(quote.bid[0].price, Decimal("0.05")),))
+        if quote.instrument_name.endswith("95000-P") or quote.instrument_name.endswith("105000-C")
+        else quote
+        for quote in base_chain(expiry=current_expiry(at), observed_at=at)
+    )
+    selection = select_btc_0dte_condor(
+        observation=_observation(policy, quotes, at),
+        policy=policy,
+    )
+    assert selection.legal_structure_count == 1
+    assert selection.price_evaluable_count == 0
+    assert selection.blockers == ("NO_PRICE_EVALUABLE_FOUR_LEG_STRUCTURE",)

@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_BTC_SHORT_VOL_POLICY_PATH,
     )
     simulate.add_argument("--output", type=Path)
-    simulate.add_argument("--case-root", type=Path, default=Path("build/simulation-cases"))
+    simulate.add_argument("--ledger-root", type=Path, default=Path("build/simulation-ledger"))
 
     channels = subparsers.add_parser("channels", help="show the fixed 2x2 channel matrix")
     channels.add_argument("--json", action="store_true")
@@ -72,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "simulate":
-        return _simulate(args.policy, args.output, args.case_root)
+        return _simulate(args.policy, args.output, args.ledger_root)
     if args.command == "channels":
         return _channels(args.json)
     if args.command == "snapshot":
@@ -90,9 +90,9 @@ def main(argv: list[str] | None = None) -> int:
     raise AssertionError("unreachable command")
 
 
-def _simulate(policy_path: Path, output: Path | None, case_root: Path) -> int:
+def _simulate(policy_path: Path, output: Path | None, ledger_root: Path) -> int:
     policy = load_btc_short_vol_policy(policy_path)
-    results = run_all_scenarios(policy, root=case_root)
+    results = run_all_scenarios(policy, root=ledger_root)
     document = {
         "policy_identity": policy.identity,
         "scenario_count": len(results),

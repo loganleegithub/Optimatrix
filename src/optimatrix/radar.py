@@ -1,346 +1,350 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
-from enum import StrEnum
 
-from optimatrix.identity import canonical_identity
-from optimatrix.market import (
-    BreakoutState,
-    EventState,
-    MarketContext,
-    MarketContextKnowledge,
-    OptionQuote,
+from optimatrix.decision import (
+    DecisionRecord,
+    DecisionResult,
+    DecisionWindow,
+    MarketObservation,
+    unassessed_decision_record,
 )
+from optimatrix.identity import canonical_identity, canonical_value
+from optimatrix.market import EventState, OptionQuote
 from optimatrix.policy import BtcShortVolPolicy
-from optimatrix.session import DeribitSession, SessionPhase
-from optimatrix.structure import IronCondorCandidate, StructureSelection, select_iron_condor
-
-
-class Decision(StrEnum):
-    UNKNOWN = "UNKNOWN"
-    CANDIDATE = "CANDIDATE"
-    REVIEW = "REVIEW"
-    ABSTAIN = "ABSTAIN"
-
-
-@dataclass(frozen=True)
-class ScoreBreakdown:
-    vrp_ratio: Decimal
-    theta_capture_proxy: Decimal
-    premium_edge: Decimal
-    gamma_safety: Decimal
-    range_quality: Decimal
-    execution_quality: Decimal
-    final_score: Decimal
+from optimatrix.risk import (
+    AllocationResult,
+    ShadowCapacity,
+    ShadowRiskAllocation,
+    allocate_btc_condor_shadow_risk,
+)
+from optimatrix.session import SessionPhase, current_deribit_session
+from optimatrix.structure import (
+    Btc0DteCondorCandidate,
+    Btc0DteCondorSelection,
+    select_btc_0dte_condor,
+)
 
 
 @dataclass(frozen=True)
-class RadarDecision:
-    decision_identity: str
-    decision: Decision
-    session_id: str
-    session_minute: int
-    phase: SessionPhase
-    structure: IronCondorCandidate | None
-    score: ScoreBreakdown | None
-    blockers: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        if self.decision is Decision.UNKNOWN and (
-            not self.blockers or self.structure is not None or self.score is not None
-        ):
-            raise ValueError(
-                "UNKNOWN decision requires blockers and cannot have structure or score"
-            )
-        if self.decision is Decision.CANDIDATE and (
-            self.blockers or self.structure is None or self.score is None
-        ):
-            raise ValueError("CANDIDATE requires one structure, one score, and no blockers")
+class BtcWindowAssessment:
+    record: DecisionRecord
+    selection: Btc0DteCondorSelection | None
+    allocation: ShadowRiskAllocation | None
+    session_phase: SessionPhase
+    vrp_proxy_ratio: Decimal | None
 
 
-def evaluate_radar_unit(
+def evaluate_btc_short_vol_window(
     *,
-    session: DeribitSession,
-    context: MarketContext,
-    quotes: tuple[OptionQuote, ...],
+    window: DecisionWindow,
+    observation: MarketObservation | None,
+    capacity: ShadowCapacity | None,
     policy: BtcShortVolPolicy,
-) -> tuple[RadarDecision, StructureSelection | None]:
-    """Gate MarketContext truth before any structure enumeration or score computation."""
-
-    if context.knowledge is MarketContextKnowledge.UNKNOWN:
-        empty = StructureSelection(
-            selected=None,
-            considered_put_verticals=0,
-            considered_call_verticals=0,
-            considered_condors=0,
-            hard_eligible_condors=0,
-            blockers=context.evidence_blockers,
-        )
-        return (
-            evaluate_two_sided_short_vol(
-                session=session,
-                context=context,
-                selection=empty,
-                policy=policy,
+    known_at: datetime,
+) -> BtcWindowAssessment:
+    if known_at.tzinfo is None:
+        raise ValueError("Decision known_at must be timezone-aware")
+    known_at = known_at.astimezone(UTC)
+    if known_at < window.input_deadline:
+        raise ValueError("Decision cannot be finalized before the Window input deadline")
+    decision_boundary = window.input_deadline
+    session = current_deribit_session(window.starts_at, phase_policy=policy.session)
+    if window.market_session_id != session.session_id or window.channel_id is not policy.channel_id:
+        raise ValueError("DecisionWindow does not match BTC Short Vol Policy scope")
+    if observation is None:
+        return BtcWindowAssessment(
+            record=unassessed_decision_record(
+                window=window,
+                decision_policy_id=policy.identity,
+                known_at=known_at,
+                observation=None,
             ),
-            None,
+            selection=None,
+            allocation=None,
+            session_phase=current_deribit_session(
+                window.ends_at, phase_policy=policy.session
+            ).phase,
+            vrp_proxy_ratio=None,
         )
-    selection = select_iron_condor(quotes=quotes, context=context, policy=policy)
-    return (
-        evaluate_two_sided_short_vol(
-            session=session,
-            context=context,
-            selection=selection,
+    if not window.starts_at <= observation.observed_at < window.ends_at:
+        record = _record(
+            window=window,
+            observation=observation,
             policy=policy,
-        ),
-        selection,
+            result=DecisionResult.UNKNOWN,
+            blockers=("OBSERVATION_OUTSIDE_WINDOW",),
+            known_at=decision_boundary,
+        )
+        return BtcWindowAssessment(record, None, None, session.phase, None)
+    if observation.known_at > window.input_deadline:
+        record = _record(
+            window=window,
+            observation=observation,
+            policy=policy,
+            result=DecisionResult.UNKNOWN,
+            blockers=("OBSERVATION_AFTER_INPUT_DEADLINE",),
+            known_at=decision_boundary,
+        )
+        return BtcWindowAssessment(record, None, None, session.phase, None)
+    observed_session = current_deribit_session(
+        observation.observed_at,
+        phase_policy=policy.session,
     )
-
-
-def evaluate_two_sided_short_vol(
-    *,
-    session: DeribitSession,
-    context: MarketContext,
-    selection: StructureSelection,
-    policy: BtcShortVolPolicy,
-) -> RadarDecision:
-    if context.knowledge is MarketContextKnowledge.UNKNOWN:
-        return _decision(
-            session=session,
+    if observed_session.session_id != window.market_session_id:
+        raise ValueError("MarketObservation crossed the DecisionWindow Session")
+    if observation.data_health_blockers:
+        record = _record(
+            window=window,
+            observation=observation,
             policy=policy,
-            result=Decision.UNKNOWN,
-            structure=None,
-            score=None,
-            blockers=("MARKET_CONTEXT_EVIDENCE_NOT_BOUND", *context.evidence_blockers),
+            result=DecisionResult.UNKNOWN,
+            blockers=observation.data_health_blockers,
+            known_at=decision_boundary,
         )
+        return BtcWindowAssessment(record, None, None, observed_session.phase, None)
+
+    context = observation.context
+    vrp_ratio = (
+        context.same_session_implied_variance_proxy / context.trailing_realized_variance_proxy
+    )
+    environment_blockers = _environment_blockers(
+        phase=observed_session.phase,
+        vrp_ratio=vrp_ratio,
+        observation=observation,
+        policy=policy,
+    )
+    if environment_blockers:
+        result = (
+            DecisionResult.REVIEW
+            if environment_blockers == ("ROLL_REPRICE_REVIEW_ONLY",)
+            else DecisionResult.ABSTAIN
+        )
+        record = _record(
+            window=window,
+            observation=observation,
+            policy=policy,
+            result=result,
+            blockers=environment_blockers,
+            known_at=decision_boundary,
+        )
+        return BtcWindowAssessment(record, None, None, observed_session.phase, vrp_ratio)
+
+    selection = select_btc_0dte_condor(observation=observation, policy=policy)
+    if selection.selected is None:
+        record = _record(
+            window=window,
+            observation=observation,
+            policy=policy,
+            result=DecisionResult.ABSTAIN,
+            blockers=selection.blockers,
+            known_at=decision_boundary,
+        )
+        return BtcWindowAssessment(record, selection, None, observed_session.phase, vrp_ratio)
+
+    allocation = allocate_btc_condor_shadow_risk(
+        candidate=selection.selected,
+        market_session_id=window.market_session_id,
+        policy=policy,
+        capacity=capacity,
+        known_at=decision_boundary,
+    )
+    if allocation.result is AllocationResult.UNKNOWN:
+        result = DecisionResult.UNKNOWN
+    elif allocation.result is AllocationResult.UNAVAILABLE:
+        result = DecisionResult.ABSTAIN
+    else:
+        result = DecisionResult.CANDIDATE
+    blockers = (allocation.reason,) if allocation.reason is not None else ()
+    record = _record(
+        window=window,
+        observation=observation,
+        policy=policy,
+        result=result,
+        blockers=blockers,
+        selected_structure_id=selection.selected.identity,
+        risk_allocation_id=allocation.identity,
+        selected_structure=_structure_record(selection),
+        risk_allocation=_allocation_record(allocation),
+        known_at=decision_boundary,
+    )
+    return BtcWindowAssessment(record, selection, allocation, observed_session.phase, vrp_ratio)
+
+
+def _environment_blockers(
+    *,
+    phase: SessionPhase,
+    vrp_ratio: Decimal,
+    observation: MarketObservation,
+    policy: BtcShortVolPolicy,
+) -> tuple[str, ...]:
+    context = observation.context
     blockers: list[str] = []
-    if session.phase is SessionPhase.ROLL_REPRICE:
+    if phase is SessionPhase.ROLL_REPRICE:
         blockers.append("ROLL_REPRICE_REVIEW_ONLY")
-    if session.phase in {SessionPhase.EXIT_ONLY, SessionPhase.DELIVERY_TWAP}:
+    if phase in {SessionPhase.EXIT_ONLY, SessionPhase.DELIVERY_TWAP}:
         blockers.append("NEW_ENTRY_WINDOW_CLOSED")
     minimum_vrp = (
-        policy.radar.late_theta_minimum_vrp_ratio
-        if session.phase is SessionPhase.LATE_THETA
-        else policy.radar.minimum_vrp_ratio
+        policy.environment.late_theta_minimum_vrp_ratio
+        if phase is SessionPhase.LATE_THETA
+        else policy.environment.minimum_vrp_ratio
     )
-    vrp_ratio = context.same_session_implied_variance / context.physical_variance_forecast
     if vrp_ratio < minimum_vrp:
-        blockers.append("SESSION_VRP_BELOW_THRESHOLD")
-    theta = theta_capture_proxy(
-        minutes_to_expiry=session.minutes_to_expiry,
-        exit_minutes_to_expiry=policy.position.latest_short_risk_exit_minutes_to_expiry,
-    )
-    if theta < policy.radar.minimum_theta_capture_proxy:
-        blockers.append("THETA_CAPTURE_TOO_SMALL")
-    if context.rv_acceleration > policy.radar.maximum_rv_acceleration:
+        blockers.append("SESSION_VRP_PROXY_BELOW_THRESHOLD")
+    if context.rv_acceleration > policy.environment.maximum_rv_acceleration:
         blockers.append("RV_ACCELERATION_TOO_HIGH")
-    if context.jump_share > policy.radar.maximum_jump_share:
+    if context.jump_share > policy.environment.maximum_jump_share:
         blockers.append("JUMP_SHARE_TOO_HIGH")
-    if context.directional_persistence > policy.radar.maximum_directional_persistence:
+    if context.directional_persistence > policy.environment.maximum_directional_persistence:
         blockers.append("DIRECTIONAL_PERSISTENCE_TOO_HIGH")
     if context.event_state in {EventState.LIVE_EVENT, EventState.UNSCHEDULED_SHOCK}:
         blockers.append("EVENT_OR_SHOCK_IN_PROGRESS")
-    if context.breakout_state is BreakoutState.BREAKING_CONCENTRATED_STRIKE:
-        blockers.append("CONCENTRATED_STRIKE_BREAKOUT")
-    if selection.selected is None:
-        blockers.extend(selection.blockers)
-        return _decision(
-            session=session,
-            policy=policy,
-            result=Decision.ABSTAIN,
-            structure=None,
-            score=None,
-            blockers=tuple(blockers),
-        )
-    structure = selection.selected
-    score = _score(session=session, context=context, structure=structure, policy=policy)
-
-    hard_blockers = tuple(blockers)
-    if hard_blockers:
-        result = (
-            Decision.REVIEW if hard_blockers == ("ROLL_REPRICE_REVIEW_ONLY",) else Decision.ABSTAIN
-        )
-    elif score.final_score >= policy.radar.activation_score:
-        result = Decision.CANDIDATE
-    else:
-        result = Decision.REVIEW
-        blockers.append("COMBINED_SCORE_BELOW_ACTIVATION")
-    return _decision(
-        session=session,
-        policy=policy,
-        result=result,
-        structure=structure,
-        score=score,
-        blockers=tuple(blockers),
-    )
+    return tuple(blockers)
 
 
-def _score(
+def _record(
     *,
-    session: DeribitSession,
-    context: MarketContext,
-    structure: IronCondorCandidate,
+    window: DecisionWindow,
+    observation: MarketObservation,
     policy: BtcShortVolPolicy,
-) -> ScoreBreakdown:
-    vrp_ratio = context.same_session_implied_variance / context.physical_variance_forecast
-    minimum_vrp = (
-        policy.radar.late_theta_minimum_vrp_ratio
-        if session.phase is SessionPhase.LATE_THETA
-        else policy.radar.minimum_vrp_ratio
-    )
-    vrp_normalized = _clamp(
-        (vrp_ratio - minimum_vrp) / (policy.radar.vrp_saturation_ratio - minimum_vrp)
-    )
-    theta = theta_capture_proxy(
-        minutes_to_expiry=session.minutes_to_expiry,
-        exit_minutes_to_expiry=policy.position.latest_short_risk_exit_minutes_to_expiry,
-    )
-    theta_normalized = _clamp(
-        (theta - policy.radar.minimum_theta_capture_proxy)
-        / (Decimal(1) - policy.radar.minimum_theta_capture_proxy)
-    )
-    premium_edge = _clamp(Decimal("0.7") * vrp_normalized + Decimal("0.3") * theta_normalized)
-    gamma_safety = _gamma_safety(context)
-    range_quality = _clamp(
-        structure.minimum_body_distance_sigma / (policy.radar.minimum_body_distance_sigma * 2)
-    )
-    fee_fraction = (
-        structure.execution.usd_total_fee / structure.execution.usd_gross_credit
-        if structure.execution.usd_gross_credit > 0
-        else Decimal(1)
-    )
-    fee_quality = _clamp(Decimal(1) - fee_fraction)
-    execution_quality = _clamp(
-        Decimal("0.45") * structure.average_spread_quality
-        + Decimal("0.30") * structure.depth_quality
-        + Decimal("0.25") * fee_quality
-    )
-    final_score = Decimal(100) * premium_edge * gamma_safety * range_quality * execution_quality
-    return ScoreBreakdown(
-        vrp_ratio=vrp_ratio,
-        theta_capture_proxy=theta,
-        premium_edge=premium_edge,
-        gamma_safety=gamma_safety,
-        range_quality=range_quality,
-        execution_quality=execution_quality,
-        final_score=final_score,
-    )
-
-
-def theta_capture_proxy(*, minutes_to_expiry: int, exit_minutes_to_expiry: int) -> Decimal:
-    if minutes_to_expiry <= exit_minutes_to_expiry:
-        return Decimal(0)
-    current = Decimal(minutes_to_expiry)
-    exit_time = Decimal(exit_minutes_to_expiry)
-    return Decimal(1) - (exit_time / current).sqrt()
-
-
-def _gamma_safety(context: MarketContext) -> Decimal:
-    path = _clamp(
-        Decimal(1)
-        - Decimal("0.35") * context.rv_acceleration
-        - Decimal("0.35") * context.jump_share
-        - Decimal("0.30") * context.directional_persistence
-    )
-    event_factor = {
-        EventState.NONE: Decimal(1),
-        EventState.POST_EVENT: Decimal(1),
-        EventState.PRE_EVENT: Decimal("0.45"),
-        EventState.LIVE_EVENT: Decimal(0),
-        EventState.UNSCHEDULED_SHOCK: Decimal(0),
-    }[context.event_state]
-    breakout_factor = {
-        BreakoutState.MEAN_REVERTING: Decimal(1),
-        BreakoutState.NEUTRAL: Decimal("0.85"),
-        BreakoutState.APPROACHING_CONCENTRATED_STRIKE: Decimal("0.50"),
-        BreakoutState.BREAKING_CONCENTRATED_STRIKE: Decimal("0.05"),
-    }[context.breakout_state]
-    concentration_factor = Decimal(1)
-    if context.concentrated_strike is not None:
-        if context.breakout_state is BreakoutState.MEAN_REVERTING:
-            concentration_factor = _clamp(
-                Decimal(1) + Decimal("0.10") * context.concentration_strength
-            )
-        elif context.breakout_state in {
-            BreakoutState.APPROACHING_CONCENTRATED_STRIKE,
-            BreakoutState.BREAKING_CONCENTRATED_STRIKE,
-        }:
-            concentration_factor = _clamp(
-                Decimal(1) - Decimal("0.50") * context.concentration_strength
-            )
-    return _clamp(path * event_factor * breakout_factor * concentration_factor)
-
-
-def radar_decision_identity(
-    *,
-    policy_identity: str,
-    session_id: str,
-    session_minute: int,
-    result: Decision,
-    structure: IronCondorCandidate | None,
-    score: ScoreBreakdown | None,
+    result: DecisionResult,
     blockers: tuple[str, ...],
-) -> str:
-    return canonical_identity(
-        "TwoSidedShortVolDecisionV1",
-        policy_identity,
-        session_id,
-        session_minute,
-        result,
-        structure,
-        score,
-        blockers,
-    )
-
-
-def require_radar_decision_identity(
-    decision: RadarDecision,
-    *,
-    policy_identity: str,
-) -> None:
-    expected = radar_decision_identity(
-        policy_identity=policy_identity,
-        session_id=decision.session_id,
-        session_minute=decision.session_minute,
-        result=decision.decision,
-        structure=decision.structure,
-        score=decision.score,
-        blockers=decision.blockers,
-    )
-    if decision.decision_identity != expected:
-        raise ValueError("Radar Decision identity mismatch")
-
-
-def _decision(
-    *,
-    session: DeribitSession,
-    policy: BtcShortVolPolicy,
-    result: Decision,
-    structure: IronCondorCandidate | None,
-    score: ScoreBreakdown | None,
-    blockers: tuple[str, ...],
-) -> RadarDecision:
-    identity = radar_decision_identity(
-        policy_identity=policy.identity,
-        session_id=session.session_id,
-        session_minute=session.minute,
+    selected_structure_id: str | None = None,
+    risk_allocation_id: str | None = None,
+    selected_structure: dict[str, object] | None = None,
+    risk_allocation: dict[str, object] | None = None,
+    known_at: datetime,
+) -> DecisionRecord:
+    return DecisionRecord(
+        window=window,
+        decision_policy_id=policy.identity,
+        known_at=known_at,
+        observation_id=observation.identity,
         result=result,
-        structure=structure,
-        score=score,
         blockers=blockers,
-    )
-    return RadarDecision(
-        decision_identity=identity,
-        decision=result,
-        session_id=session.session_id,
-        session_minute=session.minute,
-        phase=session.phase,
-        structure=structure,
-        score=score,
-        blockers=blockers,
+        selected_structure_id=selected_structure_id,
+        risk_allocation_id=risk_allocation_id,
+        selected_structure_json=_payload_json(selected_structure),
+        risk_allocation_json=_payload_json(risk_allocation),
     )
 
 
-def _clamp(value: Decimal) -> Decimal:
-    return min(Decimal(1), max(Decimal(0), value))
+def _structure_record(selection: Btc0DteCondorSelection) -> dict[str, object]:
+    candidate = selection.selected
+    if candidate is None:
+        raise ValueError("selected structure record requires one Candidate")
+    value = canonical_value(
+        {
+            "candidate_id": candidate.identity,
+            "observation_id": candidate.observation_id,
+            "legs": {
+                "long_put": _leg_record(candidate.long_put),
+                "short_put": _leg_record(candidate.short_put),
+                "short_call": _leg_record(candidate.short_call),
+                "long_call": _leg_record(candidate.long_call),
+            },
+            "option_amount": candidate.option_amount,
+            "expiry": candidate.expiry,
+            "pricing": {
+                "fee_model_id": candidate.pricing.fee_model_id,
+                "native_gross_credit": candidate.pricing.native_gross_credit,
+                "combo_standard_fee_native": candidate.pricing.combo_standard_fee_native,
+                "native_net_credit": candidate.pricing.native_net_credit,
+                "boundary_index_price_usd": candidate.pricing.boundary_index_price_usd,
+                "boundary_net_credit_usd": candidate.pricing.boundary_net_credit_usd,
+                "maximum_contractual_payoff_cap_usd": (
+                    candidate.pricing.maximum_contractual_payoff_cap_usd
+                ),
+                "boundary_reference_loss_usd": (candidate.pricing.boundary_reference_loss_usd),
+                "observed_close_native_debit": (candidate.pricing.observed_close_native_debit),
+                "observed_close_depth_coverage": candidate.close_depth_coverage,
+            },
+            "net_delta": candidate.net_delta,
+            "put_body_distance_sigma": candidate.put_body_distance_sigma,
+            "call_body_distance_sigma": candidate.call_body_distance_sigma,
+            "ranking_method_id": canonical_identity(
+                "Btc0DteCondorRankV1",
+                (
+                    "MAX_CREDIT_TO_PAYOFF_CAP",
+                    "MAX_NATIVE_NET_CREDIT",
+                    "MIN_COMBO_FEE_BURDEN",
+                    "MAX_MINIMUM_OBSERVED_CLOSE_DEPTH_COVERAGE",
+                    "STABLE_INSTRUMENT_NAMES",
+                ),
+            ),
+            "rank_evidence": _rank_evidence(candidate),
+            "retained_alternatives": tuple(
+                _alternative_record(item) for item in selection.retained_alternatives
+            ),
+            "population_counts": {
+                "legal": selection.legal_structure_count,
+                "price_evaluable": selection.price_evaluable_count,
+                "policy_eligible": selection.policy_eligible_count,
+            },
+        }
+    )
+    if not isinstance(value, dict):
+        raise TypeError("canonical structure record must be an object")
+    return value
+
+
+def _leg_record(quote: OptionQuote) -> dict[str, object]:
+    return {
+        "instrument_name": quote.instrument_name,
+        "strike": quote.strike,
+        "option_type": quote.option_type,
+        "delivery_fee_exempt": quote.delivery_fee_exempt,
+    }
+
+
+def _rank_evidence(candidate: Btc0DteCondorCandidate) -> dict[str, object]:
+    pricing = candidate.pricing
+    return {
+        "credit_to_payoff_cap": (
+            pricing.boundary_net_credit_usd / pricing.maximum_contractual_payoff_cap_usd
+        ),
+        "native_net_credit": pricing.native_net_credit,
+        "combo_fee_fraction_of_credit": (
+            pricing.combo_standard_fee_native / pricing.native_gross_credit
+        ),
+        "minimum_observed_close_depth_coverage": min(candidate.close_depth_coverage),
+        "net_delta": candidate.net_delta,
+        "minimum_body_distance_sigma": candidate.minimum_body_distance_sigma,
+    }
+
+
+def _alternative_record(candidate: Btc0DteCondorCandidate) -> dict[str, object]:
+    return {
+        "candidate_id": candidate.identity,
+        "legs": {
+            "long_put": _leg_record(candidate.long_put),
+            "short_put": _leg_record(candidate.short_put),
+            "short_call": _leg_record(candidate.short_call),
+            "long_call": _leg_record(candidate.long_call),
+        },
+        "option_amount": candidate.option_amount,
+        "rank_evidence": _rank_evidence(candidate),
+    }
+
+
+def _allocation_record(allocation: ShadowRiskAllocation) -> dict[str, object]:
+    value = canonical_value(allocation)
+    if not isinstance(value, dict):
+        raise TypeError("canonical allocation record must be an object")
+    value["allocation_id"] = allocation.identity
+    return value
+
+
+def _payload_json(value: dict[str, object] | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )

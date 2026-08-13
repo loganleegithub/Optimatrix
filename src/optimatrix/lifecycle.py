@@ -1,1502 +1,1481 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
+import json
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from typing import Self
 
-from optimatrix.identity import canonical_identity, require_identity
-from optimatrix.market import BreakoutState, EventState, MarketContext, OptionQuote
+from optimatrix.channels import ChannelId
+from optimatrix.decision import DecisionRecord, DecisionResult, MarketObservation
+from optimatrix.identity import canonical_identity, canonical_value, require_identity
+from optimatrix.market import EventState, ExpirySettlementFact, OptionQuote
 from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.pricing import (
-    Action,
-    LegExecution,
-    VerticalExecution,
-    execute_leg,
-    price_close_vertical,
-    price_credit_vertical,
-    settle_option_leg,
+    Btc0DteCondorCloseProjection,
+    Btc0DteCondorPricing,
+    price_btc_0dte_condor,
+    project_btc_0dte_condor_close,
+    settle_btc_0dte_condor,
 )
-from optimatrix.radar import RadarDecision
-from optimatrix.session import DeribitSession, SessionPhase
-from optimatrix.structure import IronCondorCandidate
+from optimatrix.products import BTC, ProductId
+
+SHADOW_PRICING_BASIS = "SYNTHETIC_FOUR_LEG_COMPONENT_BOOK_ESTIMATE_V1"
 
 
-class EntryRoute(StrEnum):
-    TWO_VERTICALS = "TWO_VERTICALS"
-    WINGS_ONLY_FALLBACK = "WINGS_ONLY_FALLBACK"
-
-
-class EntryStatus(StrEnum):
-    FULL_ENTRY = "FULL_ENTRY"
-    PUT_SIDE_ONLY = "PUT_SIDE_ONLY"
-    CALL_SIDE_ONLY = "CALL_SIDE_ONLY"
-    TWO_SIDES_INCOHERENT = "TWO_SIDES_INCOHERENT"
-    WINGS_ONLY = "WINGS_ONLY"
-    NO_ENTRY = "NO_ENTRY"
-
-
-class Side(StrEnum):
-    PUT = "PUT"
-    CALL = "CALL"
-
-
-class SideState(StrEnum):
-    NOT_OPEN = "NOT_OPEN"
-    CREDIT_VERTICAL_OPEN = "CREDIT_VERTICAL_OPEN"
-    SHORT_FLAT_LONG_WING = "SHORT_FLAT_LONG_WING"
-    TERMINAL = "TERMINAL"
+class ShadowEntryStatus(StrEnum):
+    SHADOW_ATOMIC_EVALUABLE = "SHADOW_ATOMIC_EVALUABLE"
+    SHADOW_ATOMIC_NOT_EVALUABLE = "SHADOW_ATOMIC_NOT_EVALUABLE"
+    UNKNOWN = "UNKNOWN"
 
 
 class PositionState(StrEnum):
     MONITORING = "MONITORING"
-    EXIT_REQUIRED = "EXIT_REQUIRED"
-    SHORT_RISK_FLAT = "SHORT_RISK_FLAT"
+    EXIT_INTENT_FROZEN = "EXIT_INTENT_FROZEN"
     TERMINAL = "TERMINAL"
 
 
-class ExitReason(StrEnum):
-    ENTRY_ACQUISITION_INCOMPLETE = "ENTRY_ACQUISITION_INCOMPLETE"
-    RISK_CONTEXT_UNKNOWN = "RISK_CONTEXT_UNKNOWN"
-    TAKE_PROFIT = "TAKE_PROFIT"
-    MAXIMUM_LOSS = "MAXIMUM_LOSS"
-    PUT_SIDE_DELTA = "PUT_SIDE_DELTA"
-    CALL_SIDE_DELTA = "CALL_SIDE_DELTA"
-    PUT_SIDE_ADVERSE_MOVE = "PUT_SIDE_ADVERSE_MOVE"
-    CALL_SIDE_ADVERSE_MOVE = "CALL_SIDE_ADVERSE_MOVE"
-    GAMMA_EXPANSION = "GAMMA_EXPANSION"
-    EVENT_OR_SHOCK = "EVENT_OR_SHOCK"
-    CONCENTRATED_STRIKE_BREAKOUT = "CONCENTRATED_STRIKE_BREAKOUT"
-    LATEST_SHORT_RISK_EXIT = "LATEST_SHORT_RISK_EXIT"
-    DELIVERY_TWAP = "DELIVERY_TWAP"
+class PositionAction(StrEnum):
+    HOLD = "HOLD"
+    EXIT_WHOLE_PRODUCT = "EXIT_WHOLE_PRODUCT"
+    SETTLE_AT_EXPIRY = "SETTLE_AT_EXPIRY"
 
 
-class ExitScope(StrEnum):
-    PUT_SIDE = "PUT_SIDE"
-    CALL_SIDE = "CALL_SIDE"
-    BOTH_SIDES = "BOTH_SIDES"
+class ObservationStatus(StrEnum):
+    KNOWN = "KNOWN"
+    UNKNOWN = "UNKNOWN"
 
 
-class PositionRiskAction(StrEnum):
-    MONITORING = "MONITORING"
-    EXIT_DUTY_ARMED = "EXIT_DUTY_ARMED"
-    EXIT_DUTY_PENDING = "EXIT_DUTY_PENDING"
-    SHORT_RISK_REDUCED = "SHORT_RISK_REDUCED"
-    SHORT_RISK_FLAT = "SHORT_RISK_FLAT"
-    PORTFOLIO_TERMINAL = "PORTFOLIO_TERMINAL"
+class TerminalMethod(StrEnum):
+    NO_POSITION = "NO_POSITION"
+    WHOLE_PRODUCT_EXIT = "WHOLE_PRODUCT_EXIT"
+    CONTRACT_SETTLEMENT = "CONTRACT_SETTLEMENT"
 
 
 @dataclass(frozen=True)
-class DecisionCase:
-    case_identity: str
-    opened_at: datetime
-    radar_decision: RadarDecision
-    structure: IronCondorCandidate
+class EligibilityFact:
+    value: bool | None
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.reason:
+            raise ValueError("eligibility reason must be non-empty")
+
+    def as_object(self) -> dict[str, object]:
+        return {"value": self.value, "reason": self.reason}
 
     @classmethod
-    def open(cls, *, opened_at: datetime, radar_decision: RadarDecision) -> DecisionCase:
-        if opened_at.tzinfo is None:
-            raise ValueError("Decision Case boundary must be timezone-aware")
-        if radar_decision.structure is None:
-            raise ValueError("Decision Case requires one selected structure")
-        identity = canonical_identity(
-            "TwoSidedShadowDecisionCaseV1",
-            radar_decision.decision_identity,
-            opened_at.isoformat(),
-        )
-        return cls(identity, opened_at, radar_decision, radar_decision.structure)
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "eligibility")
+        result = item.get("value")
+        if result is not None and not isinstance(result, bool):
+            raise ValueError("eligibility.value must be boolean or null")
+        return cls(result, _text(item, "reason"))
 
 
 @dataclass(frozen=True)
-class EntryResult:
-    entry_identity: str
-    attempted_at: datetime
-    route: EntryRoute
-    public_combo_observed: bool
-    status: EntryStatus
-    put_vertical_execution: VerticalExecution | None
-    call_vertical_execution: VerticalExecution | None
-    wing_executions: tuple[LegExecution, ...]
-    blockers: tuple[str, ...]
+class OutcomeEligibility:
+    decision_evaluable: EligibilityFact
+    future_path_known: EligibilityFact
+    future_path_continuous: EligibilityFact
+    shadow_entry_evaluable: EligibilityFact
+    terminal_economics_evaluable: EligibilityFact
+    live_execution_attributable: EligibilityFact
+    strategy_population_eligible: EligibilityFact
+    qualification_eligible: EligibilityFact
 
+    def as_object(self) -> dict[str, object]:
+        return {name: getattr(self, name).as_object() for name in self.__dataclass_fields__}
 
-@dataclass
-class SidePosition:
-    side: Side
-    short_quote: OptionQuote
-    long_quote: OptionQuote
-    quantity: Decimal
-    state: SideState
-    native_cashflow_after_fees: Decimal
-    boundary_valued_cashflow_usd: Decimal
-    short_open: bool
-    long_open: bool
-    delivery_fee_native: Decimal = Decimal(0)
-    exit_requested_at: datetime | None = None
-    exit_requested_reason: ExitReason | None = None
-    short_risk_exit_at: datetime | None = None
-    terminal_at: datetime | None = None
-    exit_reason: ExitReason | None = None
-    short_exit_execution: LegExecution | None = None
-    long_exit_execution: LegExecution | None = None
-    last_exit_attempt_at: datetime | None = None
-    exit_attempt_count: int = 0
-    quote_missing_block_count: int = 0
-    quote_not_future_block_count: int = 0
-    quote_stale_block_count: int = 0
-    pair_incoherent_block_count: int = 0
-    pair_unexecutable_block_count: int = 0
-    short_only_exit_used: bool = False
-    last_exit_blockers: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class PositionInstruction:
-    instruction_identity: str
-    at: datetime
-    scope: ExitScope
-    reason: ExitReason
-
-
-@dataclass(frozen=True)
-class PositionRiskObservation:
-    observed_at: datetime
-    action: PositionRiskAction
-    risk_context_known: bool
-    blockers: tuple[str, ...]
-    instruction: PositionInstruction | None
-
-
-@dataclass(frozen=True)
-class PositionOutcome:
-    outcome_identity: str
-    terminal_at: datetime
-    terminal_method: str
-    entry_status: EntryStatus
-    first_exit_reason: ExitReason | None
-    first_exit_at: datetime | None
-    short_risk_flat_at: datetime | None
-    put_side_exit_at: datetime | None
-    call_side_exit_at: datetime | None
-    put_side_native_pnl: Decimal
-    call_side_native_pnl: Decimal
-    total_native_pnl: Decimal
-    put_side_boundary_valued_pnl_usd: Decimal
-    call_side_boundary_valued_pnl_usd: Decimal
-    boundary_valued_total_usd_pnl: Decimal
-    terminal_valued_total_usd_pnl: Decimal
-    double_side_stop: bool
-    put_side_delivery_fee_native: Decimal
-    call_side_delivery_fee_native: Decimal
-    total_delivery_fee_native: Decimal
-    residual_wings_settled: int
-    residual_wing_count: int
-    put_exit_attempt_count: int
-    call_exit_attempt_count: int
-    exit_quote_missing_block_count: int
-    exit_quote_not_future_block_count: int
-    exit_quote_stale_block_count: int
-    exit_pair_incoherent_block_count: int
-    exit_pair_unexecutable_block_count: int
-    short_only_exit_side_count: int
-    first_exit_to_short_risk_flat_ms: int | None
-
-    @property
-    def strategy_outcome_eligible(self) -> bool:
-        """Only a coherent four-leg acquisition belongs to strategy economics."""
-
-        return self.entry_status is EntryStatus.FULL_ENTRY
-
-    @property
-    def outcome_population(self) -> str:
-        return (
-            "IRON_CONDOR_STRATEGY"
-            if self.strategy_outcome_eligible
-            else "ENTRY_ACQUISITION_OPERATIONAL"
-        )
-
-    @property
-    def strategy_ineligibility_reason(self) -> str | None:
-        if self.strategy_outcome_eligible:
-            return None
-        return f"ENTRY_STATUS_{self.entry_status.value}"
-
-
-@dataclass
-class ShadowPosition:
-    position_identity: str
-    case_identity: str
-    entry_identity: str
-    opened_at: datetime
-    entry_status: EntryStatus
-    product_index_at_entry: Decimal
-    initial_net_credit_native: Decimal
-    initial_net_credit_usd: Decimal
-    put_side: SidePosition
-    call_side: SidePosition
-    state: PositionState = PositionState.MONITORING
-    first_instruction: PositionInstruction | None = None
-    instructions: list[PositionInstruction] = field(default_factory=list)
-    short_risk_flat_at: datetime | None = None
-    terminal_at: datetime | None = None
-    outcome: PositionOutcome | None = None
-    last_risk_observed_at: datetime | None = None
-    last_risk_context_known: bool | None = None
-    last_risk_blockers: tuple[str, ...] = ()
-
-    @property
-    def has_short_risk(self) -> bool:
-        return self.put_side.short_open or self.call_side.short_open
-
-    @property
-    def residual_wing_count(self) -> int:
-        return int(self.put_side.long_open) + int(self.call_side.long_open)
-
-    @property
-    def has_pending_exit(self) -> bool:
-        return any(
-            side.short_open and side.exit_requested_reason is not None
-            for side in (self.put_side, self.call_side)
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "eligibility")
+        return cls(
+            **{
+                name: EligibilityFact.from_object(item.get(name))
+                for name in cls.__dataclass_fields__
+            }
         )
 
 
-def acquire_entry(
+def window_outcome_eligibility(
     *,
-    case: DecisionCase,
-    quotes: tuple[OptionQuote, ...],
-    context: MarketContext,
-    policy: BtcShortVolPolicy,
-    attempted_at: datetime,
-    public_combo_observed: bool = False,
-    allow_wings_only_fallback: bool = False,
-) -> tuple[EntryResult, ShadowPosition | None]:
-    if attempted_at.tzinfo is None or context.now.tzinfo is None:
-        raise ValueError("entry boundaries must be timezone-aware")
-    if attempted_at <= case.opened_at:
-        raise ValueError("entry attempt must be strictly after the decision")
-    if context.now != attempted_at:
-        raise ValueError("entry pricing context must belong to the attempt boundary")
-    decision_received_ms = int(case.opened_at.timestamp() * 1000)
-    attempted_received_ms = int(attempted_at.timestamp() * 1000)
-    if attempted_received_ms - decision_received_ms > policy.shadow.entry_acquisition_window_ms:
-        result = _entry_result(
-            case=case,
-            attempted_at=attempted_at,
-            route=EntryRoute.TWO_VERTICALS,
-            status=EntryStatus.NO_ENTRY,
-            public_combo_observed=public_combo_observed,
-            blockers=("ENTRY_ACQUISITION_DEADLINE_EXCEEDED",),
-        )
-        return result, None
-
-    selected = case.structure
-    by_name = {quote.instrument_name: quote for quote in quotes}
-    required_names = (
-        selected.long_put.instrument_name,
-        selected.short_put.instrument_name,
-        selected.short_call.instrument_name,
-        selected.long_call.instrument_name,
-    )
-    missing = tuple(name for name in required_names if name not in by_name)
-    if missing:
-        result = _entry_result(
-            case=case,
-            attempted_at=attempted_at,
-            route=EntryRoute.TWO_VERTICALS,
-            status=EntryStatus.NO_ENTRY,
-            public_combo_observed=public_combo_observed,
-            blockers=tuple(f"MISSING_QUOTE:{name}" for name in missing),
-        )
-        return result, None
-    long_put, short_put, short_call, long_call = (by_name[name] for name in required_names)
-    put_pair_eligible = _entry_pair_eligible(
-        short_put,
-        long_put,
-        decision_received_ms=decision_received_ms,
-        attempted_received_ms=attempted_received_ms,
-        maximum_source_skew_ms=policy.shadow.maximum_pair_source_skew_ms,
-        maximum_receive_skew_ms=policy.shadow.maximum_pair_receive_skew_ms,
-    )
-    call_pair_eligible = _entry_pair_eligible(
-        short_call,
-        long_call,
-        decision_received_ms=decision_received_ms,
-        attempted_received_ms=attempted_received_ms,
-        maximum_source_skew_ms=policy.shadow.maximum_pair_source_skew_ms,
-        maximum_receive_skew_ms=policy.shadow.maximum_pair_receive_skew_ms,
-    )
-    four_leg_eligible = _four_leg_entry_eligible(
-        (long_put, short_put, short_call, long_call),
-        decision_received_ms=decision_received_ms,
-        attempted_received_ms=attempted_received_ms,
-        maximum_source_skew_ms=policy.shadow.maximum_pair_source_skew_ms,
-        maximum_receive_skew_ms=policy.shadow.maximum_pair_receive_skew_ms,
-    )
-    put_execution = (
-        price_credit_vertical(
-            short_quote=short_put,
-            long_quote=long_put,
-            quantity=policy.structure.target_quantity,
-            index_price=context.index_price,
-        )
-        if put_pair_eligible
-        else None
-    )
-    call_execution = (
-        price_credit_vertical(
-            short_quote=short_call,
-            long_quote=long_call,
-            quantity=policy.structure.target_quantity,
-            index_price=context.index_price,
-        )
-        if call_pair_eligible
-        else None
-    )
-    route = (
-        EntryRoute.WINGS_ONLY_FALLBACK if allow_wings_only_fallback else EntryRoute.TWO_VERTICALS
-    )
-    wing_executions: tuple[LegExecution, ...] = ()
-    blockers: list[str] = []
-    if not put_pair_eligible:
-        blockers.append("PUT_ENTRY_PAIR_NOT_STRICTLY_FUTURE_OR_COHERENT")
-    if not call_pair_eligible:
-        blockers.append("CALL_ENTRY_PAIR_NOT_STRICTLY_FUTURE_OR_COHERENT")
-    if put_execution is not None and call_execution is not None and four_leg_eligible:
-        status = EntryStatus.FULL_ENTRY
-    elif put_execution is not None and call_execution is not None:
-        status = EntryStatus.TWO_SIDES_INCOHERENT
-        blockers.append("FOUR_LEG_ENTRY_NOT_COHERENT")
-    elif put_execution is not None:
-        status = EntryStatus.PUT_SIDE_ONLY
-        blockers.append("CALL_VERTICAL_NOT_EXECUTABLE")
-    elif call_execution is not None:
-        status = EntryStatus.CALL_SIDE_ONLY
-        blockers.append("PUT_VERTICAL_NOT_EXECUTABLE")
-    elif allow_wings_only_fallback:
-        wings_eligible = _entry_pair_eligible(
-            long_put,
-            long_call,
-            decision_received_ms=decision_received_ms,
-            attempted_received_ms=attempted_received_ms,
-            maximum_source_skew_ms=policy.shadow.maximum_pair_source_skew_ms,
-            maximum_receive_skew_ms=policy.shadow.maximum_pair_receive_skew_ms,
-        )
-        put_wing = (
-            execute_leg(
-                long_put,
-                action=Action.BUY,
-                quantity=policy.structure.target_quantity,
-                index_price=context.index_price,
-            )
-            if wings_eligible
-            else None
-        )
-        call_wing = (
-            execute_leg(
-                long_call,
-                action=Action.BUY,
-                quantity=policy.structure.target_quantity,
-                index_price=context.index_price,
-            )
-            if wings_eligible
-            else None
-        )
-        if put_wing is not None and call_wing is not None:
-            status = EntryStatus.WINGS_ONLY
-            wing_executions = (put_wing, call_wing)
-            blockers.extend(("PUT_SHORT_NOT_EXECUTABLE", "CALL_SHORT_NOT_EXECUTABLE"))
-        else:
-            status = EntryStatus.NO_ENTRY
-            blockers.append("WINGS_ONLY_FALLBACK_NOT_EXECUTABLE")
+    decision_evaluable: bool,
+    future_path_known: bool,
+    future_path_continuous: bool | None,
+) -> OutcomeEligibility:
+    if future_path_known and future_path_continuous is None:
+        raise ValueError("known future path requires a continuity fact")
+    if not future_path_known and future_path_continuous is not None:
+        raise ValueError("unknown future path cannot claim continuity")
+    if not future_path_known:
+        population = EligibilityFact(None, "FUTURE_PATH_UNKNOWN")
+    elif not future_path_continuous:
+        population = EligibilityFact(False, "FUTURE_PATH_DISCONTINUOUS")
     else:
-        status = EntryStatus.NO_ENTRY
-        blockers.extend(("PUT_VERTICAL_NOT_EXECUTABLE", "CALL_VERTICAL_NOT_EXECUTABLE"))
-
-    result = _entry_result(
-        case=case,
-        attempted_at=attempted_at,
-        route=route,
-        public_combo_observed=public_combo_observed,
-        status=status,
-        put_vertical_execution=put_execution,
-        call_vertical_execution=call_execution,
-        wing_executions=wing_executions,
-        blockers=tuple(blockers),
-    )
-    if status is EntryStatus.NO_ENTRY:
-        return result, None
-    position = _position_from_entry(
-        case=case,
-        result=result,
-        long_put=long_put,
-        short_put=short_put,
-        short_call=short_call,
-        long_call=long_call,
-        index_price=context.index_price,
-        quantity=policy.structure.target_quantity,
-    )
-    return result, position
-
-
-def evaluate_position(
-    *,
-    position: ShadowPosition,
-    session: DeribitSession,
-    context: MarketContext,
-    quotes: tuple[OptionQuote, ...],
-    policy: BtcShortVolPolicy,
-) -> PositionRiskObservation:
-    if position.state is PositionState.TERMINAL or not position.has_short_risk:
-        return PositionRiskObservation(
-            observed_at=context.now,
-            action=(
-                PositionRiskAction.PORTFOLIO_TERMINAL
-                if position.state is PositionState.TERMINAL
-                else PositionRiskAction.SHORT_RISK_FLAT
+        population = EligibilityFact(True, "ALIGNED_WINDOW_PATH_AVAILABLE")
+    return OutcomeEligibility(
+        decision_evaluable=EligibilityFact(
+            decision_evaluable,
+            "DECISION_EVALUABLE" if decision_evaluable else "DECISION_UNKNOWN",
+        ),
+        future_path_known=EligibilityFact(
+            future_path_known,
+            "FUTURE_PATH_KNOWN" if future_path_known else "FUTURE_PATH_UNKNOWN",
+        ),
+        future_path_continuous=EligibilityFact(
+            future_path_continuous,
+            (
+                "FUTURE_PATH_CONTINUOUS"
+                if future_path_continuous
+                else "FUTURE_PATH_DISCONTINUOUS"
+                if future_path_continuous is False
+                else "FUTURE_PATH_UNKNOWN"
             ),
-            risk_context_known=True,
-            blockers=(),
-            instruction=None,
-        )
-    pending = _pending_exit_instruction(position)
-    if pending is not None:
-        return PositionRiskObservation(
-            observed_at=context.now,
-            action=PositionRiskAction.EXIT_DUTY_PENDING,
-            risk_context_known=True,
-            blockers=(),
-            instruction=pending,
-        )
-    by_name = {quote.instrument_name: quote for quote in quotes}
-    context_blockers = _position_risk_context_blockers(
-        position=position,
-        by_name=by_name,
-        observed_at=context.now,
-        maximum_source_age_ms=policy.shadow.maximum_position_quote_age_ms,
-        maximum_receive_age_ms=policy.shadow.maximum_position_quote_age_ms,
-    )
-    if context_blockers:
-        instruction = _instruction(
-            position,
-            context.now,
-            ExitScope.BOTH_SIDES,
-            ExitReason.RISK_CONTEXT_UNKNOWN,
-        )
-        return PositionRiskObservation(
-            observed_at=context.now,
-            action=PositionRiskAction.EXIT_DUTY_ARMED,
-            risk_context_known=False,
-            blockers=context_blockers,
-            instruction=instruction,
-        )
-    estimated_pnl = _estimated_position_native_pnl(
-        position=position,
-        quotes=by_name,
-        index_price=context.index_price,
-    )
-    if estimated_pnl is None:
-        instruction = _instruction(
-            position,
-            context.now,
-            ExitScope.BOTH_SIDES,
-            ExitReason.RISK_CONTEXT_UNKNOWN,
-        )
-        return PositionRiskObservation(
-            observed_at=context.now,
-            action=PositionRiskAction.EXIT_DUTY_ARMED,
-            risk_context_known=False,
-            blockers=("POSITION_CLOSE_VALUE_UNAVAILABLE",),
-            instruction=instruction,
-        )
-    credit = position.initial_net_credit_native
-    if estimated_pnl >= credit * policy.position.take_profit_fraction_of_credit:
-        instruction = _instruction(
-            position, context.now, ExitScope.BOTH_SIDES, ExitReason.TAKE_PROFIT
-        )
-        return _risk_exit_observation(context.now, instruction)
-    if estimated_pnl <= -(credit * policy.position.maximum_loss_multiple_of_credit):
-        instruction = _instruction(
-            position,
-            context.now,
-            ExitScope.BOTH_SIDES,
-            ExitReason.MAXIMUM_LOSS,
-        )
-        return _risk_exit_observation(context.now, instruction)
-    if session.phase is SessionPhase.DELIVERY_TWAP:
-        instruction = _instruction(
-            position, context.now, ExitScope.BOTH_SIDES, ExitReason.DELIVERY_TWAP
-        )
-        return _risk_exit_observation(context.now, instruction)
-    if session.minutes_to_expiry <= policy.position.latest_short_risk_exit_minutes_to_expiry:
-        instruction = _instruction(
-            position,
-            context.now,
-            ExitScope.BOTH_SIDES,
-            ExitReason.LATEST_SHORT_RISK_EXIT,
-        )
-        return _risk_exit_observation(context.now, instruction)
-    put_threat = _side_threatened(
-        side=position.put_side,
-        current_quote=by_name.get(position.put_side.short_quote.instrument_name),
-        context=context,
-        entry_index=position.product_index_at_entry,
-        policy=policy,
-    )
-    call_threat = _side_threatened(
-        side=position.call_side,
-        current_quote=by_name.get(position.call_side.short_quote.instrument_name),
-        context=context,
-        entry_index=position.product_index_at_entry,
-        policy=policy,
-    )
-    if context.event_state in {EventState.LIVE_EVENT, EventState.UNSCHEDULED_SHOCK}:
-        instruction = _instruction(
-            position, context.now, ExitScope.BOTH_SIDES, ExitReason.EVENT_OR_SHOCK
-        )
-        return _risk_exit_observation(context.now, instruction)
-    if context.breakout_state is BreakoutState.BREAKING_CONCENTRATED_STRIKE:
-        instruction = _instruction(
-            position,
-            context.now,
-            ExitScope.BOTH_SIDES,
-            ExitReason.CONCENTRATED_STRIKE_BREAKOUT,
-        )
-        return _risk_exit_observation(context.now, instruction)
-    if (
-        context.rv_acceleration >= policy.position.maximum_rv_acceleration
-        and position.has_short_risk
-    ):
-        instruction = _instruction(
-            position, context.now, ExitScope.BOTH_SIDES, ExitReason.GAMMA_EXPANSION
-        )
-        return _risk_exit_observation(context.now, instruction)
-    if put_threat is not None and call_threat is not None:
-        instruction = _instruction(
-            position, context.now, ExitScope.BOTH_SIDES, ExitReason.GAMMA_EXPANSION
-        )
-        return _risk_exit_observation(context.now, instruction)
-    if put_threat is not None:
-        instruction = _instruction(position, context.now, ExitScope.BOTH_SIDES, put_threat)
-        return _risk_exit_observation(context.now, instruction)
-    if call_threat is not None:
-        instruction = _instruction(position, context.now, ExitScope.BOTH_SIDES, call_threat)
-        return _risk_exit_observation(context.now, instruction)
-    return PositionRiskObservation(
-        observed_at=context.now,
-        action=PositionRiskAction.MONITORING,
-        risk_context_known=True,
-        blockers=(),
-        instruction=None,
+        ),
+        shadow_entry_evaluable=EligibilityFact(None, "CASE_OUTCOME_OWNS_ENTRY"),
+        terminal_economics_evaluable=EligibilityFact(None, "CASE_OUTCOME_OWNS_ECONOMICS"),
+        live_execution_attributable=EligibilityFact(False, "PUBLIC_WINDOW_HAS_NO_EXECUTION"),
+        strategy_population_eligible=population,
+        qualification_eligible=EligibilityFact(None, "POLICY_NOT_QUALIFIED"),
     )
 
 
-def project_exit_instruction(
-    *,
-    position: ShadowPosition,
-    instruction: PositionInstruction,
-    quotes: tuple[OptionQuote, ...],
-    context: MarketContext,
-    policy: BtcShortVolPolicy,
-) -> tuple[bool, bool, tuple[str, ...]]:
-    if position.state is PositionState.TERMINAL:
-        return False, False, ()
-    if position.first_instruction != instruction:
-        raise ValueError("exit projection must use the frozen Position instruction")
-    position.state = PositionState.EXIT_REQUIRED
-    by_name = {quote.instrument_name: quote for quote in quotes}
-    requested_sides = (
-        (position.put_side,)
-        if instruction.scope is ExitScope.PUT_SIDE
-        else (position.call_side,)
-        if instruction.scope is ExitScope.CALL_SIDE
-        else (position.put_side, position.call_side)
-    )
-    sides = tuple(side for side in requested_sides if side.short_open)
-    projection_changed = False
-    attempt_changed = False
-    blockers: list[str] = []
-    for side in sides:
-        reason = side.exit_requested_reason or instruction.reason
-        prior_attempt_count = side.exit_attempt_count
-        side_changed, side_blockers = _exit_side(
-            side=side,
-            by_name=by_name,
-            context=context,
-            reason=reason,
-            allow_short_only=policy.position.allow_short_only_risk_exit,
-            maximum_source_skew_ms=policy.shadow.maximum_pair_source_skew_ms,
-            maximum_receive_skew_ms=policy.shadow.maximum_pair_receive_skew_ms,
-            maximum_quote_age_ms=policy.shadow.maximum_position_quote_age_ms,
-            retry_interval_ms=policy.position.acquisition_retry_interval_ms,
+@dataclass(frozen=True)
+class ExitIntent:
+    category: str
+    reason: str
+    observation_id: str
+    observed_at: datetime
+    known_at: datetime
+    source: str
+    policy_id: str
+    scope: str = "WHOLE_PRODUCT"
+
+    def __post_init__(self) -> None:
+        if not self.category or not self.reason or not self.source:
+            raise ValueError("ExitIntent text fields must be non-empty")
+        if self.scope != "WHOLE_PRODUCT":
+            raise ValueError("B3 ExitIntent scope must be WHOLE_PRODUCT")
+        require_identity(self.observation_id, "observation_id")
+        require_identity(self.policy_id, "policy_id")
+        if _utc(self.observed_at, "observed_at") > _utc(self.known_at, "known_at"):
+            raise ValueError("ExitIntent cannot be known before observation")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("ExitIntentV1", self)
+
+    def as_object(self) -> dict[str, object]:
+        return _canonical_object(self)
+
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "exit_intent")
+        return cls(
+            category=_text(item, "category"),
+            reason=_text(item, "reason"),
+            observation_id=_text(item, "observation_id"),
+            observed_at=_datetime(item, "observed_at"),
+            known_at=_datetime(item, "known_at"),
+            source=_text(item, "source"),
+            policy_id=_text(item, "policy_id"),
+            scope=_text(item, "scope"),
         )
-        projection_changed = side_changed or projection_changed
-        blockers.extend(side_blockers)
-        attempt_changed = side.exit_attempt_count > prior_attempt_count or attempt_changed
-    _refresh_position_state(position, context.now)
-    return projection_changed, attempt_changed, tuple(blockers)
 
 
-def arm_exit_instruction(
-    *,
-    position: ShadowPosition,
-    instruction: PositionInstruction,
-) -> bool:
-    if position.state is PositionState.TERMINAL:
-        return False
-    sides = (
-        (position.put_side,)
-        if instruction.scope is ExitScope.PUT_SIDE
-        else (position.call_side,)
-        if instruction.scope is ExitScope.CALL_SIDE
-        else (position.put_side, position.call_side)
-    )
-    changed = False
-    for side in sides:
-        if side.short_open and side.exit_requested_reason is None:
-            side.exit_requested_at = instruction.at
-            side.exit_requested_reason = instruction.reason
-            changed = True
-    if changed:
-        if position.first_instruction is None:
-            position.first_instruction = instruction
-        position.instructions.append(instruction)
-        position.state = PositionState.EXIT_REQUIRED
-    return changed
+@dataclass(frozen=True)
+class ShadowEntryEvaluation:
+    status: ShadowEntryStatus
+    final: bool
+    observation_id: str | None
+    observed_at: datetime | None
+    known_at: datetime
+    reason: str | None
+    pricing_basis: str
+    native_net_credit: Decimal | None
+    combo_fee_native: Decimal | None
+    boundary_index_price_usd: Decimal | None
 
 
-def dispose_residual_wings(
-    *,
-    position: ShadowPosition,
-    quotes: tuple[OptionQuote, ...],
-    context: MarketContext,
-) -> bool:
-    if position.state is PositionState.TERMINAL:
-        return False
-    by_name = {quote.instrument_name: quote for quote in quotes}
-    changed = False
-    for side in (position.put_side, position.call_side):
-        if not side.long_open:
-            continue
-        quote = by_name.get(side.long_quote.instrument_name)
-        if quote is None:
-            continue
-        execution = execute_leg(
-            quote,
-            action=Action.SELL,
-            quantity=side.quantity,
-            index_price=context.index_price,
+@dataclass(frozen=True)
+class ShadowMonitorEvaluation:
+    observation_status: ObservationStatus
+    observation_id: str
+    observed_at: datetime
+    management_action: PositionAction | None
+    known_triggers: tuple[str, ...]
+    current_native_result: Decimal | None
+    exit_intent: ExitIntent | None
+    reason: str | None
+
+
+@dataclass(frozen=True)
+class ShadowExitEvaluation:
+    observation_status: ObservationStatus
+    observation_id: str
+    observed_at: datetime
+    native_close_cashflow: Decimal | None
+    native_result: Decimal | None
+    terminal: bool
+    reason: str | None
+
+
+@dataclass(frozen=True)
+class ShadowPosition:
+    position_id: str
+    trade_case_id: str
+    truth_layer: str
+    channel_id: ChannelId
+    selected_structure_id: str
+    option_amount: Decimal
+    entry_observation_id: str
+    entry_observed_at: datetime
+    entry_native_net_credit: Decimal
+    state: PositionState
+    exit_intent: ExitIntent | None
+
+
+@dataclass(frozen=True)
+class FuturePathSummary:
+    source_id: str
+    method_id: str
+    starts_at: datetime
+    ends_at: datetime
+    observation_count: int
+    start_index_price_usd: Decimal
+    end_index_price_usd: Decimal
+    minimum_index_price_usd: Decimal
+    maximum_index_price_usd: Decimal
+    maximum_rv_acceleration: Decimal
+
+    def __post_init__(self) -> None:
+        if not self.source_id or not self.method_id:
+            raise ValueError("future path source and method must be non-empty")
+        if _utc(self.starts_at, "starts_at") > _utc(self.ends_at, "ends_at"):
+            raise ValueError("future path boundaries are invalid")
+        if self.observation_count <= 0:
+            raise ValueError("future path requires a positive observation count")
+        prices = (
+            self.start_index_price_usd,
+            self.end_index_price_usd,
+            self.minimum_index_price_usd,
+            self.maximum_index_price_usd,
         )
-        if execution is None:
-            continue
-        side.native_cashflow_after_fees += execution.native_cashflow - execution.native_fee
-        side.boundary_valued_cashflow_usd += execution.usd_cashflow - execution.usd_fee
-        side.long_open = False
-        side.long_exit_execution = execution
-        side.terminal_at = context.now
-        side.state = SideState.TERMINAL
-        changed = True
-    _refresh_position_state(position, context.now)
-    return changed
-
-
-def settle_position(
-    *,
-    position: ShadowPosition,
-    delivery_price: Decimal,
-    settled_at: datetime,
-) -> PositionOutcome:
-    if position.outcome is not None:
-        return position.outcome
-    residual_wings_settled = position.residual_wing_count
-    for side in (position.put_side, position.call_side):
-        for quote, action, is_open in (
-            (side.short_quote, Action.SELL, side.short_open),
-            (side.long_quote, Action.BUY, side.long_open),
+        if any(not price.is_finite() or price <= 0 for price in prices):
+            raise ValueError("future path prices must be finite and positive")
+        if not self.minimum_index_price_usd <= min(
+            self.start_index_price_usd,
+            self.end_index_price_usd,
+        ) or not self.maximum_index_price_usd >= max(
+            self.start_index_price_usd,
+            self.end_index_price_usd,
         ):
-            if not is_open:
-                continue
-            settlement = settle_option_leg(
-                product=quote.product,
-                option_type=quote.option_type.value,
-                strike=quote.strike,
-                delivery_price=delivery_price,
-                quantity=side.quantity,
-                action=action,
-                delivery_fee_exempt=quote.delivery_fee_exempt,
-            )
-            side.native_cashflow_after_fees += settlement.net_cashflow_native
-            side.boundary_valued_cashflow_usd += settlement.net_cashflow_native * delivery_price
-            side.delivery_fee_native += settlement.delivery_fee_native
-        side.short_open = False
-        side.long_open = False
-        side.state = SideState.TERMINAL
-        side.terminal_at = settled_at
-    return _finalize_outcome(
-        position=position,
-        terminal_at=settled_at,
-        terminal_method="CONTRACT_SETTLEMENT",
-        valuation_index=delivery_price,
-        residual_wings_settled=residual_wings_settled,
-    )
+            raise ValueError("future path extrema do not contain endpoints")
+        if not self.maximum_rv_acceleration.is_finite() or not (
+            Decimal(0) <= self.maximum_rv_acceleration <= Decimal(1)
+        ):
+            raise ValueError("future path RV acceleration must be in [0, 1]")
 
+    def as_object(self) -> dict[str, object]:
+        return _canonical_object(self)
 
-def finalize_if_terminal(
-    *,
-    position: ShadowPosition,
-    at: datetime,
-    valuation_index: Decimal,
-) -> PositionOutcome | None:
-    if position.outcome is not None:
-        return position.outcome
-    terminal_side_states = {SideState.NOT_OPEN, SideState.TERMINAL}
-    if position.put_side.state not in terminal_side_states or (
-        position.call_side.state not in terminal_side_states
-    ):
-        return None
-    return _finalize_outcome(
-        position=position,
-        terminal_at=at,
-        terminal_method="MARKET_EXIT",
-        valuation_index=valuation_index,
-    )
-
-
-def entry_result_identity(
-    *,
-    case_identity: str,
-    attempted_at: datetime,
-    route: EntryRoute,
-    status: EntryStatus,
-    public_combo_observed: bool,
-    put_vertical_execution: VerticalExecution | None,
-    call_vertical_execution: VerticalExecution | None,
-    wing_executions: tuple[LegExecution, ...],
-    blockers: tuple[str, ...],
-) -> str:
-    require_identity(case_identity, "case_identity")
-    return canonical_identity(
-        "TwoSidedEntryResultV1",
-        case_identity,
-        attempted_at.isoformat(),
-        route,
-        status,
-        public_combo_observed,
-        put_vertical_execution,
-        call_vertical_execution,
-        wing_executions,
-        blockers,
-    )
-
-
-def shadow_position_identity(*, case_identity: str, entry_identity: str) -> str:
-    require_identity(case_identity, "case_identity")
-    require_identity(entry_identity, "entry_identity")
-    return canonical_identity(
-        "TwoSidedShadowPositionV1",
-        case_identity,
-        entry_identity,
-    )
-
-
-def position_outcome_identity(
-    *,
-    position_identity: str,
-    terminal_at: datetime,
-    terminal_method: str,
-    put_side_native_pnl: Decimal,
-    call_side_native_pnl: Decimal,
-    total_native_pnl: Decimal,
-    boundary_valued_total_usd_pnl: Decimal,
-    terminal_valued_total_usd_pnl: Decimal,
-    put_side_delivery_fee_native: Decimal,
-    call_side_delivery_fee_native: Decimal,
-    residual_wings_settled: int,
-) -> str:
-    require_identity(position_identity, "position_identity")
-    return canonical_identity(
-        "TwoSidedPositionOutcomeV1",
-        position_identity,
-        terminal_at.isoformat(),
-        terminal_method,
-        put_side_native_pnl,
-        call_side_native_pnl,
-        total_native_pnl,
-        boundary_valued_total_usd_pnl,
-        terminal_valued_total_usd_pnl,
-        put_side_delivery_fee_native,
-        call_side_delivery_fee_native,
-        residual_wings_settled,
-    )
-
-
-def _entry_result(
-    *,
-    case: DecisionCase,
-    attempted_at: datetime,
-    route: EntryRoute,
-    status: EntryStatus,
-    public_combo_observed: bool = False,
-    put_vertical_execution: VerticalExecution | None = None,
-    call_vertical_execution: VerticalExecution | None = None,
-    wing_executions: tuple[LegExecution, ...] = (),
-    blockers: tuple[str, ...] = (),
-) -> EntryResult:
-    identity = entry_result_identity(
-        case_identity=case.case_identity,
-        attempted_at=attempted_at,
-        route=route,
-        status=status,
-        public_combo_observed=public_combo_observed,
-        put_vertical_execution=put_vertical_execution,
-        call_vertical_execution=call_vertical_execution,
-        wing_executions=wing_executions,
-        blockers=blockers,
-    )
-    return EntryResult(
-        entry_identity=identity,
-        attempted_at=attempted_at,
-        route=route,
-        public_combo_observed=public_combo_observed,
-        status=status,
-        put_vertical_execution=put_vertical_execution,
-        call_vertical_execution=call_vertical_execution,
-        wing_executions=wing_executions,
-        blockers=blockers,
-    )
-
-
-def _position_from_entry(
-    *,
-    case: DecisionCase,
-    result: EntryResult,
-    long_put: OptionQuote,
-    short_put: OptionQuote,
-    short_call: OptionQuote,
-    long_call: OptionQuote,
-    index_price: Decimal,
-    quantity: Decimal,
-) -> ShadowPosition:
-    put_execution = result.put_vertical_execution
-    call_execution = result.call_vertical_execution
-    put_side = _side_from_execution(
-        side=Side.PUT,
-        short_quote=short_put,
-        long_quote=long_put,
-        quantity=quantity,
-        execution=put_execution,
-        wing_execution=_wing_execution(result.wing_executions, long_put.instrument_name),
-    )
-    call_side = _side_from_execution(
-        side=Side.CALL,
-        short_quote=short_call,
-        long_quote=long_call,
-        quantity=quantity,
-        execution=call_execution,
-        wing_execution=_wing_execution(result.wing_executions, long_call.instrument_name),
-    )
-    native_credit = put_side.native_cashflow_after_fees + call_side.native_cashflow_after_fees
-    position_identity = shadow_position_identity(
-        case_identity=case.case_identity,
-        entry_identity=result.entry_identity,
-    )
-    position = ShadowPosition(
-        position_identity=position_identity,
-        case_identity=case.case_identity,
-        entry_identity=result.entry_identity,
-        opened_at=result.attempted_at,
-        entry_status=result.status,
-        product_index_at_entry=index_price,
-        initial_net_credit_native=native_credit,
-        initial_net_credit_usd=(native_credit * index_price),
-        put_side=put_side,
-        call_side=call_side,
-    )
-    _arm_entry_remediation(position, result.attempted_at)
-    _refresh_position_state(position, result.attempted_at)
-    return position
-
-
-def _arm_entry_remediation(position: ShadowPosition, at: datetime) -> None:
-    sides: tuple[SidePosition, ...]
-    if position.entry_status is EntryStatus.PUT_SIDE_ONLY:
-        scope = ExitScope.PUT_SIDE
-        sides = (position.put_side,)
-    elif position.entry_status is EntryStatus.CALL_SIDE_ONLY:
-        scope = ExitScope.CALL_SIDE
-        sides = (position.call_side,)
-    elif position.entry_status is EntryStatus.TWO_SIDES_INCOHERENT:
-        scope = ExitScope.BOTH_SIDES
-        sides = (position.put_side, position.call_side)
-    else:
-        return
-    instruction = _instruction(
-        position,
-        at,
-        scope,
-        ExitReason.ENTRY_ACQUISITION_INCOMPLETE,
-    )
-    position.first_instruction = instruction
-    position.instructions.append(instruction)
-    for side in sides:
-        if side.short_open:
-            side.exit_requested_at = at
-            side.exit_requested_reason = ExitReason.ENTRY_ACQUISITION_INCOMPLETE
-
-
-def _side_from_execution(
-    *,
-    side: Side,
-    short_quote: OptionQuote,
-    long_quote: OptionQuote,
-    quantity: Decimal,
-    execution: VerticalExecution | None,
-    wing_execution: LegExecution | None,
-) -> SidePosition:
-    if isinstance(execution, VerticalExecution):
-        return SidePosition(
-            side=side,
-            short_quote=short_quote,
-            long_quote=long_quote,
-            quantity=quantity,
-            state=SideState.CREDIT_VERTICAL_OPEN,
-            native_cashflow_after_fees=execution.native_net_credit,
-            boundary_valued_cashflow_usd=execution.usd_net_credit,
-            short_open=True,
-            long_open=True,
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "future_path")
+        return cls(
+            source_id=_text(item, "source_id"),
+            method_id=_text(item, "method_id"),
+            starts_at=_datetime(item, "starts_at"),
+            ends_at=_datetime(item, "ends_at"),
+            observation_count=_integer(item, "observation_count"),
+            start_index_price_usd=_decimal(item, "start_index_price_usd"),
+            end_index_price_usd=_decimal(item, "end_index_price_usd"),
+            minimum_index_price_usd=_decimal(item, "minimum_index_price_usd"),
+            maximum_index_price_usd=_decimal(item, "maximum_index_price_usd"),
+            maximum_rv_acceleration=_decimal(item, "maximum_rv_acceleration"),
         )
-    if wing_execution is not None:
-        return SidePosition(
-            side=side,
-            short_quote=short_quote,
-            long_quote=long_quote,
-            quantity=quantity,
-            state=SideState.SHORT_FLAT_LONG_WING,
-            native_cashflow_after_fees=(wing_execution.native_cashflow - wing_execution.native_fee),
-            boundary_valued_cashflow_usd=(wing_execution.usd_cashflow - wing_execution.usd_fee),
-            short_open=False,
-            long_open=True,
+
+
+@dataclass(frozen=True)
+class ShadowCaseOutcome:
+    terminal_method: TerminalMethod
+    terminal_at: datetime
+    entry_status: ShadowEntryStatus
+    entry_observation_id: str | None
+    terminal_evidence_id: str | None
+    native_result_btc: Decimal | None
+    boundary_reference_result_usd: Decimal | None
+    fee_model_id: str | None
+    shadow_model_id: str | None
+    terminal_source: str
+    data_gap_observed: bool
+    reason: str | None
+    eligibility: OutcomeEligibility
+
+    def __post_init__(self) -> None:
+        _utc(self.terminal_at, "terminal_at")
+        if not self.terminal_source:
+            raise ValueError("terminal_source must be non-empty")
+        if self.terminal_evidence_id is not None:
+            require_identity(self.terminal_evidence_id, "terminal_evidence_id")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("ShadowCaseOutcomeV1", self)
+
+    def as_object(self) -> dict[str, object]:
+        value = _canonical_object(self)
+        value["eligibility"] = self.eligibility.as_object()
+        return value
+
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "shadow_case_outcome")
+        return cls(
+            terminal_method=TerminalMethod(_text(item, "terminal_method")),
+            terminal_at=_datetime(item, "terminal_at"),
+            entry_status=ShadowEntryStatus(_text(item, "entry_status")),
+            entry_observation_id=_optional_text(item, "entry_observation_id"),
+            terminal_evidence_id=_optional_text(item, "terminal_evidence_id"),
+            native_result_btc=_optional_decimal(item, "native_result_btc"),
+            boundary_reference_result_usd=_optional_decimal(item, "boundary_reference_result_usd"),
+            fee_model_id=_optional_text(item, "fee_model_id"),
+            shadow_model_id=_optional_text(item, "shadow_model_id"),
+            terminal_source=_text(item, "terminal_source"),
+            data_gap_observed=_boolean(item, "data_gap_observed"),
+            reason=_optional_text(item, "reason"),
+            eligibility=OutcomeEligibility.from_object(item.get("eligibility")),
         )
-    return SidePosition(
-        side=side,
-        short_quote=short_quote,
-        long_quote=long_quote,
-        quantity=quantity,
-        state=SideState.NOT_OPEN,
-        native_cashflow_after_fees=Decimal(0),
-        boundary_valued_cashflow_usd=Decimal(0),
-        short_open=False,
-        long_open=False,
+
+
+@dataclass(frozen=True)
+class WindowOutcome:
+    decision_window_id: str
+    horizon_starts_at: datetime
+    horizon_ends_at: datetime
+    known_at: datetime
+    future_path_known: bool
+    future_path_continuous: bool | None
+    expiry_settlement: ExpirySettlementFact | None
+    future_path: FuturePathSummary | None
+    regime_labels: tuple[str, ...]
+    reason: str | None
+    eligibility: OutcomeEligibility
+
+    def __post_init__(self) -> None:
+        require_identity(self.decision_window_id, "decision_window_id")
+        if _utc(self.horizon_starts_at, "horizon_starts_at") >= _utc(
+            self.horizon_ends_at, "horizon_ends_at"
+        ):
+            raise ValueError("WindowOutcome horizon must have positive duration")
+        if _utc(self.horizon_ends_at, "horizon_ends_at") > _utc(self.known_at, "known_at"):
+            raise ValueError("WindowOutcome cannot be known before its horizon")
+        if self.future_path_known and self.future_path_continuous is None:
+            raise ValueError("known future path requires a continuity fact")
+        if not self.future_path_known and self.future_path_continuous is not None:
+            raise ValueError("unknown future path cannot claim continuity")
+        if self.future_path_known != (self.future_path is not None):
+            raise ValueError("known future path requires one path summary")
+        if self.future_path is not None and (
+            self.future_path.starts_at != self.horizon_starts_at
+            or self.future_path.ends_at != self.horizon_ends_at
+        ):
+            raise ValueError("future path must cover the declared WindowOutcome horizon")
+        if not self.future_path_known and not self.reason:
+            raise ValueError("unknown future path requires a reason")
+        if len(set(self.regime_labels)) != len(self.regime_labels):
+            raise ValueError("WindowOutcome regime labels must be unique")
+        if self.expiry_settlement is not None and self.expiry_settlement.known_at > self.known_at:
+            raise ValueError("WindowOutcome cannot know settlement before its source fact")
+        if self.eligibility.future_path_known.value is not self.future_path_known:
+            raise ValueError("WindowOutcome future-path eligibility mismatch")
+        if self.eligibility.future_path_continuous.value is not self.future_path_continuous:
+            raise ValueError("WindowOutcome continuity eligibility mismatch")
+        if self.eligibility.live_execution_attributable.value is not False:
+            raise ValueError("Public WindowOutcome cannot attribute live execution")
+        if self.eligibility.strategy_population_eligible.value is True and not (
+            self.future_path_known and self.future_path_continuous
+        ):
+            raise ValueError("strategy population eligibility requires a continuous future path")
+        if self.eligibility.qualification_eligible.value is True and (
+            self.eligibility.strategy_population_eligible.value is not True
+        ):
+            raise ValueError("qualification eligibility requires strategy population eligibility")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("WindowOutcomeV1", self)
+
+    def as_object(self) -> dict[str, object]:
+        value = _canonical_object(self)
+        value["future_path"] = (
+            self.future_path.as_object() if self.future_path is not None else None
+        )
+        value["expiry_settlement"] = (
+            self.expiry_settlement.as_object() if self.expiry_settlement is not None else None
+        )
+        value["eligibility"] = self.eligibility.as_object()
+        value["window_outcome_id"] = self.identity
+        return value
+
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "window_outcome")
+        outcome = cls(
+            decision_window_id=_text(item, "decision_window_id"),
+            horizon_starts_at=_datetime(item, "horizon_starts_at"),
+            horizon_ends_at=_datetime(item, "horizon_ends_at"),
+            known_at=_datetime(item, "known_at"),
+            future_path_known=_boolean(item, "future_path_known"),
+            future_path_continuous=_optional_boolean(item, "future_path_continuous"),
+            expiry_settlement=(
+                ExpirySettlementFact.from_object(item.get("expiry_settlement"))
+                if item.get("expiry_settlement") is not None
+                else None
+            ),
+            future_path=(
+                FuturePathSummary.from_object(item.get("future_path"))
+                if item.get("future_path") is not None
+                else None
+            ),
+            regime_labels=_text_tuple(item, "regime_labels"),
+            reason=_optional_text(item, "reason"),
+            eligibility=OutcomeEligibility.from_object(item.get("eligibility")),
+        )
+        if _text(item, "window_outcome_id") != outcome.identity:
+            raise ValueError("WindowOutcome identity mismatch")
+        return outcome
+
+
+@dataclass(frozen=True)
+class TradeCase:
+    channel_id: ChannelId
+    truth_layer: str
+    decision_record_id: str
+    decision_window_id: str
+    decision_policy_id: str
+    decision_boundary: datetime
+    selected_structure_id: str
+    selected_structure_json: str
+    risk_allocation_id: str
+    risk_allocation_json: str
+    opened_at: datetime
+    entry_deadline: datetime
+    entry_pricing_basis: str
+    entry_status: ShadowEntryStatus | None = None
+    entry_final: bool = False
+    entry_observation_id: str | None = None
+    entry_observed_at: datetime | None = None
+    entry_known_at: datetime | None = None
+    entry_reason: str | None = None
+    entry_pricing_json: str | None = None
+    position_id: str | None = None
+    position_state: PositionState | None = None
+    entry_native_net_credit: Decimal | None = None
+    entry_index_price_usd: Decimal | None = None
+    entry_vrp_proxy_ratio: Decimal | None = None
+    last_observation_id: str | None = None
+    last_observed_at: datetime | None = None
+    gap_observed: bool = False
+    exit_intent: ExitIntent | None = None
+    outcome: ShadowCaseOutcome | None = None
+
+    def __post_init__(self) -> None:
+        if self.truth_layer != "SHADOW_PROJECTION":
+            raise ValueError("B3 TradeCase truth layer must be SHADOW_PROJECTION")
+        if self.entry_pricing_basis != SHADOW_PRICING_BASIS:
+            raise ValueError("B3 TradeCase has an unsupported Shadow pricing basis")
+        for value, field in (
+            (self.decision_record_id, "decision_record_id"),
+            (self.decision_window_id, "decision_window_id"),
+            (self.decision_policy_id, "decision_policy_id"),
+            (self.selected_structure_id, "selected_structure_id"),
+            (self.risk_allocation_id, "risk_allocation_id"),
+        ):
+            require_identity(value, field)
+        boundary = _utc(self.decision_boundary, "decision_boundary")
+        if _utc(self.opened_at, "opened_at") < boundary:
+            raise ValueError("TradeCase cannot open before its Decision")
+        if _utc(self.entry_deadline, "entry_deadline") <= boundary:
+            raise ValueError("TradeCase Entry deadline must be after its Decision")
+        structure = self.selected_structure
+        if structure.get("candidate_id") != self.selected_structure_id:
+            raise ValueError("TradeCase structure identity mismatch")
+        allocation = self.risk_allocation
+        if allocation.get("allocation_id") != self.risk_allocation_id:
+            raise ValueError("TradeCase allocation identity mismatch")
+        if allocation.get("candidate_id") != self.selected_structure_id:
+            raise ValueError("TradeCase allocation does not bind its structure")
+        if self.entry_final and self.entry_status is None:
+            raise ValueError("final Entry requires a status")
+        if not self.entry_final and (self.position_id is not None or self.outcome is not None):
+            raise ValueError("provisional Entry cannot create Position or Outcome")
+        if self.entry_status is not None and self.entry_known_at is None:
+            raise ValueError("Entry evaluation requires a known-at boundary")
+        if self.position_id is not None and (
+            self.entry_status is not ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE
+            or not self.entry_final
+            or self.entry_pricing_json is None
+            or self.position_state is None
+        ):
+            raise ValueError("Shadow Position requires final atomic Entry economics")
+        if self.position_state is not None and self.position_id is None:
+            raise ValueError("Position state requires one Shadow Position")
+        if self.entry_final and (
+            self.entry_status is ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE
+        ) != (self.position_id is not None):
+            raise ValueError("final Entry status does not match Position existence")
+        if self.position_state is PositionState.EXIT_INTENT_FROZEN and self.exit_intent is None:
+            raise ValueError("EXIT_INTENT_FROZEN requires one ExitIntent")
+        if self.exit_intent is not None and self.position_id is None:
+            raise ValueError("ExitIntent requires one Shadow Position")
+        if self.position_state is PositionState.TERMINAL and self.outcome is None:
+            raise ValueError("TERMINAL Position requires one Outcome")
+        if self.outcome is not None:
+            has_position = self.position_id is not None
+            if has_position != (self.outcome.terminal_method is not TerminalMethod.NO_POSITION):
+                raise ValueError("Outcome terminal method does not match Position existence")
+            if has_position != (self.position_state is PositionState.TERMINAL):
+                raise ValueError("Position Outcome requires terminal Position state")
+
+    @property
+    def identity(self) -> str:
+        structure = self.selected_structure
+        return canonical_identity(
+            "TradeCaseV1",
+            self.channel_id,
+            self.truth_layer,
+            self.decision_window_id,
+            self.decision_policy_id,
+            self.selected_structure_id,
+            structure.get("option_amount"),
+            self.decision_boundary,
+        )
+
+    @property
+    def snapshot_identity(self) -> str:
+        return canonical_identity("TradeCaseSnapshotV1", self.as_object(include_snapshot=False))
+
+    @property
+    def selected_structure(self) -> dict[str, object]:
+        return _json_mapping(self.selected_structure_json, "selected_structure")
+
+    @property
+    def risk_allocation(self) -> dict[str, object]:
+        return _json_mapping(self.risk_allocation_json, "risk_allocation")
+
+    @property
+    def entry_pricing(self) -> dict[str, object] | None:
+        return (
+            _json_mapping(self.entry_pricing_json, "entry_pricing")
+            if self.entry_pricing_json is not None
+            else None
+        )
+
+    @property
+    def position(self) -> ShadowPosition | None:
+        if self.position_id is None:
+            return None
+        return ShadowPosition(
+            position_id=self.position_id,
+            trade_case_id=self.identity,
+            truth_layer=self.truth_layer,
+            channel_id=self.channel_id,
+            selected_structure_id=self.selected_structure_id,
+            option_amount=_structure_amount(self),
+            entry_observation_id=_required(self.entry_observation_id, "entry_observation_id"),
+            entry_observed_at=_required_datetime(self.entry_observed_at, "entry_observed_at"),
+            entry_native_net_credit=_required_decimal(
+                self.entry_native_net_credit, "entry_native_net_credit"
+            ),
+            state=_required_state(self.position_state),
+            exit_intent=self.exit_intent,
+        )
+
+    def as_object(self, *, include_snapshot: bool = True) -> dict[str, object]:
+        value = _canonical_object(self)
+        value["trade_case_id"] = self.identity
+        if include_snapshot:
+            value["snapshot_id"] = self.snapshot_identity
+        return value
+
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "trade_case")
+        case = cls(
+            channel_id=ChannelId(_text(item, "channel_id")),
+            truth_layer=_text(item, "truth_layer"),
+            decision_record_id=_text(item, "decision_record_id"),
+            decision_window_id=_text(item, "decision_window_id"),
+            decision_policy_id=_text(item, "decision_policy_id"),
+            decision_boundary=_datetime(item, "decision_boundary"),
+            selected_structure_id=_text(item, "selected_structure_id"),
+            selected_structure_json=_text(item, "selected_structure_json"),
+            risk_allocation_id=_text(item, "risk_allocation_id"),
+            risk_allocation_json=_text(item, "risk_allocation_json"),
+            opened_at=_datetime(item, "opened_at"),
+            entry_deadline=_datetime(item, "entry_deadline"),
+            entry_pricing_basis=_text(item, "entry_pricing_basis"),
+            entry_status=_optional_enum(item, "entry_status", ShadowEntryStatus),
+            entry_final=_boolean(item, "entry_final"),
+            entry_observation_id=_optional_text(item, "entry_observation_id"),
+            entry_observed_at=_optional_datetime(item, "entry_observed_at"),
+            entry_known_at=_optional_datetime(item, "entry_known_at"),
+            entry_reason=_optional_text(item, "entry_reason"),
+            entry_pricing_json=_optional_text(item, "entry_pricing_json"),
+            position_id=_optional_text(item, "position_id"),
+            position_state=_optional_enum(item, "position_state", PositionState),
+            entry_native_net_credit=_optional_decimal(item, "entry_native_net_credit"),
+            entry_index_price_usd=_optional_decimal(item, "entry_index_price_usd"),
+            entry_vrp_proxy_ratio=_optional_decimal(item, "entry_vrp_proxy_ratio"),
+            last_observation_id=_optional_text(item, "last_observation_id"),
+            last_observed_at=_optional_datetime(item, "last_observed_at"),
+            gap_observed=_boolean(item, "gap_observed"),
+            exit_intent=(
+                ExitIntent.from_object(item.get("exit_intent"))
+                if item.get("exit_intent") is not None
+                else None
+            ),
+            outcome=(
+                ShadowCaseOutcome.from_object(item.get("outcome"))
+                if item.get("outcome") is not None
+                else None
+            ),
+        )
+        if _text(item, "trade_case_id") != case.identity:
+            raise ValueError("TradeCase identity mismatch")
+        if _text(item, "snapshot_id") != case.snapshot_identity:
+            raise ValueError("TradeCase snapshot identity mismatch")
+        return case
+
+
+def open_trade_case(record: DecisionRecord, policy: BtcShortVolPolicy) -> TradeCase:
+    if record.result is not DecisionResult.CANDIDATE:
+        raise ValueError("only a CANDIDATE DecisionRecord can open a TradeCase")
+    if record.decision_policy_id != policy.identity:
+        raise ValueError("DecisionRecord Policy does not match")
+    if record.window.channel_id is not policy.channel_id:
+        raise ValueError("DecisionRecord Channel does not match")
+    if record.selected_structure_json is None or record.risk_allocation_json is None:
+        raise ValueError("Candidate DecisionRecord lacks frozen structure or allocation")
+    allocation = record.risk_allocation
+    if allocation is None or allocation.get("result") != "AVAILABLE":
+        raise ValueError("TradeCase requires AVAILABLE ShadowRiskAllocation")
+    return TradeCase(
+        channel_id=record.window.channel_id,
+        truth_layer="SHADOW_PROJECTION",
+        decision_record_id=record.identity,
+        decision_window_id=record.window.identity,
+        decision_policy_id=record.decision_policy_id,
+        decision_boundary=record.known_at,
+        selected_structure_id=_required(record.selected_structure_id, "selected_structure_id"),
+        selected_structure_json=record.selected_structure_json,
+        risk_allocation_id=_required(record.risk_allocation_id, "risk_allocation_id"),
+        risk_allocation_json=record.risk_allocation_json,
+        opened_at=record.known_at,
+        entry_deadline=record.known_at
+        + timedelta(seconds=policy.lifecycle.entry_evaluation_window_seconds),
+        entry_pricing_basis=SHADOW_PRICING_BASIS,
     )
 
 
-def _wing_execution(
-    executions: tuple[LegExecution, ...],
-    instrument_name: str,
-) -> LegExecution | None:
-    return next(
-        (execution for execution in executions if execution.instrument_name == instrument_name),
+def evaluate_shadow_entry(
+    case: TradeCase,
+    *,
+    observation: MarketObservation | None,
+    policy: BtcShortVolPolicy,
+    known_at: datetime,
+) -> tuple[TradeCase, ShadowEntryEvaluation]:
+    _require_case_policy(case, policy)
+    boundary = _utc(known_at, "known_at")
+    if case.entry_final:
+        raise ValueError("TradeCase Entry result is already final")
+    reason = _entry_unknown_reason(case, observation, boundary, policy)
+    if reason is not None:
+        final = boundary >= case.entry_deadline
+        evaluation = ShadowEntryEvaluation(
+            ShadowEntryStatus.UNKNOWN,
+            final,
+            observation.identity if observation is not None else None,
+            observation.observed_at if observation is not None else None,
+            boundary,
+            reason,
+            case.entry_pricing_basis,
+            None,
+            None,
+            None,
+        )
+        updated = _apply_entry_evaluation(case, evaluation, pricing=None)
+        return updated, evaluation
+
+    assert observation is not None
+    legs = _selected_quotes(case, observation)
+    if legs is None:
+        evaluation = ShadowEntryEvaluation(
+            ShadowEntryStatus.UNKNOWN,
+            boundary >= case.entry_deadline,
+            observation.identity,
+            observation.observed_at,
+            boundary,
+            "SELECTED_STRUCTURE_QUOTES_MISSING",
+            case.entry_pricing_basis,
+            None,
+            None,
+            None,
+        )
+        return _apply_entry_evaluation(case, evaluation, pricing=None), evaluation
+    if not _quotes_strictly_after(legs, case.decision_boundary):
+        evaluation = ShadowEntryEvaluation(
+            ShadowEntryStatus.UNKNOWN,
+            boundary >= case.entry_deadline,
+            observation.identity,
+            observation.observed_at,
+            boundary,
+            "ENTRY_QUOTES_NOT_STRICTLY_FUTURE",
+            case.entry_pricing_basis,
+            None,
+            None,
+            None,
+        )
+        return _apply_entry_evaluation(case, evaluation, pricing=None), evaluation
+    pricing = price_btc_0dte_condor(
+        long_put=legs[0],
+        short_put=legs[1],
+        short_call=legs[2],
+        long_call=legs[3],
+        amount=_structure_amount(case),
+        boundary_index_price=observation.context.index_price,
+    )
+    if pricing is None:
+        evaluation = ShadowEntryEvaluation(
+            ShadowEntryStatus.SHADOW_ATOMIC_NOT_EVALUABLE,
+            True,
+            observation.identity,
+            observation.observed_at,
+            observation.known_at,
+            "WHOLE_PRODUCT_NOT_PRICE_EVALUABLE_AT_OBSERVED_DEPTH",
+            case.entry_pricing_basis,
+            None,
+            None,
+            observation.context.index_price,
+        )
+        return _apply_entry_evaluation(case, evaluation, pricing=None), evaluation
+
+    evaluation = ShadowEntryEvaluation(
+        ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE,
+        True,
+        observation.identity,
+        observation.observed_at,
+        observation.known_at,
+        None,
+        case.entry_pricing_basis,
+        pricing.native_net_credit,
+        pricing.combo_standard_fee_native,
+        pricing.boundary_index_price_usd,
+    )
+    return _apply_entry_evaluation(
+        case, evaluation, pricing=pricing, observation=observation
+    ), evaluation
+
+
+def monitor_shadow_position(
+    case: TradeCase,
+    *,
+    observation: MarketObservation,
+    policy: BtcShortVolPolicy,
+) -> tuple[TradeCase, ShadowMonitorEvaluation]:
+    _require_open_position(case, policy)
+    _require_next_observation(case, observation, policy)
+    if observation.observed_at >= _structure_expiry(case):
+        updated = _advance_observation(case, observation, gap=False)
+        return updated, ShadowMonitorEvaluation(
+            ObservationStatus.KNOWN,
+            observation.identity,
+            observation.observed_at,
+            PositionAction.SETTLE_AT_EXPIRY,
+            ("EXPIRY_REACHED",),
+            None,
+            case.exit_intent,
+            None,
+        )
+    if observation.data_health_blockers:
+        updated = _advance_observation(case, observation, gap=True)
+        evaluation = ShadowMonitorEvaluation(
+            ObservationStatus.UNKNOWN,
+            observation.identity,
+            observation.observed_at,
+            None,
+            (),
+            None,
+            case.exit_intent,
+            observation.data_health_blockers[0],
+        )
+        return updated, evaluation
+
+    legs = _selected_quotes(case, observation)
+    if legs is None:
+        updated = _advance_observation(case, observation, gap=True)
+        return updated, ShadowMonitorEvaluation(
+            ObservationStatus.UNKNOWN,
+            observation.identity,
+            observation.observed_at,
+            None,
+            (),
+            None,
+            case.exit_intent,
+            "SELECTED_STRUCTURE_QUOTES_MISSING",
+        )
+    close = _close_projection(case, observation, legs) if legs is not None else None
+    triggers = _position_triggers(case, observation, close, policy) if legs is not None else ()
+    if not triggers and close is None:
+        updated = _advance_observation(case, observation, gap=False)
+        return updated, ShadowMonitorEvaluation(
+            ObservationStatus.UNKNOWN,
+            observation.identity,
+            observation.observed_at,
+            None,
+            (),
+            None,
+            case.exit_intent,
+            "POSITION_CLOSE_CONTEXT_UNKNOWN",
+        )
+    native_result = (
+        _required_decimal(case.entry_native_net_credit, "entry_native_net_credit")
+        + close.native_net_cashflow
+        if close is not None
+        else None
+    )
+    intent = case.exit_intent
+    if intent is None and triggers:
+        primary = next(reason for reason in policy.lifecycle.trigger_priority if reason in triggers)
+        intent = ExitIntent(
+            category=_trigger_category(primary),
+            reason=primary,
+            observation_id=observation.identity,
+            observed_at=observation.observed_at,
+            known_at=observation.known_at,
+            source="PUBLIC_MARKET_OBSERVATION",
+            policy_id=policy.identity,
+        )
+    action = PositionAction.EXIT_WHOLE_PRODUCT if intent is not None else PositionAction.HOLD
+    updated = replace(
+        _advance_observation(case, observation, gap=False),
+        exit_intent=intent,
+        position_state=(
+            PositionState.EXIT_INTENT_FROZEN if intent is not None else PositionState.MONITORING
+        ),
+    )
+    return updated, ShadowMonitorEvaluation(
+        ObservationStatus.KNOWN,
+        observation.identity,
+        observation.observed_at,
+        action,
+        triggers,
+        native_result,
+        intent,
         None,
     )
 
 
-def _pending_exit_instruction(position: ShadowPosition) -> PositionInstruction | None:
-    pending = tuple(
-        side
-        for side in (position.put_side, position.call_side)
-        if side.short_open and side.exit_requested_reason is not None
-    )
-    if not pending:
-        return None
-    if position.first_instruction is None:
-        raise ValueError("pending short-risk duty lacks its frozen instruction")
-    return position.first_instruction
-
-
-def _risk_exit_observation(
-    observed_at: datetime,
-    instruction: PositionInstruction,
-) -> PositionRiskObservation:
-    return PositionRiskObservation(
-        observed_at=observed_at,
-        action=PositionRiskAction.EXIT_DUTY_ARMED,
-        risk_context_known=True,
-        blockers=(),
-        instruction=instruction,
-    )
-
-
-def _position_risk_context_blockers(
+def evaluate_shadow_exit(
+    case: TradeCase,
     *,
-    position: ShadowPosition,
-    by_name: dict[str, OptionQuote],
-    observed_at: datetime,
-    maximum_source_age_ms: int,
-    maximum_receive_age_ms: int,
-) -> tuple[str, ...]:
-    observed_ms = int(observed_at.timestamp() * 1000)
-    opened_ms = int(position.opened_at.timestamp() * 1000)
-    required: list[tuple[str, OptionQuote | None]] = []
-    for side in (position.put_side, position.call_side):
-        if side.short_open:
-            required.append(
-                (f"{side.side.value}_SHORT", by_name.get(side.short_quote.instrument_name))
-            )
-        if side.long_open:
-            required.append(
-                (f"{side.side.value}_LONG", by_name.get(side.long_quote.instrument_name))
-            )
-    blockers: list[str] = []
-    usable: list[OptionQuote] = []
-    for label, quote in required:
-        if quote is None:
-            blockers.append(f"{label}_RISK_QUOTE_MISSING")
-            continue
-        if (
-            quote.source_timestamp_ms <= opened_ms
-            or quote.received_timestamp_ms <= opened_ms
-            or quote.source_timestamp_ms > observed_ms
-            or quote.received_timestamp_ms > observed_ms
-        ):
-            blockers.append(f"{label}_RISK_QUOTE_OUTSIDE_CAUSAL_BOUNDARY")
-            continue
-        if observed_ms - quote.source_timestamp_ms > maximum_source_age_ms:
-            blockers.append(f"{label}_RISK_SOURCE_STALE")
-            continue
-        if observed_ms - quote.received_timestamp_ms > maximum_receive_age_ms:
-            blockers.append(f"{label}_RISK_RECEIVE_STALE")
-            continue
-        usable.append(quote)
-    if len(usable) == len(required) and usable:
-        if (
-            len({quote.continuity_epoch for quote in usable}) != 1
-            or max(quote.source_timestamp_ms for quote in usable)
-            - min(quote.source_timestamp_ms for quote in usable)
-            > maximum_source_age_ms
-            or max(quote.received_timestamp_ms for quote in usable)
-            - min(quote.received_timestamp_ms for quote in usable)
-            > maximum_receive_age_ms
-        ):
-            blockers.append("POSITION_RISK_QUOTES_INCOHERENT")
-    return tuple(blockers)
-
-
-def _instruction(
-    position: ShadowPosition,
-    at: datetime,
-    scope: ExitScope,
-    reason: ExitReason,
-) -> PositionInstruction:
-    identity = canonical_identity(
-        "TwoSidedPositionInstructionV1",
-        position.position_identity,
-        at.isoformat(),
-        scope,
-        reason,
-    )
-    return PositionInstruction(identity, at, scope, reason)
-
-
-def _side_threatened(
-    *,
-    side: SidePosition,
-    current_quote: OptionQuote | None,
-    context: MarketContext,
-    entry_index: Decimal,
+    observation: MarketObservation,
     policy: BtcShortVolPolicy,
-) -> ExitReason | None:
-    if not side.short_open:
-        return None
-    delta = abs(current_quote.signed_delta) if current_quote is not None else Decimal(0)
-    if delta >= policy.position.maximum_short_abs_delta:
-        return ExitReason.PUT_SIDE_DELTA if side.side is Side.PUT else ExitReason.CALL_SIDE_DELTA
-    if side.side is Side.PUT:
-        adverse = max(Decimal(0), Decimal(1) - context.index_price / entry_index)
-        if adverse >= policy.position.maximum_adverse_move_fraction:
-            return ExitReason.PUT_SIDE_ADVERSE_MOVE
-    else:
-        adverse = max(Decimal(0), context.index_price / entry_index - Decimal(1))
-        if adverse >= policy.position.maximum_adverse_move_fraction:
-            return ExitReason.CALL_SIDE_ADVERSE_MOVE
+) -> tuple[TradeCase, ShadowExitEvaluation]:
+    _require_open_position(case, policy)
+    if case.exit_intent is None:
+        raise ValueError("Shadow exit requires a frozen ExitIntent")
+    if observation.observed_at <= case.exit_intent.observed_at:
+        raise ValueError("Shadow exit evidence must be strictly later than its trigger")
+    if observation.known_at <= case.exit_intent.known_at:
+        raise ValueError("Shadow exit known-at must be strictly later than its trigger")
+    if observation.observed_at >= _structure_expiry(case):
+        raise ValueError("at or after expiry, only settlement can terminalize a Position")
+    _require_next_observation(case, observation, policy, enforce_cadence=False)
+    legs = None if observation.data_health_blockers else _selected_quotes(case, observation)
+    if legs is not None and not _quotes_strictly_after(legs, case.exit_intent.known_at):
+        legs = None
+    close = _close_projection(case, observation, legs) if legs is not None else None
+    if close is None:
+        updated = _advance_observation(
+            case,
+            observation,
+            gap=bool(observation.data_health_blockers or legs is None),
+        )
+        evaluation = ShadowExitEvaluation(
+            ObservationStatus.UNKNOWN,
+            observation.identity,
+            observation.observed_at,
+            None,
+            None,
+            False,
+            (
+                observation.data_health_blockers[0]
+                if observation.data_health_blockers
+                else "WHOLE_PRODUCT_EXIT_NOT_PRICE_EVALUABLE"
+            ),
+        )
+        return updated, evaluation
+    native_result = (
+        _required_decimal(case.entry_native_net_credit, "entry_native_net_credit")
+        + close.native_net_cashflow
+    )
+    outcome = _position_outcome(
+        case,
+        method=TerminalMethod.WHOLE_PRODUCT_EXIT,
+        terminal_at=observation.known_at,
+        terminal_evidence_id=observation.identity,
+        native_result=native_result,
+        boundary_result=native_result * observation.context.index_price,
+        fee_model_id=close.fee_model_id,
+        source="STRICTLY_LATER_PUBLIC_FOUR_LEG_ESTIMATE",
+    )
+    updated = replace(
+        _advance_observation(case, observation, gap=False),
+        position_state=PositionState.TERMINAL,
+        outcome=outcome,
+    )
+    return updated, ShadowExitEvaluation(
+        ObservationStatus.KNOWN,
+        observation.identity,
+        observation.observed_at,
+        close.native_net_cashflow,
+        native_result,
+        True,
+        None,
+    )
+
+
+def settle_shadow_position(
+    case: TradeCase,
+    *,
+    settlement: ExpirySettlementFact,
+    policy: BtcShortVolPolicy,
+) -> TradeCase:
+    _require_open_position(case, policy)
+    if settlement.product_id is not ProductId.INVERSE_BTC:
+        raise ValueError("BTC Shadow Position requires a BTC settlement fact")
+    boundary = _utc(settlement.known_at, "settlement.known_at")
+    structure = case.selected_structure
+    expiry = _parse_iso(_text(structure, "expiry"), "expiry")
+    if settlement.expiry != expiry:
+        raise ValueError("settlement expiry does not match the frozen structure")
+    legs = _structure_legs(case)
+    economics = settle_btc_0dte_condor(
+        long_put_strike=legs[0][1],
+        short_put_strike=legs[1][1],
+        short_call_strike=legs[2][1],
+        long_call_strike=legs[3][1],
+        amount=_structure_amount(case),
+        delivery_price=settlement.delivery_price_usd,
+        daily_delivery_fee_exempt=all(leg[3] for leg in legs),
+    )
+    native_result = (
+        _required_decimal(case.entry_native_net_credit, "entry_native_net_credit")
+        + economics.native_net_cashflow
+    )
+    outcome = _position_outcome(
+        case,
+        method=TerminalMethod.CONTRACT_SETTLEMENT,
+        terminal_at=boundary,
+        terminal_evidence_id=settlement.identity,
+        native_result=native_result,
+        boundary_result=native_result * settlement.delivery_price_usd,
+        fee_model_id="DERIBIT_DAILY_OPTION_DELIVERY_FEE_EXEMPT"
+        if economics.delivery_fee_native == 0
+        else "DERIBIT_STANDARD_DELIVERY_FEE",
+        source=(f"{settlement.evidence_kind.value}:{settlement.source_id}:{settlement.method_id}"),
+    )
+    return replace(case, position_state=PositionState.TERMINAL, outcome=outcome)
+
+
+def _apply_entry_evaluation(
+    case: TradeCase,
+    evaluation: ShadowEntryEvaluation,
+    *,
+    pricing: Btc0DteCondorPricing | None,
+    observation: MarketObservation | None = None,
+) -> TradeCase:
+    outcome: ShadowCaseOutcome | None = None
+    position_id: str | None = None
+    position_state: PositionState | None = None
+    entry_pricing_json: str | None = None
+    entry_credit: Decimal | None = None
+    entry_index: Decimal | None = None
+    entry_vrp: Decimal | None = None
+    if evaluation.final and evaluation.status is not ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE:
+        outcome = _no_position_outcome(evaluation)
+    if pricing is not None and observation is not None:
+        entry_pricing_json = _json_text(
+            {
+                "fee_model_id": pricing.fee_model_id,
+                "native_gross_credit": pricing.native_gross_credit,
+                "combo_standard_fee_native": pricing.combo_standard_fee_native,
+                "native_net_credit": pricing.native_net_credit,
+                "boundary_index_price_usd": pricing.boundary_index_price_usd,
+                "boundary_net_credit_usd": pricing.boundary_net_credit_usd,
+            }
+        )
+        position_id = canonical_identity(
+            "ShadowPositionV1",
+            case.identity,
+            case.truth_layer,
+            case.selected_structure_id,
+            observation.identity,
+            observation.observed_at,
+        )
+        position_state = PositionState.MONITORING
+        entry_credit = pricing.native_net_credit
+        entry_index = pricing.boundary_index_price_usd
+        entry_vrp = (
+            observation.context.same_session_implied_variance_proxy
+            / observation.context.trailing_realized_variance_proxy
+        )
+    return replace(
+        case,
+        entry_status=evaluation.status,
+        entry_final=evaluation.final,
+        entry_observation_id=evaluation.observation_id,
+        entry_observed_at=evaluation.observed_at,
+        entry_known_at=evaluation.known_at,
+        entry_reason=evaluation.reason,
+        entry_pricing_json=entry_pricing_json,
+        position_id=position_id,
+        position_state=position_state,
+        entry_native_net_credit=entry_credit,
+        entry_index_price_usd=entry_index,
+        entry_vrp_proxy_ratio=entry_vrp,
+        last_observation_id=evaluation.observation_id or case.last_observation_id,
+        last_observed_at=evaluation.observed_at or case.last_observed_at,
+        gap_observed=case.gap_observed or (evaluation.status is ShadowEntryStatus.UNKNOWN),
+        outcome=outcome,
+    )
+
+
+def _entry_unknown_reason(
+    case: TradeCase,
+    observation: MarketObservation | None,
+    known_at: datetime,
+    policy: BtcShortVolPolicy,
+) -> str | None:
+    if observation is None:
+        return "NO_ENTRY_OBSERVATION"
+    if observation.channel_id is not case.channel_id:
+        return "ENTRY_OBSERVATION_CHANNEL_MISMATCH"
+    if observation.data_health_policy_id != policy.observation.identity:
+        return "ENTRY_OBSERVATION_DATA_HEALTH_POLICY_MISMATCH"
+    if observation.known_at > known_at:
+        return "ENTRY_OBSERVATION_NOT_KNOWN_AT_EVALUATION"
+    if observation.observed_at <= case.decision_boundary:
+        return "ENTRY_OBSERVATION_NOT_STRICTLY_FUTURE"
+    if observation.observed_at > case.entry_deadline:
+        return "ENTRY_WINDOW_EXPIRED"
+    if observation.known_at > case.entry_deadline:
+        return "ENTRY_OBSERVATION_KNOWN_AFTER_DEADLINE"
+    if observation.data_health_blockers:
+        return observation.data_health_blockers[0]
     return None
 
 
-def _estimated_position_native_pnl(
-    *,
-    position: ShadowPosition,
-    quotes: dict[str, OptionQuote],
-    index_price: Decimal,
-) -> Decimal | None:
-    total = Decimal(0)
-    for side in (position.put_side, position.call_side):
-        total += side.native_cashflow_after_fees
-        if side.short_open and side.long_open:
-            short = quotes.get(side.short_quote.instrument_name)
-            long = quotes.get(side.long_quote.instrument_name)
-            if short is None or long is None:
-                return None
-            close = price_close_vertical(
-                short_quote=short,
-                long_quote=long,
-                quantity=side.quantity,
-                index_price=index_price,
-            )
-            if close is None:
-                return None
-            short_execution, long_execution = close
-            total += (
-                short_execution.native_cashflow
-                - short_execution.native_fee
-                + long_execution.native_cashflow
-                - long_execution.native_fee
-            )
-        elif side.short_open:
-            short = quotes.get(side.short_quote.instrument_name)
-            if short is None:
-                return None
-            execution = execute_leg(
-                short,
-                action=Action.BUY,
-                quantity=side.quantity,
-                index_price=index_price,
-            )
-            if execution is None:
-                return None
-            total += execution.native_cashflow - execution.native_fee
-        if side.long_open and not side.short_open:
-            long = quotes.get(side.long_quote.instrument_name)
-            if long is None:
-                continue
-            execution = execute_leg(
-                long,
-                action=Action.SELL,
-                quantity=side.quantity,
-                index_price=index_price,
-            )
-            if execution is not None:
-                total += execution.native_cashflow - execution.native_fee
-    return total
+def _position_triggers(
+    case: TradeCase,
+    observation: MarketObservation,
+    close: Btc0DteCondorCloseProjection | None,
+    policy: BtcShortVolPolicy,
+) -> tuple[str, ...]:
+    triggers: set[str] = set()
+    seconds_to_expiry = (_structure_expiry(case) - observation.observed_at).total_seconds()
+    if seconds_to_expiry <= policy.lifecycle.latest_exit_minutes_to_expiry * 60:
+        triggers.add("LATEST_EXIT")
+    if observation.context.event_state in {EventState.LIVE_EVENT, EventState.UNSCHEDULED_SHOCK}:
+        triggers.add("EVENT_OR_SHOCK")
+    legs = _selected_quotes(case, observation)
+    if legs is not None and max(abs(legs[1].signed_delta), abs(legs[2].signed_delta)) > (
+        policy.lifecycle.maximum_short_abs_delta
+    ):
+        triggers.add("SHORT_DELTA")
+    entry_index = _required_decimal(case.entry_index_price_usd, "entry_index_price_usd")
+    if abs(observation.context.index_price / entry_index - Decimal(1)) > (
+        policy.lifecycle.maximum_adverse_move_fraction
+    ):
+        triggers.add("ADVERSE_MOVE")
+    if observation.context.rv_acceleration > policy.lifecycle.maximum_rv_acceleration:
+        triggers.add("RV_ACCELERATION")
+    vrp = (
+        observation.context.same_session_implied_variance_proxy
+        / observation.context.trailing_realized_variance_proxy
+    )
+    if vrp < policy.environment.minimum_vrp_ratio:
+        triggers.add("VRP_PROXY_DISSIPATED")
+    if close is not None:
+        credit = _required_decimal(case.entry_native_net_credit, "entry_native_net_credit")
+        result = credit + close.native_net_cashflow
+        if result >= credit * policy.lifecycle.take_profit_fraction_of_credit:
+            triggers.add("TAKE_PROFIT")
+        if -result >= credit * policy.lifecycle.maximum_loss_multiple_of_credit:
+            triggers.add("MAXIMUM_LOSS")
+    return tuple(reason for reason in policy.lifecycle.trigger_priority if reason in triggers)
 
 
-def _exit_side(
-    *,
-    side: SidePosition,
-    by_name: dict[str, OptionQuote],
-    context: MarketContext,
-    reason: ExitReason,
-    allow_short_only: bool,
-    maximum_source_skew_ms: int,
-    maximum_receive_skew_ms: int,
-    maximum_quote_age_ms: int,
-    retry_interval_ms: int,
-) -> tuple[bool, tuple[str, ...]]:
-    prefix = side.side.value
-    if not side.short_open:
-        return False, ()
-    if side.last_exit_attempt_at is not None:
-        elapsed_ms = int((context.now - side.last_exit_attempt_at).total_seconds() * 1000)
-        if elapsed_ms < retry_interval_ms:
-            return False, (f"{prefix}_EXIT_RETRY_NOT_DUE",)
-    side.last_exit_attempt_at = context.now
-    side.exit_attempt_count += 1
-    short = by_name.get(side.short_quote.instrument_name)
-    long = by_name.get(side.long_quote.instrument_name)
-    intent_at = side.exit_requested_at
-    if intent_at is None:
-        raise ValueError("short-risk exit attempt lacks a frozen intent boundary")
-    short_eligible, short_blocker = _exit_quote_eligible(
-        short,
-        label=f"{prefix}_SHORT",
-        after=intent_at,
-        observed_at=context.now,
-        maximum_source_age_ms=maximum_quote_age_ms,
-        maximum_receive_age_ms=maximum_quote_age_ms,
+def _close_projection(
+    case: TradeCase,
+    observation: MarketObservation,
+    legs: tuple[OptionQuote, OptionQuote, OptionQuote, OptionQuote] | None,
+) -> Btc0DteCondorCloseProjection | None:
+    if legs is None:
+        return None
+    return project_btc_0dte_condor_close(
+        long_put=legs[0],
+        short_put=legs[1],
+        short_call=legs[2],
+        long_call=legs[3],
+        amount=_structure_amount(case),
+        boundary_index_price=observation.context.index_price,
     )
-    long_eligible, long_blocker = _exit_quote_eligible(
-        long,
-        label=f"{prefix}_LONG",
-        after=intent_at,
-        observed_at=context.now,
-        maximum_source_age_ms=maximum_quote_age_ms,
-        maximum_receive_age_ms=maximum_quote_age_ms,
-    )
-    blockers: list[str] = []
-    if short_blocker is not None:
-        blockers.append(short_blocker)
-    if long_blocker is not None and side.long_open:
-        blockers.append(long_blocker)
-    pair_coherent = False
-    if side.short_open and side.long_open:
-        if short is None or long is None:
-            side.quote_missing_block_count += 1
-        elif not short_eligible or not long_eligible:
-            if any("NOT_STRICTLY_FUTURE" in blocker for blocker in blockers):
-                side.quote_not_future_block_count += 1
-            if any("STALE" in blocker for blocker in blockers):
-                side.quote_stale_block_count += 1
-        else:
-            pair_coherent = _pair_coherent(
-                short,
-                long,
-                maximum_source_skew_ms=maximum_source_skew_ms,
-                maximum_receive_skew_ms=maximum_receive_skew_ms,
+
+
+def _selected_quotes(
+    case: TradeCase,
+    observation: MarketObservation,
+) -> tuple[OptionQuote, OptionQuote, OptionQuote, OptionQuote] | None:
+    by_name = {quote.instrument_name: quote for quote in observation.quotes}
+    frozen_legs = _structure_legs(case)
+    names = tuple(leg[0] for leg in frozen_legs)
+    if any(name not in by_name for name in names):
+        return None
+    quotes = tuple(by_name[name] for name in names)
+    expiry = _parse_iso(_text(case.selected_structure, "expiry"), "expiry")
+    if any(
+        quote.product != BTC
+        or quote.strike != frozen[1]
+        or quote.option_type.value != frozen[2]
+        or quote.delivery_fee_exempt != frozen[3]
+        or quote.expiry != expiry
+        for quote, frozen in zip(quotes, frozen_legs, strict=True)
+    ):
+        return None
+    return quotes  # type: ignore[return-value]
+
+
+def _structure_legs(
+    case: TradeCase,
+) -> tuple[
+    tuple[str, Decimal, str, bool],
+    tuple[str, Decimal, str, bool],
+    tuple[str, Decimal, str, bool],
+    tuple[str, Decimal, str, bool],
+]:
+    structure = case.selected_structure
+    legs = _mapping(structure.get("legs"), "selected_structure.legs")
+    output: list[tuple[str, Decimal, str, bool]] = []
+    for role in ("long_put", "short_put", "short_call", "long_call"):
+        leg = _mapping(legs.get(role), f"legs.{role}")
+        output.append(
+            (
+                _text(leg, "instrument_name"),
+                _decimal(leg, "strike"),
+                _text(leg, "option_type"),
+                _boolean(leg, "delivery_fee_exempt"),
             )
-            if not pair_coherent:
-                side.pair_incoherent_block_count += 1
-                blockers.append(f"{prefix}_EXIT_PAIR_INCOHERENT")
-    if side.short_open and side.long_open and pair_coherent:
-        assert short is not None and long is not None
-        close = price_close_vertical(
-            short_quote=short,
-            long_quote=long,
-            quantity=side.quantity,
-            index_price=context.index_price,
         )
-        if close is not None:
-            short_execution, long_execution = close
-            side.native_cashflow_after_fees += (
-                short_execution.native_cashflow
-                - short_execution.native_fee
-                + long_execution.native_cashflow
-                - long_execution.native_fee
-            )
-            side.boundary_valued_cashflow_usd += (
-                short_execution.usd_cashflow
-                - short_execution.usd_fee
-                + long_execution.usd_cashflow
-                - long_execution.usd_fee
-            )
-            side.short_open = False
-            side.long_open = False
-            side.short_exit_execution = short_execution
-            side.long_exit_execution = long_execution
-            side.short_risk_exit_at = context.now
-            side.terminal_at = context.now
-            side.exit_reason = reason
-            side.state = SideState.TERMINAL
-            side.last_exit_blockers = tuple(blockers)
-            return True, tuple(blockers)
-        side.pair_unexecutable_block_count += 1
-        blockers.append(f"{prefix}_EXIT_PAIR_UNEXECUTABLE")
-    if side.short_open and allow_short_only and short is not None and short_eligible:
-        short_only_execution = execute_leg(
-            short,
-            action=Action.BUY,
-            quantity=side.quantity,
-            index_price=context.index_price,
-        )
-        if short_only_execution is not None:
-            side.native_cashflow_after_fees += (
-                short_only_execution.native_cashflow - short_only_execution.native_fee
-            )
-            side.boundary_valued_cashflow_usd += (
-                short_only_execution.usd_cashflow - short_only_execution.usd_fee
-            )
-            side.short_open = False
-            side.short_only_exit_used = True
-            side.short_exit_execution = short_only_execution
-            side.short_risk_exit_at = context.now
-            side.exit_reason = reason
-            side.state = SideState.SHORT_FLAT_LONG_WING if side.long_open else SideState.TERMINAL
-            if not side.long_open:
-                side.terminal_at = context.now
-            side.last_exit_blockers = tuple(blockers)
-            return True, tuple(blockers)
-        blockers.append(f"{prefix}_SHORT_EXIT_UNEXECUTABLE")
-    result_blockers = tuple(dict.fromkeys(blockers))
-    side.last_exit_blockers = result_blockers
-    return False, result_blockers
+    return tuple(output)  # type: ignore[return-value]
 
 
-def _exit_quote_eligible(
-    quote: OptionQuote | None,
-    *,
-    label: str,
-    after: datetime,
-    observed_at: datetime,
-    maximum_source_age_ms: int,
-    maximum_receive_age_ms: int,
-) -> tuple[bool, str | None]:
-    if quote is None:
-        return False, f"{label}_EXIT_QUOTE_MISSING"
-    after_ms = int(after.timestamp() * 1000)
-    observed_ms = int(observed_at.timestamp() * 1000)
-    if quote.source_timestamp_ms <= after_ms or quote.received_timestamp_ms <= after_ms:
-        return False, f"{label}_EXIT_QUOTE_NOT_STRICTLY_FUTURE"
-    if quote.source_timestamp_ms > observed_ms or quote.received_timestamp_ms > observed_ms:
-        return False, f"{label}_EXIT_QUOTE_AFTER_OBSERVATION_BOUNDARY"
-    if observed_ms - quote.source_timestamp_ms > maximum_source_age_ms:
-        return False, f"{label}_EXIT_SOURCE_STALE"
-    if observed_ms - quote.received_timestamp_ms > maximum_receive_age_ms:
-        return False, f"{label}_EXIT_RECEIVE_STALE"
-    return True, None
+def _structure_amount(case: TradeCase) -> Decimal:
+    return _decimal(case.selected_structure, "option_amount")
 
 
-def _refresh_position_state(position: ShadowPosition, at: datetime) -> None:
-    if not position.has_short_risk and position.short_risk_flat_at is None:
-        position.short_risk_flat_at = at
-    if not position.has_short_risk and position.residual_wing_count > 0:
-        position.state = PositionState.SHORT_RISK_FLAT
-    elif not position.has_short_risk and position.residual_wing_count == 0:
-        position.state = PositionState.TERMINAL
-        position.terminal_at = at
-    elif position.has_pending_exit:
-        position.state = PositionState.EXIT_REQUIRED
-    else:
-        position.state = PositionState.MONITORING
+def _structure_expiry(case: TradeCase) -> datetime:
+    return _parse_iso(_text(case.selected_structure, "expiry"), "expiry")
 
 
-def _finalize_outcome(
-    *,
-    position: ShadowPosition,
-    terminal_at: datetime,
-    terminal_method: str,
-    valuation_index: Decimal,
-    residual_wings_settled: int = 0,
-) -> PositionOutcome:
-    put_pnl = position.put_side.native_cashflow_after_fees
-    call_pnl = position.call_side.native_cashflow_after_fees
-    total = put_pnl + call_pnl
-    put_boundary = position.put_side.boundary_valued_cashflow_usd
-    call_boundary = position.call_side.boundary_valued_cashflow_usd
-    boundary_total = put_boundary + call_boundary
-    terminal_valued_total = total * valuation_index
-    exit_sides = {
-        instruction.scope
-        for instruction in position.instructions
-        if instruction.scope in {ExitScope.PUT_SIDE, ExitScope.CALL_SIDE}
-    }
-    double_stop = ExitScope.PUT_SIDE in exit_sides and ExitScope.CALL_SIDE in exit_sides
-    outcome_identity = position_outcome_identity(
-        position_identity=position.position_identity,
-        terminal_at=terminal_at,
-        terminal_method=terminal_method,
-        put_side_native_pnl=put_pnl,
-        call_side_native_pnl=call_pnl,
-        total_native_pnl=total,
-        boundary_valued_total_usd_pnl=boundary_total,
-        terminal_valued_total_usd_pnl=terminal_valued_total,
-        put_side_delivery_fee_native=position.put_side.delivery_fee_native,
-        call_side_delivery_fee_native=position.call_side.delivery_fee_native,
-        residual_wings_settled=residual_wings_settled,
-    )
-    first_exit_to_flat_ms = (
-        int((position.short_risk_flat_at - position.first_instruction.at).total_seconds() * 1000)
-        if position.short_risk_flat_at is not None and position.first_instruction is not None
-        else None
-    )
-    outcome = PositionOutcome(
-        outcome_identity=outcome_identity,
-        terminal_at=terminal_at,
-        terminal_method=terminal_method,
-        entry_status=position.entry_status,
-        first_exit_reason=(
-            position.first_instruction.reason if position.first_instruction is not None else None
-        ),
-        first_exit_at=(
-            position.first_instruction.at if position.first_instruction is not None else None
-        ),
-        short_risk_flat_at=position.short_risk_flat_at,
-        put_side_exit_at=position.put_side.short_risk_exit_at,
-        call_side_exit_at=position.call_side.short_risk_exit_at,
-        put_side_native_pnl=put_pnl,
-        call_side_native_pnl=call_pnl,
-        total_native_pnl=total,
-        put_side_boundary_valued_pnl_usd=put_boundary,
-        call_side_boundary_valued_pnl_usd=call_boundary,
-        boundary_valued_total_usd_pnl=boundary_total,
-        terminal_valued_total_usd_pnl=terminal_valued_total,
-        double_side_stop=double_stop,
-        put_side_delivery_fee_native=position.put_side.delivery_fee_native,
-        call_side_delivery_fee_native=position.call_side.delivery_fee_native,
-        total_delivery_fee_native=(
-            position.put_side.delivery_fee_native + position.call_side.delivery_fee_native
-        ),
-        residual_wings_settled=residual_wings_settled,
-        residual_wing_count=position.residual_wing_count,
-        put_exit_attempt_count=position.put_side.exit_attempt_count,
-        call_exit_attempt_count=position.call_side.exit_attempt_count,
-        exit_quote_missing_block_count=(
-            position.put_side.quote_missing_block_count
-            + position.call_side.quote_missing_block_count
-        ),
-        exit_quote_not_future_block_count=(
-            position.put_side.quote_not_future_block_count
-            + position.call_side.quote_not_future_block_count
-        ),
-        exit_quote_stale_block_count=(
-            position.put_side.quote_stale_block_count + position.call_side.quote_stale_block_count
-        ),
-        exit_pair_incoherent_block_count=(
-            position.put_side.pair_incoherent_block_count
-            + position.call_side.pair_incoherent_block_count
-        ),
-        exit_pair_unexecutable_block_count=(
-            position.put_side.pair_unexecutable_block_count
-            + position.call_side.pair_unexecutable_block_count
-        ),
-        short_only_exit_side_count=(
-            int(position.put_side.short_only_exit_used)
-            + int(position.call_side.short_only_exit_used)
-        ),
-        first_exit_to_short_risk_flat_ms=first_exit_to_flat_ms,
-    )
-    require_identity(outcome_identity, "outcome_identity")
-    position.state = PositionState.TERMINAL
-    position.terminal_at = terminal_at
-    position.outcome = outcome
-    return outcome
-
-
-def _entry_pair_eligible(
-    short: OptionQuote,
-    long: OptionQuote,
-    *,
-    decision_received_ms: int,
-    attempted_received_ms: int,
-    maximum_source_skew_ms: int,
-    maximum_receive_skew_ms: int,
-) -> bool:
-    return (
-        decision_received_ms < short.received_timestamp_ms <= attempted_received_ms
-        and decision_received_ms < long.received_timestamp_ms <= attempted_received_ms
-        and _pair_coherent(
-            short,
-            long,
-            maximum_source_skew_ms=maximum_source_skew_ms,
-            maximum_receive_skew_ms=maximum_receive_skew_ms,
-        )
-    )
-
-
-def _four_leg_entry_eligible(
+def _quotes_strictly_after(
     quotes: tuple[OptionQuote, OptionQuote, OptionQuote, OptionQuote],
-    *,
-    decision_received_ms: int,
-    attempted_received_ms: int,
-    maximum_source_skew_ms: int,
-    maximum_receive_skew_ms: int,
+    boundary: datetime,
 ) -> bool:
-    received = tuple(quote.received_timestamp_ms for quote in quotes)
-    source = tuple(quote.source_timestamp_ms for quote in quotes)
-    epochs = {quote.continuity_epoch for quote in quotes}
-    return (
-        all(decision_received_ms < timestamp <= attempted_received_ms for timestamp in received)
-        and len(epochs) == 1
-        and max(source) - min(source) <= maximum_source_skew_ms
-        and max(received) - min(received) <= maximum_receive_skew_ms
+    boundary_ms = int(_utc(boundary, "boundary").timestamp() * 1000)
+    return all(
+        quote.source_timestamp_ms > boundary_ms and quote.received_timestamp_ms > boundary_ms
+        for quote in quotes
     )
 
 
-def _pair_coherent(
-    first: OptionQuote,
-    second: OptionQuote,
+def _advance_observation(
+    case: TradeCase,
+    observation: MarketObservation,
     *,
-    maximum_source_skew_ms: int,
-    maximum_receive_skew_ms: int,
-) -> bool:
-    return (
-        first.continuity_epoch == second.continuity_epoch
-        and abs(first.source_timestamp_ms - second.source_timestamp_ms) <= maximum_source_skew_ms
-        and abs(first.received_timestamp_ms - second.received_timestamp_ms)
-        <= maximum_receive_skew_ms
+    gap: bool,
+) -> TradeCase:
+    return replace(
+        case,
+        last_observation_id=observation.identity,
+        last_observed_at=observation.observed_at,
+        gap_observed=case.gap_observed or gap,
     )
+
+
+def _require_next_observation(
+    case: TradeCase,
+    observation: MarketObservation,
+    policy: BtcShortVolPolicy,
+    *,
+    enforce_cadence: bool = True,
+) -> None:
+    if observation.channel_id is not case.channel_id:
+        raise ValueError("Position observation Channel mismatch")
+    if observation.data_health_policy_id != policy.observation.identity:
+        raise ValueError("Position observation DataHealth Policy mismatch")
+    last = case.last_observed_at or case.entry_observed_at
+    if last is None or observation.observed_at <= last:
+        raise ValueError("Position observation must be strictly later")
+    if enforce_cadence and observation.observed_at < last + timedelta(
+        seconds=policy.lifecycle.monitoring_cadence_seconds
+    ):
+        raise ValueError("Position observation precedes Policy cadence")
+
+
+def _require_case_policy(case: TradeCase, policy: BtcShortVolPolicy) -> None:
+    if case.channel_id is not policy.channel_id or case.decision_policy_id != policy.identity:
+        raise ValueError("TradeCase does not match Policy")
+
+
+def _require_open_position(case: TradeCase, policy: BtcShortVolPolicy) -> None:
+    _require_case_policy(case, policy)
+    if case.position_id is None or case.position_state is None:
+        raise ValueError("TradeCase has no Shadow Position")
+    if case.position_state is PositionState.TERMINAL:
+        raise ValueError("Shadow Position is already terminal")
+
+
+def _position_outcome(
+    case: TradeCase,
+    *,
+    method: TerminalMethod,
+    terminal_at: datetime,
+    terminal_evidence_id: str | None,
+    native_result: Decimal,
+    boundary_result: Decimal,
+    fee_model_id: str,
+    source: str,
+) -> ShadowCaseOutcome:
+    continuity = False if case.gap_observed else None
+    eligibility = OutcomeEligibility(
+        decision_evaluable=EligibilityFact(True, "CANDIDATE_DECISION_EVALUABLE"),
+        future_path_known=EligibilityFact(None, "WINDOW_OUTCOME_OWNS_FUTURE_PATH"),
+        future_path_continuous=EligibilityFact(
+            continuity,
+            "DATA_GAP_OBSERVED" if case.gap_observed else "WINDOW_OUTCOME_OWNS_CONTINUITY",
+        ),
+        shadow_entry_evaluable=EligibilityFact(True, "ATOMIC_SHADOW_ENTRY_EVALUABLE"),
+        terminal_economics_evaluable=EligibilityFact(True, "TERMINAL_ECONOMICS_KNOWN"),
+        live_execution_attributable=EligibilityFact(False, "PUBLIC_SHADOW_HAS_NO_LIVE_EXECUTION"),
+        strategy_population_eligible=EligibilityFact(
+            False if case.gap_observed else None,
+            "DATA_GAP_OBSERVED" if case.gap_observed else "WINDOW_OUTCOME_REQUIRED",
+        ),
+        qualification_eligible=EligibilityFact(
+            False if case.gap_observed else None,
+            "DATA_GAP_OBSERVED" if case.gap_observed else "POLICY_NOT_QUALIFIED",
+        ),
+    )
+    return ShadowCaseOutcome(
+        terminal_method=method,
+        terminal_at=terminal_at,
+        entry_status=ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE,
+        entry_observation_id=case.entry_observation_id,
+        terminal_evidence_id=terminal_evidence_id,
+        native_result_btc=native_result,
+        boundary_reference_result_usd=boundary_result,
+        fee_model_id=fee_model_id,
+        shadow_model_id=case.entry_pricing_basis,
+        terminal_source=source,
+        data_gap_observed=case.gap_observed,
+        reason=None,
+        eligibility=eligibility,
+    )
+
+
+def _no_position_outcome(evaluation: ShadowEntryEvaluation) -> ShadowCaseOutcome:
+    known = evaluation.status is ShadowEntryStatus.SHADOW_ATOMIC_NOT_EVALUABLE
+    eligibility = OutcomeEligibility(
+        decision_evaluable=EligibilityFact(True, "CANDIDATE_DECISION_EVALUABLE"),
+        future_path_known=EligibilityFact(None, "WINDOW_OUTCOME_OWNS_FUTURE_PATH"),
+        future_path_continuous=EligibilityFact(None, "WINDOW_OUTCOME_OWNS_CONTINUITY"),
+        shadow_entry_evaluable=EligibilityFact(
+            False if known else None,
+            evaluation.reason or "SHADOW_ENTRY_UNKNOWN",
+        ),
+        terminal_economics_evaluable=EligibilityFact(False, "NO_SHADOW_POSITION"),
+        live_execution_attributable=EligibilityFact(False, "PUBLIC_SHADOW_HAS_NO_LIVE_EXECUTION"),
+        strategy_population_eligible=EligibilityFact(None, "WINDOW_OUTCOME_REQUIRED"),
+        qualification_eligible=EligibilityFact(None, "POLICY_NOT_QUALIFIED"),
+    )
+    return ShadowCaseOutcome(
+        terminal_method=TerminalMethod.NO_POSITION,
+        terminal_at=evaluation.known_at,
+        entry_status=evaluation.status,
+        entry_observation_id=evaluation.observation_id,
+        terminal_evidence_id=None,
+        native_result_btc=None,
+        boundary_reference_result_usd=None,
+        fee_model_id=None,
+        shadow_model_id=evaluation.pricing_basis,
+        terminal_source="ENTRY_EVALUATION",
+        data_gap_observed=evaluation.status is ShadowEntryStatus.UNKNOWN,
+        reason=evaluation.reason,
+        eligibility=eligibility,
+    )
+
+
+def _trigger_category(reason: str) -> str:
+    if reason in {"LATEST_EXIT"}:
+        return "TIME"
+    if reason in {"VRP_PROXY_DISSIPATED"}:
+        return "THESIS"
+    return "POSITION"
+
+
+def _canonical_object(value: object) -> dict[str, object]:
+    normalized = canonical_value(value)
+    if not isinstance(normalized, dict):
+        raise TypeError("canonical object must be a mapping")
+    return normalized
+
+
+def _json_text(value: object) -> str:
+    return json.dumps(
+        canonical_value(value),
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _json_mapping(value: str, field: str) -> dict[str, object]:
+    try:
+        return _mapping(json.loads(value), field)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{field} is invalid canonical JSON") from exc
+
+
+def _mapping(value: object, field: str) -> dict[str, object]:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ValueError(f"{field} must be an object")
+    return value
+
+
+def _text(value: dict[str, object], field: str) -> str:
+    member = value.get(field)
+    if not isinstance(member, str) or not member:
+        raise ValueError(f"{field} must be non-empty text")
+    return member
+
+
+def _optional_text(value: dict[str, object], field: str) -> str | None:
+    member = value.get(field)
+    if member is None:
+        return None
+    if not isinstance(member, str) or not member:
+        raise ValueError(f"{field} must be non-empty text or null")
+    return member
+
+
+def _boolean(value: dict[str, object], field: str) -> bool:
+    member = value.get(field)
+    if not isinstance(member, bool):
+        raise ValueError(f"{field} must be boolean")
+    return member
+
+
+def _optional_boolean(value: dict[str, object], field: str) -> bool | None:
+    member = value.get(field)
+    if member is not None and not isinstance(member, bool):
+        raise ValueError(f"{field} must be boolean or null")
+    return member
+
+
+def _integer(value: dict[str, object], field: str) -> int:
+    member = value.get(field)
+    if isinstance(member, bool) or not isinstance(member, int):
+        raise ValueError(f"{field} must be an integer")
+    return member
+
+
+def _decimal(value: dict[str, object], field: str) -> Decimal:
+    member = value.get(field)
+    if not isinstance(member, str):
+        raise ValueError(f"{field} must be canonical decimal text")
+    parsed = Decimal(member)
+    if not parsed.is_finite():
+        raise ValueError(f"{field} must be finite")
+    return parsed
+
+
+def _optional_decimal(value: dict[str, object], field: str) -> Decimal | None:
+    return None if value.get(field) is None else _decimal(value, field)
+
+
+def _datetime(value: dict[str, object], field: str) -> datetime:
+    return _parse_iso(_text(value, field), field)
+
+
+def _optional_datetime(value: dict[str, object], field: str) -> datetime | None:
+    return None if value.get(field) is None else _datetime(value, field)
+
+
+def _parse_iso(value: str, field: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{field} must be ISO-8601") from exc
+    return _utc(parsed, field)
+
+
+def _utc(value: datetime, field: str) -> datetime:
+    if value.tzinfo is None:
+        raise ValueError(f"{field} must be timezone-aware")
+    return value.astimezone(UTC)
+
+
+def _text_tuple(value: dict[str, object], field: str) -> tuple[str, ...]:
+    member = value.get(field)
+    if not isinstance(member, list) or not all(isinstance(item, str) for item in member):
+        raise ValueError(f"{field} must be an array of text")
+    return tuple(member)
+
+
+def _optional_enum[T: StrEnum](
+    value: dict[str, object],
+    field: str,
+    kind: type[T],
+) -> T | None:
+    member = value.get(field)
+    return None if member is None else kind(_text(value, field))
+
+
+def _required(value: str | None, field: str) -> str:
+    if value is None:
+        raise ValueError(f"{field} is required")
+    return value
+
+
+def _required_decimal(value: Decimal | None, field: str) -> Decimal:
+    if value is None:
+        raise ValueError(f"{field} is required")
+    return value
+
+
+def _required_datetime(value: datetime | None, field: str) -> datetime:
+    if value is None:
+        raise ValueError(f"{field} is required")
+    return value
+
+
+def _required_state(value: PositionState | None) -> PositionState:
+    if value is None:
+        raise ValueError("position_state is required")
+    return value

@@ -3,8 +3,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from optimatrix.product_funnel import FunnelStageName
-
 ROOT = Path(__file__).parents[1]
 AUTHORITY = ROOT / "docs" / "authority"
 TASK_KINDS = {"NONE", "AUTHORITY_ONLY", "IMPLEMENTATION", "VALIDATION_ONLY"}
@@ -23,11 +21,13 @@ def test_current_stage_and_task_are_one_exact_closure() -> None:
     assert task_kind in TASK_KINDS
 
     for field in (
-        "Offline simulation",
-        "Public snapshot",
+        "Offline checks and simulation",
+        "Public market calls",
+        "Stable ObservationLedger root",
+        "Stable CaseJournal root",
         "Continuous runtime",
-        "Stable Decision Case root",
-        "Private/account/order permission",
+        "Private read-only account permission",
+        "Orders, capital, and deployment",
         "Policy qualification / Edge claim",
     ):
         assert f"**{field}:**" in stage
@@ -35,7 +35,7 @@ def test_current_stage_and_task_are_one_exact_closure() -> None:
     if task_kind == "NONE":
         assert tasks == []
         assert "**Sole authorized closure:** `NONE`" in stage
-        assert "**Public snapshot:** `NONE_AUTHORIZED`" in stage
+        assert "**Public market calls:** `NONE_AUTHORIZED`" in stage
         return
 
     assert len(tasks) == 1
@@ -62,6 +62,8 @@ def test_agent_route_resolves_to_current_owners() -> None:
     for routed_path in routed_paths:
         assert (ROOT / routed_path).is_file(), routed_path
 
+    assert "docs/contracts/CASE_POSITION_OUTCOME.md" in routed_paths
+    assert not (ROOT / "docs" / "contracts" / "SHADOW_LIFECYCLE.md").exists()
     assert agents.index("docs/authority/CURRENT_STAGE.md") < agents.index(
         "docs/authority/PRODUCT_CONSTITUTION.md"
     )
@@ -80,18 +82,6 @@ def test_markdown_links_resolve() -> None:
             if "://" in target or target.startswith("#"):
                 continue
             assert (path.parent / target.split("#", 1)[0]).resolve().exists(), (path, target)
-
-
-def test_contract_funnel_matches_the_product_projection() -> None:
-    contract = (ROOT / "docs" / "contracts" / "BTC_0DTE_TWO_SIDED_SHORT_VOL.md").read_text(
-        encoding="utf-8"
-    )
-    funnel = contract.partition("## Canonical funnel")[2]
-    prior = -1
-    for stage in FunnelStageName:
-        offset = funnel.index(stage.value)
-        assert offset > prior
-        prior = offset
 
 
 def test_legacy_strategy_runtime_is_physically_absent() -> None:

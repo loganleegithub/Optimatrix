@@ -8,7 +8,12 @@ def test_all_declared_business_scenarios_pass(policy, tmp_path) -> None:
     failed = [result for result in results if not result.passed]
     assert not failed, [(result.name, result.facts) for result in failed]
     names = {result.name for result in results}
-    assert "unknown_market_context_stops_before_structure" in names
-    assert "all_joint_hard_eligible_selection" in names
-    assert "strict_future_exit_closes_two_sided_duty" in names
-    assert "short_risk_exit_keeps_residual_wings" in names
+    assert names == {
+        "whole_product_candidate",
+        "missing_window_is_unknown",
+        "shallow_close_depth_is_diagnostic",
+        "known_path_risk_abstains",
+        "atomic_shadow_case_exit",
+        "gap_preserves_position_then_settlement",
+        "all_window_outcome_is_independent",
+    }

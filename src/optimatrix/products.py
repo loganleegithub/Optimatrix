@@ -77,11 +77,6 @@ class ProductSpec:
         if quantity % self.quantity_tick != 0:
             raise ValueError("quantity is off the published grid")
 
-    def model_premium(self, native_premium: Decimal, *, forward_price: Decimal) -> Decimal:
-        _require_non_negative(native_premium, "native_premium")
-        _require_positive(forward_price, "forward_price")
-        return native_premium * forward_price
-
     def value_native(self, native_amount: Decimal, *, index_price: Decimal) -> Decimal:
         _require_finite(native_amount, "native_amount")
         _require_positive(index_price, "index_price")

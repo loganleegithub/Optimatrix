@@ -16,54 +16,93 @@ DEFAULT_BTC_SHORT_VOL_POLICY_PATH = (
 
 
 @dataclass(frozen=True)
-class RadarPolicy:
+class WindowSchedulePolicy:
+    cadence_minutes: int
+    alignment: str
+    input_grace_seconds: int
+
+    def __post_init__(self) -> None:
+        if self.cadence_minutes <= 0 or 24 * 60 % self.cadence_minutes != 0:
+            raise ValueError("window cadence must be a positive divisor of one Deribit session")
+        if self.alignment != "SESSION_START":
+            raise ValueError("window alignment must be SESSION_START")
+        if not 0 <= self.input_grace_seconds < self.cadence_minutes * 60:
+            raise ValueError("window input grace must be non-negative and shorter than cadence")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity(
+            "WindowSchedulePolicyV1",
+            self.cadence_minutes,
+            self.alignment,
+            self.input_grace_seconds,
+        )
+
+
+@dataclass(frozen=True)
+class ObservationPolicy:
+    maximum_source_span_ms: int
+    maximum_receive_span_ms: int
+    maximum_age_ms: int
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity(
+            "ObservationPolicyV1",
+            self.maximum_source_span_ms,
+            self.maximum_receive_span_ms,
+            self.maximum_age_ms,
+        )
+
+
+@dataclass(frozen=True)
+class EnvironmentPolicy:
     minimum_vrp_ratio: Decimal
     late_theta_minimum_vrp_ratio: Decimal
-    vrp_saturation_ratio: Decimal
-    minimum_theta_capture_proxy: Decimal
     maximum_rv_acceleration: Decimal
     maximum_jump_share: Decimal
     maximum_directional_persistence: Decimal
-    minimum_body_distance_sigma: Decimal
-    maximum_abs_net_delta: Decimal
-    activation_score: Decimal
 
 
 @dataclass(frozen=True)
 class StructurePolicy:
-    target_quantity: Decimal
+    option_amount: Decimal
     short_delta_min: Decimal
     short_delta_max: Decimal
     minimum_wing_width_usd: Decimal
     maximum_wing_width_usd: Decimal
+    minimum_body_distance_sigma: Decimal
+    maximum_abs_net_delta: Decimal
+    maximum_retained_alternatives: int
 
 
 @dataclass(frozen=True)
 class UnderwritingPolicy:
-    minimum_combined_net_credit_usd: Decimal
-    minimum_credit_to_max_side_payoff: Decimal
-    maximum_entry_boundary_loss_usd: Decimal
-    maximum_total_fee_fraction_of_credit: Decimal
+    minimum_boundary_net_credit_usd: Decimal
+    minimum_credit_to_payoff_cap: Decimal
+    maximum_boundary_reference_loss_usd: Decimal
+    maximum_combo_fee_fraction_of_credit: Decimal
 
 
 @dataclass(frozen=True)
-class PositionPolicy:
+class ShadowRiskPolicy:
+    maximum_session_contractual_payoff_usd: Decimal
+    maximum_concurrent_positions: int
+    delivery_price_stress_factors: tuple[Decimal, ...]
+    exit_cost_stress_fraction: Decimal
+
+
+@dataclass(frozen=True)
+class LifecyclePolicy:
+    entry_evaluation_window_seconds: int
+    monitoring_cadence_seconds: int
     take_profit_fraction_of_credit: Decimal
     maximum_loss_multiple_of_credit: Decimal
     maximum_short_abs_delta: Decimal
     maximum_adverse_move_fraction: Decimal
     maximum_rv_acceleration: Decimal
-    latest_short_risk_exit_minutes_to_expiry: int
-    acquisition_retry_interval_ms: int
-    allow_short_only_risk_exit: bool
-
-
-@dataclass(frozen=True)
-class ShadowPolicy:
-    entry_acquisition_window_ms: int
-    maximum_pair_source_skew_ms: int
-    maximum_pair_receive_skew_ms: int
-    maximum_position_quote_age_ms: int
+    latest_exit_minutes_to_expiry: int
+    trigger_priority: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -72,27 +111,31 @@ class BtcShortVolPolicy:
     policy_name: str
     channel_id: ChannelId
     status: str
+    window: WindowSchedulePolicy
+    observation: ObservationPolicy
     session: SessionPhasePolicy
-    radar: RadarPolicy
+    environment: EnvironmentPolicy
     structure: StructurePolicy
     underwriting: UnderwritingPolicy
-    position: PositionPolicy
-    shadow: ShadowPolicy
+    risk: ShadowRiskPolicy
+    lifecycle: LifecyclePolicy
 
     @property
     def identity(self) -> str:
         return canonical_identity(
-            "BtcTwoSidedShortVolPolicyV2",
+            "BtcTwoSidedShortVolPolicyV5",
             self.schema_version,
             self.policy_name,
             self.channel_id,
             self.status,
+            self.window,
+            self.observation,
             self.session,
-            self.radar,
+            self.environment,
             self.structure,
             self.underwriting,
-            self.position,
-            self.shadow,
+            self.risk,
+            self.lifecycle,
         )
 
 
@@ -105,37 +148,56 @@ def load_btc_short_vol_policy(path: Path) -> BtcShortVolPolicy:
         "policy_name",
         "channel_id",
         "status",
+        "window",
+        "observation",
         "session",
-        "radar",
+        "environment",
         "structure",
         "underwriting",
-        "position",
-        "shadow",
+        "risk",
+        "lifecycle",
     }
     if set(raw) != expected:
         raise ValueError("policy root has unexpected fields")
     channel_id = ChannelId(_text(raw, "channel_id"))
     if channel_id is not ChannelId.INVERSE_BTC_SHORT_VOL:
         raise ValueError("policy is not the implemented BTC Short Vol channel")
+
+    window = _mapping(raw, "window")
+    observation = _mapping(raw, "observation")
     session = _mapping(raw, "session")
-    radar = _mapping(raw, "radar")
+    environment = _mapping(raw, "environment")
     structure = _mapping(raw, "structure")
     if set(structure) != {
-        "target_quantity",
+        "option_amount",
         "short_delta_min",
         "short_delta_max",
         "minimum_wing_width_usd",
         "maximum_wing_width_usd",
+        "minimum_body_distance_sigma",
+        "maximum_abs_net_delta",
+        "maximum_retained_alternatives",
     }:
         raise ValueError("structure policy has unexpected fields")
     underwriting = _mapping(raw, "underwriting")
-    position = _mapping(raw, "position")
-    shadow = _mapping(raw, "shadow")
+    risk = _mapping(raw, "risk")
+    lifecycle = _mapping(raw, "lifecycle")
+
     policy = BtcShortVolPolicy(
         schema_version=_positive_int(raw, "schema_version"),
         policy_name=_text(raw, "policy_name"),
         channel_id=channel_id,
         status=_text(raw, "status"),
+        window=WindowSchedulePolicy(
+            cadence_minutes=_positive_int(window, "cadence_minutes"),
+            alignment=_text(window, "alignment"),
+            input_grace_seconds=_non_negative_int(window, "input_grace_seconds"),
+        ),
+        observation=ObservationPolicy(
+            maximum_source_span_ms=_positive_int(observation, "maximum_source_span_ms"),
+            maximum_receive_span_ms=_positive_int(observation, "maximum_receive_span_ms"),
+            maximum_age_ms=_positive_int(observation, "maximum_age_ms"),
+        ),
         session=SessionPhasePolicy(
             roll_reprice_minutes=_positive_int(session, "roll_reprice_minutes"),
             late_theta_start_minutes_to_expiry=_positive_int(
@@ -146,56 +208,57 @@ def load_btc_short_vol_policy(path: Path) -> BtcShortVolPolicy:
                 session, "delivery_twap_minutes_to_expiry"
             ),
         ),
-        radar=RadarPolicy(
-            minimum_vrp_ratio=_decimal(radar, "minimum_vrp_ratio"),
-            late_theta_minimum_vrp_ratio=_decimal(radar, "late_theta_minimum_vrp_ratio"),
-            vrp_saturation_ratio=_decimal(radar, "vrp_saturation_ratio"),
-            minimum_theta_capture_proxy=_decimal(radar, "minimum_theta_capture_proxy"),
-            maximum_rv_acceleration=_decimal(radar, "maximum_rv_acceleration"),
-            maximum_jump_share=_decimal(radar, "maximum_jump_share"),
-            maximum_directional_persistence=_decimal(radar, "maximum_directional_persistence"),
-            minimum_body_distance_sigma=_decimal(radar, "minimum_body_distance_sigma"),
-            maximum_abs_net_delta=_decimal(radar, "maximum_abs_net_delta"),
-            activation_score=_decimal(radar, "activation_score"),
+        environment=EnvironmentPolicy(
+            minimum_vrp_ratio=_decimal(environment, "minimum_vrp_ratio"),
+            late_theta_minimum_vrp_ratio=_decimal(environment, "late_theta_minimum_vrp_ratio"),
+            maximum_rv_acceleration=_decimal(environment, "maximum_rv_acceleration"),
+            maximum_jump_share=_decimal(environment, "maximum_jump_share"),
+            maximum_directional_persistence=_decimal(
+                environment, "maximum_directional_persistence"
+            ),
         ),
         structure=StructurePolicy(
-            target_quantity=_decimal(structure, "target_quantity"),
+            option_amount=_decimal(structure, "option_amount"),
             short_delta_min=_decimal(structure, "short_delta_min"),
             short_delta_max=_decimal(structure, "short_delta_max"),
             minimum_wing_width_usd=_decimal(structure, "minimum_wing_width_usd"),
             maximum_wing_width_usd=_decimal(structure, "maximum_wing_width_usd"),
+            minimum_body_distance_sigma=_decimal(structure, "minimum_body_distance_sigma"),
+            maximum_abs_net_delta=_decimal(structure, "maximum_abs_net_delta"),
+            maximum_retained_alternatives=_positive_int(structure, "maximum_retained_alternatives"),
         ),
         underwriting=UnderwritingPolicy(
-            minimum_combined_net_credit_usd=_decimal(
-                underwriting, "minimum_combined_net_credit_usd"
+            minimum_boundary_net_credit_usd=_decimal(
+                underwriting, "minimum_boundary_net_credit_usd"
             ),
-            minimum_credit_to_max_side_payoff=_decimal(
-                underwriting, "minimum_credit_to_max_side_payoff"
+            minimum_credit_to_payoff_cap=_decimal(underwriting, "minimum_credit_to_payoff_cap"),
+            maximum_boundary_reference_loss_usd=_decimal(
+                underwriting, "maximum_boundary_reference_loss_usd"
             ),
-            maximum_entry_boundary_loss_usd=_decimal(
-                underwriting, "maximum_entry_boundary_loss_usd"
-            ),
-            maximum_total_fee_fraction_of_credit=_decimal(
-                underwriting, "maximum_total_fee_fraction_of_credit"
+            maximum_combo_fee_fraction_of_credit=_decimal(
+                underwriting, "maximum_combo_fee_fraction_of_credit"
             ),
         ),
-        position=PositionPolicy(
-            take_profit_fraction_of_credit=_decimal(position, "take_profit_fraction_of_credit"),
-            maximum_loss_multiple_of_credit=_decimal(position, "maximum_loss_multiple_of_credit"),
-            maximum_short_abs_delta=_decimal(position, "maximum_short_abs_delta"),
-            maximum_adverse_move_fraction=_decimal(position, "maximum_adverse_move_fraction"),
-            maximum_rv_acceleration=_decimal(position, "maximum_rv_acceleration"),
-            latest_short_risk_exit_minutes_to_expiry=_positive_int(
-                position, "latest_short_risk_exit_minutes_to_expiry"
+        risk=ShadowRiskPolicy(
+            maximum_session_contractual_payoff_usd=_decimal(
+                risk, "maximum_session_contractual_payoff_usd"
             ),
-            acquisition_retry_interval_ms=_positive_int(position, "acquisition_retry_interval_ms"),
-            allow_short_only_risk_exit=_bool(position, "allow_short_only_risk_exit"),
+            maximum_concurrent_positions=_positive_int(risk, "maximum_concurrent_positions"),
+            delivery_price_stress_factors=_decimal_tuple(risk, "delivery_price_stress_factors"),
+            exit_cost_stress_fraction=_decimal(risk, "exit_cost_stress_fraction"),
         ),
-        shadow=ShadowPolicy(
-            entry_acquisition_window_ms=_positive_int(shadow, "entry_acquisition_window_ms"),
-            maximum_pair_source_skew_ms=_positive_int(shadow, "maximum_pair_source_skew_ms"),
-            maximum_pair_receive_skew_ms=_positive_int(shadow, "maximum_pair_receive_skew_ms"),
-            maximum_position_quote_age_ms=_positive_int(shadow, "maximum_position_quote_age_ms"),
+        lifecycle=LifecyclePolicy(
+            entry_evaluation_window_seconds=_positive_int(
+                lifecycle, "entry_evaluation_window_seconds"
+            ),
+            monitoring_cadence_seconds=_positive_int(lifecycle, "monitoring_cadence_seconds"),
+            take_profit_fraction_of_credit=_decimal(lifecycle, "take_profit_fraction_of_credit"),
+            maximum_loss_multiple_of_credit=_decimal(lifecycle, "maximum_loss_multiple_of_credit"),
+            maximum_short_abs_delta=_decimal(lifecycle, "maximum_short_abs_delta"),
+            maximum_adverse_move_fraction=_decimal(lifecycle, "maximum_adverse_move_fraction"),
+            maximum_rv_acceleration=_decimal(lifecycle, "maximum_rv_acceleration"),
+            latest_exit_minutes_to_expiry=_positive_int(lifecycle, "latest_exit_minutes_to_expiry"),
+            trigger_priority=_text_tuple(lifecycle, "trigger_priority"),
         ),
     )
     _validate(policy)
@@ -203,92 +266,91 @@ def load_btc_short_vol_policy(path: Path) -> BtcShortVolPolicy:
 
 
 def _validate(policy: BtcShortVolPolicy) -> None:
-    if policy.schema_version != 2:
+    if policy.schema_version != 5:
         raise ValueError("unsupported policy schema")
     if policy.status != "PUBLIC_SHADOW_UNQUALIFIED":
         raise ValueError("policy status must be PUBLIC_SHADOW_UNQUALIFIED")
-
     session = policy.session
-    if session.roll_reprice_minutes >= 24 * 60:
-        raise ValueError("roll/reprice phase must fit inside one Deribit session")
-    if session.late_theta_start_minutes_to_expiry >= 24 * 60:
-        raise ValueError("late-theta boundary must fit inside one Deribit session")
     if session.roll_reprice_minutes + session.exit_only_minutes_to_expiry >= 24 * 60:
-        raise ValueError("roll/reprice and exit-only phases leave no entry-capable session")
+        raise ValueError("session phases leave no entry-capable time")
 
-    radar = policy.radar
-    if not Decimal(1) < radar.minimum_vrp_ratio < radar.vrp_saturation_ratio:
+    environment = policy.environment
+    if not Decimal(1) < environment.minimum_vrp_ratio <= environment.late_theta_minimum_vrp_ratio:
         raise ValueError("VRP thresholds are invalid")
-    if (
-        not radar.minimum_vrp_ratio
-        <= radar.late_theta_minimum_vrp_ratio
-        < (radar.vrp_saturation_ratio)
+    for value, name in (
+        (environment.maximum_rv_acceleration, "maximum_rv_acceleration"),
+        (environment.maximum_jump_share, "maximum_jump_share"),
+        (environment.maximum_directional_persistence, "maximum_directional_persistence"),
     ):
-        raise ValueError("late-theta VRP threshold is invalid")
-    for value, field_name in (
-        (radar.minimum_theta_capture_proxy, "minimum_theta_capture_proxy"),
-        (radar.maximum_rv_acceleration, "maximum_rv_acceleration"),
-        (radar.maximum_jump_share, "maximum_jump_share"),
-        (radar.maximum_directional_persistence, "maximum_directional_persistence"),
-        (radar.maximum_abs_net_delta, "maximum_abs_net_delta"),
-    ):
-        _fraction(value, field_name)
-    if radar.minimum_body_distance_sigma <= 0:
-        raise ValueError("minimum_body_distance_sigma must be positive")
-    if radar.activation_score < 0 or radar.activation_score > 100:
-        raise ValueError("activation_score must be in [0, 100]")
+        _fraction(value, name)
 
     structure = policy.structure
-    if structure.target_quantity <= 0:
-        raise ValueError("target_quantity must be positive")
+    if structure.option_amount <= 0:
+        raise ValueError("option_amount must be positive")
     if not Decimal(0) < structure.short_delta_min < structure.short_delta_max <= Decimal(1):
         raise ValueError("short Delta interval is invalid")
+    if not Decimal(0) < structure.maximum_abs_net_delta <= Decimal(1):
+        raise ValueError("maximum_abs_net_delta must be in (0, 1]")
+    if structure.minimum_body_distance_sigma <= 0:
+        raise ValueError("minimum_body_distance_sigma must be positive")
     if structure.minimum_wing_width_usd <= 0 or (
         structure.maximum_wing_width_usd <= structure.minimum_wing_width_usd
     ):
         raise ValueError("wing width interval is invalid")
 
     underwriting = policy.underwriting
-    if underwriting.minimum_combined_net_credit_usd <= 0:
-        raise ValueError("minimum combined net credit must be positive")
+    if underwriting.minimum_boundary_net_credit_usd <= 0:
+        raise ValueError("minimum boundary credit must be positive")
+    _fraction(underwriting.minimum_credit_to_payoff_cap, "minimum_credit_to_payoff_cap")
     _fraction(
-        underwriting.minimum_credit_to_max_side_payoff,
-        "minimum_credit_to_max_side_payoff",
+        underwriting.maximum_combo_fee_fraction_of_credit,
+        "maximum_combo_fee_fraction_of_credit",
     )
-    _fraction(
-        underwriting.maximum_total_fee_fraction_of_credit,
-        "maximum_total_fee_fraction_of_credit",
-    )
-    if underwriting.maximum_entry_boundary_loss_usd <= 0:
-        raise ValueError("maximum entry-boundary loss must be positive")
+    if underwriting.maximum_boundary_reference_loss_usd <= 0:
+        raise ValueError("maximum boundary reference loss must be positive")
 
-    position = policy.position
-    _fraction(position.take_profit_fraction_of_credit, "take_profit_fraction_of_credit")
-    if position.take_profit_fraction_of_credit == 0:
+    risk = policy.risk
+    if risk.maximum_session_contractual_payoff_usd <= 0:
+        raise ValueError("maximum session contractual payoff must be positive")
+    if not risk.delivery_price_stress_factors or any(
+        factor <= 0 for factor in risk.delivery_price_stress_factors
+    ):
+        raise ValueError("delivery stress factors must be positive")
+    _fraction(risk.exit_cost_stress_fraction, "exit_cost_stress_fraction")
+
+    lifecycle = policy.lifecycle
+    _fraction(lifecycle.take_profit_fraction_of_credit, "take_profit_fraction_of_credit")
+    if lifecycle.take_profit_fraction_of_credit == 0:
         raise ValueError("take-profit fraction must be positive")
-    if position.maximum_loss_multiple_of_credit <= 0:
+    if lifecycle.maximum_loss_multiple_of_credit <= 0:
         raise ValueError("maximum loss multiple must be positive")
-    if not Decimal(0) < position.maximum_short_abs_delta <= Decimal(1):
+    if not Decimal(0) < lifecycle.maximum_short_abs_delta <= Decimal(1):
         raise ValueError("maximum short Delta must be in (0, 1]")
-    _fraction(position.maximum_adverse_move_fraction, "maximum_adverse_move_fraction")
-    _fraction(position.maximum_rv_acceleration, "position maximum_rv_acceleration")
-    if position.latest_short_risk_exit_minutes_to_expiry < session.delivery_twap_minutes_to_expiry:
-        raise ValueError("short-risk exit cannot be later than the delivery TWAP boundary")
-    if position.latest_short_risk_exit_minutes_to_expiry > (session.exit_only_minutes_to_expiry):
-        raise ValueError("short-risk exit cannot precede the declared exit-only phase")
+    _fraction(lifecycle.maximum_adverse_move_fraction, "maximum_adverse_move_fraction")
+    _fraction(lifecycle.maximum_rv_acceleration, "lifecycle maximum_rv_acceleration")
+    if not (
+        session.delivery_twap_minutes_to_expiry
+        <= lifecycle.latest_exit_minutes_to_expiry
+        <= session.exit_only_minutes_to_expiry
+    ):
+        raise ValueError("latest exit must be inside the declared exit phase")
+    required_triggers = {
+        "LATEST_EXIT",
+        "EVENT_OR_SHOCK",
+        "MAXIMUM_LOSS",
+        "SHORT_DELTA",
+        "ADVERSE_MOVE",
+        "RV_ACCELERATION",
+        "VRP_PROXY_DISSIPATED",
+        "TAKE_PROFIT",
+    }
+    if set(lifecycle.trigger_priority) != required_triggers:
+        raise ValueError("trigger_priority must contain each implemented trigger exactly once")
 
-    shadow = policy.shadow
-    if shadow.maximum_pair_receive_skew_ms > shadow.entry_acquisition_window_ms:
-        raise ValueError("pair receive skew cannot exceed the entry-acquisition window")
-    if shadow.maximum_pair_source_skew_ms > shadow.entry_acquisition_window_ms:
-        raise ValueError("pair source skew cannot exceed the entry-acquisition window")
-    if shadow.maximum_position_quote_age_ms > shadow.entry_acquisition_window_ms:
-        raise ValueError("position quote age cannot exceed the entry-acquisition window")
 
-
-def _fraction(value: Decimal, field_name: str) -> None:
-    if not value.is_finite() or value < 0 or value > 1:
-        raise ValueError(f"{field_name} must be in [0, 1]")
+def _fraction(value: Decimal, field: str) -> None:
+    if not value.is_finite() or not Decimal(0) <= value <= Decimal(1):
+        raise ValueError(f"{field} must be in [0, 1]")
 
 
 def _mapping(value: dict[str, Any], field: str) -> dict[str, Any]:
@@ -312,18 +374,36 @@ def _positive_int(value: dict[str, Any], field: str) -> int:
     return member
 
 
+def _non_negative_int(value: dict[str, Any], field: str) -> int:
+    member = value.get(field)
+    if isinstance(member, bool) or not isinstance(member, int) or member < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+    return member
+
+
 def _decimal(value: dict[str, Any], field: str) -> Decimal:
     member = value.get(field)
     if isinstance(member, bool) or member is None:
-        raise ValueError(f"{field} must be a decimal-compatible value")
+        raise ValueError(f"{field} must be decimal-compatible")
     parsed = Decimal(str(member))
     if not parsed.is_finite():
         raise ValueError(f"{field} must be finite")
     return parsed
 
 
-def _bool(value: dict[str, Any], field: str) -> bool:
+def _decimal_tuple(value: dict[str, Any], field: str) -> tuple[Decimal, ...]:
     member = value.get(field)
-    if not isinstance(member, bool):
-        raise ValueError(f"{field} must be boolean")
-    return member
+    if not isinstance(member, list):
+        raise ValueError(f"{field} must be an array")
+    return tuple(_decimal({field: item}, field) for item in member)
+
+
+def _text_tuple(value: dict[str, Any], field: str) -> tuple[str, ...]:
+    member = value.get(field)
+    if not isinstance(member, list) or not member:
+        raise ValueError(f"{field} must be a non-empty array")
+    if not all(isinstance(item, str) and item for item in member):
+        raise ValueError(f"{field} values must be non-empty text")
+    if len(set(member)) != len(member):
+        raise ValueError(f"{field} values must be unique")
+    return tuple(member)

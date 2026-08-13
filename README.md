@@ -1,11 +1,10 @@
 # Optimatrix BTC 0DTE
 
-Optimatrix currently implements one public, read-only Shadow product: a same-Deribit-Session,
-two-sided, four-leg, defined-risk BTC premium sale. It contains no order, fill, account, capital, or
-qualified-Edge claim.
+Optimatrix is the local package for the product defined in
+[Product Authority](docs/authority/PRODUCT_CONSTITUTION.md).
 
 This README is package guidance, not product Authority. Agents start at `AGENTS.md`; current
-permission is in `docs/authority/CURRENT_STAGE.md`.
+permission and maturity are in `docs/authority/CURRENT_STAGE.md`.
 
 ## Local setup and checks
 
@@ -15,9 +14,5 @@ make check
 .venv/bin/python -m optimatrix --help
 ```
 
-`make check` runs the offline quality and business-scenario suite. It does not establish live
-reachability, Policy qualification, or profitability.
-
-Network commands are not ordinary local validation. Run one only when the active task and
-`CURRENT_STAGE` both authorize the exact command and bounds. CLI help and source own current command
-syntax; documentation does not duplicate it.
+`make check` is offline evidence only. A network command requires exact authorization in the active
+task and Stage; CLI help and source own its syntax.

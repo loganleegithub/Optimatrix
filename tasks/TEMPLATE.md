@@ -4,14 +4,16 @@
 
 **Task kind:** AUTHORITY_ONLY | IMPLEMENTATION | VALIDATION_ONLY
 
+**Target maturity stage:** exact `CURRENT_STAGE` identifier
+
 **Runtime implementation:** REQUIRED | FORBIDDEN
 
 **Live commands:** FORBIDDEN | exact command, bounds, attempts, output, and retry rule
 
 **Owning authority/contract:** exact link
 
-No placeholder may remain when the task becomes `ACTIVE`. `CURRENT_STAGE` must link this file as the
-only active non-template task.
+No placeholder may remain when this task becomes `ACTIVE`. Stage must link this file as the only
+active non-template task.
 
 ## Closure
 
@@ -21,35 +23,30 @@ only active non-template task.
 
 **Then:** observable result
 
-**Canonical unit and funnel node:** exact owner-defined values or `NOT_APPLICABLE`
+**Affected identity and population:** exact MarketObservation, DecisionWindow, OpportunityEpisode,
+TradeCase, Position, or `NOT_APPLICABLE`
 
 **Baseline and denominator:** exact values or `NOT_YET_MEASURED` with reason
 
-**Primary blocker:** earliest measured reason
+**Primary blocker and expected delta:** earliest measured reason and exact change
 
-**Expected product, trader-visible, blocker, or complexity delta:** exact change
-
-**Known-at/source boundary:** causal input boundary
-
-**Valid zero/UNKNOWN:** truthful result and whether it satisfies closure
+**Known-at and DataHealth boundary:** causal input and valid `UNKNOWN`
 
 ## Effects and scope
 
-**Market/Decision/Policy/Outcome change:** `NONE` or exact authorized change
+**Risk allocation effect:** NONE or exact Shadow/account fact and release rule
 
-**Durable-data effect and direct consumer:** `NONE` or exact Case-owned fact
+**ObservationLedger / CaseJournal effect and consumer:** NONE or exact owned record
 
-**Legacy-data access effect:** `NONE` unless product Authority changes isolation
+**Legacy-data effect:** NONE unless Product Authority changes isolation
 
-**Stage/authorization effect:** `NONE` or exact change
+**Permission effect:** NONE or exact Stage change
 
 **Files and behavior in scope:** exact bounded list
 
 **Out of scope:** exact boundary
 
-**Complexity added:** `NONE` or exact addition and consumer
-
-**Complexity deleted:** `NONE` or exact obsolete surface
+**Complexity added / deleted:** exact surfaces and current consumers
 
 ## Verification and closure
 
@@ -59,5 +56,5 @@ only active non-template task.
 
 **External evidence:** exact authorized check or `UNVERIFIED`
 
-Close only after directly observing the declared delta. Replace `CURRENT_STAGE` with the post-task
-snapshot and remove this file; do not append a completion history.
+Close only after directly observing the declared delta. Replace Stage with the post-task snapshot
+and remove this file; do not append completion history.

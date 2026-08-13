@@ -32,17 +32,18 @@ def test_policy_rejects_session_without_entry_capable_time(tmp_path) -> None:
         load_btc_short_vol_policy(path)
 
 
-def test_policy_rejects_invalid_risk_and_execution_ranges(tmp_path) -> None:
+def test_policy_rejects_invalid_delivery_risk_range(tmp_path) -> None:
     path = _write_policy(
         tmp_path,
-        lambda value: value["position"].update({"maximum_short_abs_delta": 1.2}),
+        lambda value: value["risk"].update({"delivery_price_stress_factors": [0, 1, 2]}),
     )
-    with pytest.raises(ValueError, match="maximum short Delta"):
+    with pytest.raises(ValueError, match="delivery stress factors"):
         load_btc_short_vol_policy(path)
 
 
 def test_policy_identity_is_stable_and_content_addressed(policy) -> None:
-    assert policy.schema_version == 2
+    assert policy.schema_version == 5
+    assert policy.window.cadence_minutes == 15
     assert policy.identity.startswith("sha256:")
     assert len(policy.identity) == 71
 

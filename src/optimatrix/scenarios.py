@@ -1,41 +1,49 @@
 from __future__ import annotations
 
-import tempfile
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from optimatrix.engine import ShadowEngine
+from optimatrix.case_journal import CaseJournal
+from optimatrix.decision import DecisionResult, DecisionWindow
+from optimatrix.engine import Btc0DteShortVolEngine
 from optimatrix.lifecycle import (
-    EntryRoute,
-    EntryStatus,
-    ExitReason,
-    ExitScope,
-    PositionRiskAction,
+    FuturePathSummary,
+    ObservationStatus,
     PositionState,
-    ShadowPosition,
-    SideState,
+    TerminalMethod,
+    WindowOutcome,
+    window_outcome_eligibility,
 )
 from optimatrix.market import (
-    BreakoutState,
     EventState,
     EventStateSource,
+    ExpirySettlementFact,
     ImpliedVarianceMethod,
     MarketContext,
     MarketContextEvidence,
     OptionQuote,
     OptionType,
-    PhysicalVarianceMethod,
     PriceLevel,
+    RealizedVarianceMethod,
+    SettlementEvidenceKind,
     TickSchedule,
     TickStep,
 )
-from optimatrix.persistence import CaseJournal
+from optimatrix.observation_ledger import ObservationLedger
 from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.products import BTC
-from optimatrix.radar import Decision, RadarDecision
-from optimatrix.structure import select_iron_condor
+from optimatrix.radar import BtcWindowAssessment
+from optimatrix.risk import AllocationResult, ShadowCapacity
+from optimatrix.structure import select_btc_0dte_condor
+
+BASE_CHAIN_INSTRUMENTS = (
+    "BTC-X-93000-P",
+    "BTC-X-95000-P",
+    "BTC-X-105000-C",
+    "BTC-X-107000-C",
+)
 
 
 @dataclass(frozen=True)
@@ -45,780 +53,374 @@ class ScenarioResult:
     facts: dict[str, object]
 
 
-def run_all_scenarios(
-    policy: BtcShortVolPolicy,
-    *,
-    root: Path | None = None,
-) -> tuple[ScenarioResult, ...]:
-    target_root = root or Path(tempfile.mkdtemp(prefix="optimatrix-business-scenarios-"))
-    target_root.mkdir(parents=True, exist_ok=True)
+def run_all_scenarios(policy: BtcShortVolPolicy, *, root: Path) -> tuple[ScenarioResult, ...]:
     return (
-        calm_high_vrp_take_profit(policy, target_root / "calm"),
-        unknown_market_context_stops_before_structure(policy, target_root / "unknown-context"),
-        all_joint_hard_eligible_selection(policy, target_root / "all-joint"),
-        gamma_explosion_is_rejected(policy, target_root / "gamma"),
-        event_phase_changes_decision(policy, target_root / "event"),
-        short_risk_exit_keeps_residual_wings(policy, target_root / "short-only"),
-        strict_future_exit_closes_two_sided_duty(policy, target_root / "causal-exit"),
-        partial_entry_is_persisted(policy, target_root / "partial"),
-        process_recovery_keeps_position_duty(policy, target_root / "recovery"),
-        expiry_settlement_terminates_residual_risk(policy, target_root / "settlement"),
-        roll_reprice_is_review_only(policy, target_root / "roll"),
-        low_vrp_is_rejected(policy, target_root / "low-vrp"),
-        late_theta_requires_extra_vrp(policy, target_root / "late-theta"),
-        wings_only_fallback_is_a_real_position(policy, target_root / "wings-only"),
-        source_skew_creates_partial_entry(policy, target_root / "source-skew"),
-        public_combo_is_an_optional_diagnostic(policy, target_root / "combo"),
-        failed_entry_remains_a_durable_no_entry_case(policy, target_root / "no-entry"),
-        friday_expiry_reserves_delivery_fees(policy, target_root / "friday-settlement"),
-        failed_exit_survives_process_recovery(policy, target_root / "exit-recovery"),
-        live_shock_forces_short_risk_exit(policy, target_root / "live-shock-exit"),
+        whole_product_candidate(policy, root / "candidate"),
+        missing_window_is_unknown(policy, root / "missing"),
+        shallow_close_depth_is_diagnostic(policy),
+        known_path_risk_abstains(policy, root / "path-risk"),
+        atomic_shadow_case_exit(policy, root / "atomic-case"),
+        gap_preserves_position_then_settlement(policy, root / "gap-settlement"),
+        all_window_outcome_is_independent(policy, root / "window-outcome"),
     )
 
 
-def unknown_market_context_stops_before_structure(
-    policy: BtcShortVolPolicy,
-    root: Path,
-) -> ScenarioResult:
-    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    decision = ShadowEngine(policy=policy, case_root=root).evaluate(
-        quotes=base_chain(expiry=current_expiry(now), observed_at=now),
-        context=market_context(
-            now,
-            evidence=MarketContextEvidence.unknown(),
+def whole_product_candidate(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
+    at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    engine = Btc0DteShortVolEngine(policy=policy)
+    window = _window_at(engine, at)
+    observation = engine.capture_observation(
+        quotes=base_chain(expiry=current_expiry(at), observed_at=at),
+        context=market_context(at),
+    )
+    assessment = engine.assess_window(
+        ledger=ObservationLedger(root),
+        window=window,
+        observation=observation,
+        capacity=ShadowCapacity.empty(
+            channel_id=policy.channel_id,
+            market_session_id=window.market_session_id,
+            known_at=window.input_deadline,
         ),
+        known_at=window.input_deadline,
     )
+    candidate = assessment.selection.selected if assessment.selection is not None else None
     passed = (
-        decision.decision is Decision.UNKNOWN
-        and decision.structure is None
-        and decision.score is None
-        and decision.blockers[0] == "MARKET_CONTEXT_EVIDENCE_NOT_BOUND"
+        assessment.record.result is DecisionResult.CANDIDATE
+        and candidate is not None
+        and assessment.allocation is not None
+        and assessment.allocation.result is AllocationResult.AVAILABLE
     )
     return ScenarioResult(
-        "unknown_market_context_stops_before_structure",
+        "whole_product_candidate",
         passed,
         {
-            "decision": decision.decision.value,
-            "structure_created": decision.structure is not None,
-            "score_created": decision.score is not None,
-            "primary_blocker": decision.blockers[0],
-        },
-    )
-
-
-def all_joint_hard_eligible_selection(
-    policy: BtcShortVolPolicy,
-    root: Path,
-) -> ScenarioResult:
-    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(now)
-    quotes = all_joint_adversarial_chain(expiry=current_expiry(now), observed_at=now)
-    selection = select_iron_condor(quotes=quotes, context=context, policy=policy)
-    decision = ShadowEngine(policy=policy, case_root=root).evaluate(
-        quotes=quotes,
-        context=context,
-    )
-    selected = decision.structure
-    passed = (
-        decision.decision is Decision.CANDIDATE
-        and selected is not None
-        and selected.long_put.strike == Decimal("93000")
-        and selection.considered_put_verticals == 4
-        and selection.considered_condors == 4
-        and selection.hard_eligible_condors == 1
-    )
-    return ScenarioResult(
-        "all_joint_hard_eligible_selection",
-        passed,
-        {
-            "decision": decision.decision.value,
-            "selected_long_put": (
-                selected.long_put.instrument_name if selected is not None else None
+            "decision": assessment.record.result.value,
+            "candidate_id": candidate.identity if candidate is not None else None,
+            "legal_structures": (
+                assessment.selection.legal_structure_count
+                if assessment.selection is not None
+                else 0
             ),
-            "put_verticals": selection.considered_put_verticals,
-            "joint_candidates": selection.considered_condors,
-            "hard_eligible_candidates": selection.hard_eligible_condors,
-        },
-    )
-
-
-def calm_high_vrp_take_profit(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
-    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(now)
-    quotes = base_chain(expiry=current_expiry(now), observed_at=now)
-    engine = ShadowEngine(policy=policy, case_root=root)
-    decision = engine.evaluate(quotes=quotes, context=context)
-    case = engine.open_decision_case(decision=decision, opened_at=now)
-    entry_context = replace(context, now=now + timedelta(minutes=1))
-    entry_result, position = engine.attempt_entry(
-        case=case,
-        quotes=restamp_quotes(quotes, entry_context.now),
-        context=entry_context,
-        attempted_at=entry_context.now,
-    )
-    assert position is not None
-    later = now + timedelta(hours=4)
-    later_context = market_context(later, index=Decimal("100100"))
-    decayed = reprice_chain(
-        quotes,
-        short_bid=Decimal("0.0004"),
-        short_ask=Decimal("0.0005"),
-        long_bid=Decimal("0.0002"),
-        long_ask=Decimal("0.0003"),
-        observed_at=later,
-    )
-    observation = engine.observe_position(position=position, quotes=decayed, context=later_context)
-    exit_at = later + timedelta(minutes=1)
-    projected = engine.observe_position(
-        position=position,
-        quotes=restamp_quotes(decayed, exit_at),
-        context=market_context(exit_at, index=Decimal("100100")),
-    )
-    outcome = position.outcome
-    passed = (
-        decision.decision is Decision.CANDIDATE
-        and entry_result.status is EntryStatus.FULL_ENTRY
-        and observation.instruction is not None
-        and observation.instruction.reason is ExitReason.TAKE_PROFIT
-        and projected.action is PositionRiskAction.PORTFOLIO_TERMINAL
-        and outcome is not None
-        and outcome.total_native_pnl > 0
-        and outcome.strategy_outcome_eligible
-        and position.state is PositionState.TERMINAL
-    )
-    return ScenarioResult(
-        "calm_high_vrp_take_profit",
-        passed,
-        {
-            "decision": decision.decision.value,
-            "score": _score(decision),
-            "entry_status": entry_result.status.value,
-            "exit_reason": (
-                observation.instruction.reason.value if observation.instruction else None
+            "combo_fee_native": (
+                str(candidate.pricing.combo_standard_fee_native) if candidate is not None else None
             ),
-            "native_pnl": str(outcome.total_native_pnl) if outcome else None,
-            "terminal_method": outcome.terminal_method if outcome else None,
-        },
-    )
-
-
-def gamma_explosion_is_rejected(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
-    now = datetime(2026, 8, 12, 20, 0, tzinfo=UTC)
-    context = market_context(
-        now,
-        implied_variance=Decimal("0.0030"),
-        rv_acceleration=Decimal("0.90"),
-        jump_share=Decimal("0.80"),
-        directional_persistence=Decimal("0.85"),
-        breakout=BreakoutState.BREAKING_CONCENTRATED_STRIKE,
-    )
-    engine = ShadowEngine(policy=policy, case_root=root)
-    decision = engine.evaluate(
-        quotes=base_chain(expiry=current_expiry(now), observed_at=now),
-        context=context,
-    )
-    passed = decision.decision is Decision.ABSTAIN and {
-        "RV_ACCELERATION_TOO_HIGH",
-        "JUMP_SHARE_TOO_HIGH",
-        "CONCENTRATED_STRIKE_BREAKOUT",
-    }.issubset(set(decision.blockers))
-    return ScenarioResult(
-        "gamma_explosion_is_rejected",
-        passed,
-        {
-            "decision": decision.decision.value,
-            "score": _score(decision),
-            "blockers": list(decision.blockers),
-        },
-    )
-
-
-def event_phase_changes_decision(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
-    now = datetime(2026, 8, 12, 16, 0, tzinfo=UTC)
-    quotes = base_chain(expiry=current_expiry(now), observed_at=now)
-    engine = ShadowEngine(policy=policy, case_root=root)
-    pre = engine.evaluate(
-        quotes=quotes,
-        context=market_context(now, event=EventState.PRE_EVENT),
-    )
-    post = engine.evaluate(
-        quotes=quotes,
-        context=market_context(now + timedelta(hours=1), event=EventState.POST_EVENT),
-    )
-    passed = pre.decision is not Decision.CANDIDATE and post.decision is Decision.CANDIDATE
-    return ScenarioResult(
-        "event_phase_changes_decision",
-        passed,
-        {
-            "pre_event_decision": pre.decision.value,
-            "pre_event_score": _score(pre),
-            "post_event_decision": post.decision.value,
-            "post_event_score": _score(post),
-        },
-    )
-
-
-def short_risk_exit_keeps_residual_wings(
-    policy: BtcShortVolPolicy,
-    root: Path,
-) -> ScenarioResult:
-    now, engine, position, quotes = _opened_position(policy, root)
-    threatened_context = market_context(
-        now + timedelta(hours=2),
-        index=Decimal("96000"),
-        rv_acceleration=Decimal("0.45"),
-    )
-    threatened = _update_delta(
-        quotes,
-        put_delta=Decimal("-0.58"),
-        call_delta=Decimal("0.10"),
-        observed_at=threatened_context.now,
-    )
-    observation = engine.observe_position(
-        position=position,
-        quotes=threatened,
-        context=threatened_context,
-    )
-    exit_at = threatened_context.now + timedelta(minutes=1)
-    exit_quotes = restamp_quotes(threatened, exit_at)
-    exit_quotes = _remove_bid(exit_quotes, instrument_suffix="93000-P")
-    exit_quotes = _remove_bid(exit_quotes, instrument_suffix="107000-C")
-    projected = engine.observe_position(
-        position=position,
-        quotes=exit_quotes,
-        context=market_context(exit_at, index=Decimal("96000")),
-    )
-    passed = (
-        observation.instruction is not None
-        and observation.instruction.scope is ExitScope.BOTH_SIDES
-        and projected.action is PositionRiskAction.SHORT_RISK_FLAT
-        and position.put_side.state is SideState.SHORT_FLAT_LONG_WING
-        and not position.put_side.short_open
-        and position.put_side.long_open
-        and not position.call_side.short_open
-        and position.call_side.long_open
-        and position.state is PositionState.SHORT_RISK_FLAT
-    )
-    return ScenarioResult(
-        "short_risk_exit_keeps_residual_wings",
-        passed,
-        {
-            "instruction": (
-                observation.instruction.reason.value if observation.instruction else None
+            "allocation": (
+                assessment.allocation.result.value if assessment.allocation is not None else None
             ),
-            "put_side_state": position.put_side.state.value,
-            "call_side_state": position.call_side.state.value,
-            "position_state": position.state.value,
-            "short_risk_remaining": position.has_short_risk,
-            "residual_wings": position.residual_wing_count,
         },
     )
 
 
-def strict_future_exit_closes_two_sided_duty(
-    policy: BtcShortVolPolicy,
-    root: Path,
-) -> ScenarioResult:
-    now, engine, position, quotes = _opened_position(policy, root)
-    down_context = market_context(now + timedelta(hours=2), index=Decimal("96000"))
-    down_quotes = _update_delta(
-        quotes,
-        put_delta=Decimal("-0.60"),
-        call_delta=Decimal("0.08"),
-        observed_at=down_context.now,
-    )
-    first = engine.observe_position(position=position, quotes=down_quotes, context=down_context)
-    same_boundary = engine.observe_position(
-        position=position,
-        quotes=down_quotes,
-        context=down_context,
-    )
-    exit_at = down_context.now + timedelta(minutes=1)
-    second = engine.observe_position(
-        position=position,
-        quotes=restamp_quotes(quotes, exit_at),
-        context=market_context(exit_at, index=Decimal("96000")),
-    )
-    outcome = position.outcome
-    passed = (
-        first.instruction is not None
-        and first.instruction.scope is ExitScope.BOTH_SIDES
-        and same_boundary.action is PositionRiskAction.EXIT_DUTY_PENDING
-        and position.state is PositionState.TERMINAL
-        and second.action is PositionRiskAction.PORTFOLIO_TERMINAL
-        and outcome is not None
+def missing_window_is_unknown(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
+    at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    engine = Btc0DteShortVolEngine(policy=policy)
+    window = _window_at(engine, at)
+    assessment = engine.assess_window(
+        ledger=ObservationLedger(root),
+        window=window,
+        observation=None,
+        capacity=None,
+        known_at=window.input_deadline,
     )
     return ScenarioResult(
-        "strict_future_exit_closes_two_sided_duty",
-        passed,
+        "missing_window_is_unknown",
+        assessment.record.result is DecisionResult.UNKNOWN
+        and assessment.record.blockers == ("NO_OBSERVATION",),
         {
-            "first_scope": first.instruction.scope.value if first.instruction else None,
-            "same_boundary_action": same_boundary.action.value,
-            "future_action": second.action.value,
-            "native_pnl": str(outcome.total_native_pnl) if outcome else None,
+            "decision": assessment.record.result.value,
+            "blocker": assessment.record.earliest_blocker,
         },
     )
 
 
-def partial_entry_is_persisted(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
-    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(now)
-    chain = base_chain(expiry=current_expiry(now))
-    engine = ShadowEngine(policy=policy, case_root=root)
-    decision = engine.evaluate(quotes=chain, context=context)
-    case = engine.open_decision_case(decision=decision, opened_at=now)
-    entry_chain = restamp_quotes(
-        _remove_ask(chain, instrument_suffix="107000-C"),
-        now + timedelta(minutes=1),
+def shallow_close_depth_is_diagnostic(policy: BtcShortVolPolicy) -> ScenarioResult:
+    at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    engine = Btc0DteShortVolEngine(policy=policy)
+    quotes = tuple(
+        replace(quote, ask=(PriceLevel(quote.ask[0].price, Decimal("0.05")),))
+        if quote.instrument_name.endswith("95000-P") or quote.instrument_name.endswith("105000-C")
+        else quote
+        for quote in base_chain(expiry=current_expiry(at), observed_at=at)
     )
-    result, position = engine.attempt_entry(
-        case=case,
-        quotes=entry_chain,
-        context=replace(context, now=now + timedelta(minutes=1)),
-        attempted_at=now + timedelta(minutes=1),
-    )
-    recovered = engine.recover_position(case.case_identity)
-    assert recovered is not None
-    remediation_at = now + timedelta(minutes=2)
-    observation = engine.observe_position(
-        position=recovered,
-        quotes=restamp_quotes(chain, remediation_at),
-        context=replace(context, now=remediation_at),
-    )
+    observation = engine.capture_observation(quotes=quotes, context=market_context(at))
+    selection = select_btc_0dte_condor(observation=observation, policy=policy)
+    candidate = selection.selected
     passed = (
-        result.status is EntryStatus.PUT_SIDE_ONLY
-        and position is not None
-        and recovered.entry_status is EntryStatus.PUT_SIDE_ONLY
-        and observation.instruction is not None
-        and observation.instruction.reason is ExitReason.ENTRY_ACQUISITION_INCOMPLETE
-        and not recovered.put_side.short_open
-        and not recovered.call_side.short_open
-        and recovered.outcome is not None
-        and not recovered.outcome.strategy_outcome_eligible
+        candidate is not None
+        and candidate.pricing.observed_close_native_debit is None
+        and min(candidate.close_depth_coverage) == Decimal("0.5")
     )
     return ScenarioResult(
-        "partial_entry_is_persisted",
+        "shallow_close_depth_is_diagnostic",
         passed,
         {
-            "entry_status": result.status.value,
-            "blockers": list(result.blockers),
-            "recovered_remediation_reason": (
-                observation.instruction.reason.value
-                if observation.instruction is not None
-                else None
+            "selected": candidate is not None,
+            "minimum_close_depth_coverage": (
+                str(min(candidate.close_depth_coverage)) if candidate is not None else None
             ),
-            "short_risk_flat": not recovered.has_short_risk,
-            "strategy_outcome_eligible": (
-                recovered.outcome.strategy_outcome_eligible
-                if recovered.outcome is not None
+            "close_price_known": (
+                candidate.pricing.observed_close_native_debit is not None
+                if candidate is not None
                 else None
             ),
         },
     )
 
 
-def process_recovery_keeps_position_duty(
-    policy: BtcShortVolPolicy,
-    root: Path,
-) -> ScenarioResult:
-    now, engine, position, quotes = _opened_position(policy, root)
-    first_engine_identity = position.position_identity
-    context = market_context(now + timedelta(hours=3), index=Decimal("96000"))
-    risk_quotes = _update_delta(
-        quotes,
-        put_delta=Decimal("-0.58"),
-        call_delta=Decimal("0.08"),
-        observed_at=context.now,
+def known_path_risk_abstains(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
+    at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    engine = Btc0DteShortVolEngine(policy=policy)
+    window = _window_at(engine, at)
+    observation = engine.capture_observation(
+        quotes=base_chain(expiry=current_expiry(at), observed_at=at),
+        context=market_context(at, rv_acceleration=Decimal("0.9")),
     )
-    observation = engine.observe_position(
-        position=position,
-        quotes=risk_quotes,
-        context=context,
-    )
-    restarted = ShadowEngine(policy=policy, case_root=root)
-    recovered = restarted.recover_position(position.case_identity)
-    assert recovered is not None
-    exit_at = context.now + timedelta(minutes=1)
-    projected = restarted.observe_position(
-        position=recovered,
-        quotes=restamp_quotes(quotes, exit_at),
-        context=market_context(exit_at, index=Decimal("96000")),
-    )
-    passed = (
-        recovered.position_identity == first_engine_identity
-        and observation.instruction is not None
-        and projected.action is PositionRiskAction.PORTFOLIO_TERMINAL
-        and not recovered.has_short_risk
+    assessment = engine.assess_window(
+        ledger=ObservationLedger(root),
+        window=window,
+        observation=observation,
+        capacity=ShadowCapacity.empty(
+            channel_id=policy.channel_id,
+            market_session_id=window.market_session_id,
+            known_at=window.input_deadline,
+        ),
+        known_at=window.input_deadline,
     )
     return ScenarioResult(
-        "process_recovery_keeps_position_duty",
+        "known_path_risk_abstains",
+        assessment.record.result is DecisionResult.ABSTAIN
+        and "RV_ACCELERATION_TOO_HIGH" in assessment.record.blockers
+        and assessment.selection is None,
+        {
+            "decision": assessment.record.result.value,
+            "blockers": list(assessment.record.blockers),
+            "structure_selected": assessment.selection is not None,
+        },
+    )
+
+
+def atomic_shadow_case_exit(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
+    decision_at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    engine, assessment = _candidate_assessment(policy, root, decision_at)
+    journal = CaseJournal(root / "journal")
+    case = engine.open_case(journal=journal, record=assessment.record)
+    entry_at = assessment.record.known_at + timedelta(seconds=30)
+    case, entry = engine.evaluate_entry(
+        journal=journal,
+        case=case,
+        observation=engine.capture_observation(
+            quotes=base_chain(expiry=current_expiry(entry_at), observed_at=entry_at),
+            context=market_context(entry_at),
+        ),
+        known_at=entry_at,
+    )
+    trigger_at = entry_at + timedelta(seconds=policy.lifecycle.monitoring_cadence_seconds)
+    case, monitor = engine.monitor_position(
+        journal=journal,
+        case=case,
+        observation=engine.capture_observation(
+            quotes=base_chain(expiry=current_expiry(trigger_at), observed_at=trigger_at),
+            context=market_context(trigger_at, event=EventState.LIVE_EVENT),
+        ),
+    )
+    exit_at = trigger_at + timedelta(seconds=2)
+    case, exit_evaluation = engine.evaluate_exit(
+        journal=journal,
+        case=case,
+        observation=engine.capture_observation(
+            quotes=base_chain(expiry=current_expiry(exit_at), observed_at=exit_at),
+            context=market_context(exit_at),
+        ),
+    )
+    recovered = journal.recover(case.identity)
+    passed = (
+        entry.final
+        and case.position_state is PositionState.TERMINAL
+        and monitor.exit_intent is not None
+        and exit_evaluation.terminal
+        and recovered == case
+        and case.outcome is not None
+        and case.outcome.terminal_method is TerminalMethod.WHOLE_PRODUCT_EXIT
+    )
+    return ScenarioResult(
+        "atomic_shadow_case_exit",
         passed,
         {
-            "same_position_identity": recovered.position_identity == first_engine_identity,
-            "instruction": (
-                observation.instruction.reason.value if observation.instruction else None
+            "entry": entry.status.value,
+            "exit_reason": monitor.exit_intent.reason if monitor.exit_intent is not None else None,
+            "terminal_method": (
+                case.outcome.terminal_method.value if case.outcome is not None else None
             ),
-            "put_short_flat": not recovered.put_side.short_open,
+            "journal_snapshots": len(journal.read(case.identity)),
         },
     )
 
 
-def expiry_settlement_terminates_residual_risk(
+def gap_preserves_position_then_settlement(
     policy: BtcShortVolPolicy,
     root: Path,
 ) -> ScenarioResult:
-    now, engine, position, _quotes = _opened_position(policy, root)
-    expiry = current_expiry(now)
-    outcome = engine.settle(
-        position=position,
-        delivery_price=Decimal("101000"),
-        settled_at=expiry,
+    decision_at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    engine, assessment = _candidate_assessment(policy, root, decision_at)
+    journal = CaseJournal(root / "journal")
+    case = engine.open_case(journal=journal, record=assessment.record)
+    entry_at = assessment.record.known_at + timedelta(seconds=30)
+    case, _ = engine.evaluate_entry(
+        journal=journal,
+        case=case,
+        observation=engine.capture_observation(
+            quotes=base_chain(expiry=current_expiry(entry_at), observed_at=entry_at),
+            context=market_context(entry_at),
+        ),
+        known_at=entry_at,
     )
-    passed = (
-        outcome.terminal_method == "CONTRACT_SETTLEMENT"
-        and position.state is PositionState.TERMINAL
-        and not position.has_short_risk
-        and outcome.residual_wing_count == 0
+    gap_at = entry_at + timedelta(seconds=policy.lifecycle.monitoring_cadence_seconds)
+    case, gap = engine.monitor_position(
+        journal=journal,
+        case=case,
+        observation=engine.capture_observation(
+            quotes=base_chain(expiry=current_expiry(gap_at), observed_at=gap_at),
+            context=market_context(gap_at, evidence=MarketContextEvidence.unknown()),
+        ),
     )
-    return ScenarioResult(
-        "expiry_settlement_terminates_residual_risk",
-        passed,
-        {
-            "terminal_method": outcome.terminal_method,
-            "native_pnl": str(outcome.total_native_pnl),
-            "boundary_usd_pnl": str(outcome.boundary_valued_total_usd_pnl),
-            "terminal_valued_usd_pnl": str(outcome.terminal_valued_total_usd_pnl),
-        },
-    )
-
-
-def roll_reprice_is_review_only(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
-    now = datetime(2026, 8, 12, 8, 20, tzinfo=UTC)
-    engine = ShadowEngine(policy=policy, case_root=root)
-    decision = engine.evaluate(
-        quotes=base_chain(expiry=current_expiry(now), observed_at=now),
-        context=market_context(now),
-    )
-    passed = (
-        decision.decision is Decision.REVIEW and "ROLL_REPRICE_REVIEW_ONLY" in decision.blockers
-    )
-    return ScenarioResult(
-        "roll_reprice_is_review_only",
-        passed,
-        {"decision": decision.decision.value, "blockers": list(decision.blockers)},
-    )
-
-
-def low_vrp_is_rejected(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
-    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    engine = ShadowEngine(policy=policy, case_root=root)
-    decision = engine.evaluate(
-        quotes=base_chain(expiry=current_expiry(now), observed_at=now),
-        context=market_context(
-            now,
-            implied_variance=Decimal("0.00172"),
-            physical_variance=Decimal("0.00160"),
+    position_id = case.position_id
+    expiry = current_expiry(gap_at)
+    case = engine.settle_position(
+        journal=journal,
+        case=case,
+        settlement=ExpirySettlementFact(
+            product_id=BTC.product_id,
+            expiry=expiry,
+            delivery_price_usd=Decimal("110000"),
+            known_at=expiry,
+            evidence_kind=SettlementEvidenceKind.DETERMINISTIC_ACCEPTANCE_FIXTURE,
+            source_id="DETERMINISTIC_DELIVERY_FIXTURE",
+            method_id="FIXED_DELIVERY_PRICE_V1",
         ),
     )
     passed = (
-        decision.decision is Decision.ABSTAIN and "SESSION_VRP_BELOW_THRESHOLD" in decision.blockers
+        gap.observation_status is ObservationStatus.UNKNOWN
+        and position_id is not None
+        and case.position_id == position_id
+        and case.outcome is not None
+        and case.outcome.terminal_method is TerminalMethod.CONTRACT_SETTLEMENT
+        and case.outcome.eligibility.future_path_continuous.value is False
+        and case.outcome.eligibility.terminal_economics_evaluable.value is True
     )
     return ScenarioResult(
-        "low_vrp_is_rejected",
+        "gap_preserves_position_then_settlement",
         passed,
         {
-            "decision": decision.decision.value,
-            "vrp_ratio": str(decision.score.vrp_ratio) if decision.score else None,
-            "blockers": list(decision.blockers),
-        },
-    )
-
-
-def late_theta_requires_extra_vrp(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
-    now = datetime(2026, 8, 13, 5, 30, tzinfo=UTC)
-    engine = ShadowEngine(policy=policy, case_root=root)
-    decision = engine.evaluate(
-        quotes=base_chain(expiry=current_expiry(now), observed_at=now),
-        context=market_context(
-            now,
-            implied_variance=Decimal("0.00184"),
-            physical_variance=Decimal("0.00160"),
-        ),
-    )
-    passed = (
-        decision.decision is Decision.ABSTAIN and "SESSION_VRP_BELOW_THRESHOLD" in decision.blockers
-    )
-    return ScenarioResult(
-        "late_theta_requires_extra_vrp",
-        passed,
-        {
-            "phase": decision.phase.value,
-            "decision": decision.decision.value,
-            "vrp_ratio": str(decision.score.vrp_ratio) if decision.score else None,
-        },
-    )
-
-
-def wings_only_fallback_is_a_real_position(
-    policy: BtcShortVolPolicy,
-    root: Path,
-) -> ScenarioResult:
-    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(now)
-    chain = base_chain(expiry=current_expiry(now), observed_at=now)
-    engine = ShadowEngine(policy=policy, case_root=root)
-    decision = engine.evaluate(quotes=chain, context=context)
-    case = engine.open_decision_case(decision=decision, opened_at=now)
-    entry_at = now + timedelta(minutes=1)
-    no_short_bids = tuple(
-        replace(quote, bid=()) if quote.instrument_name.endswith(("95000-P", "105000-C")) else quote
-        for quote in restamp_quotes(chain, entry_at)
-    )
-    result, position = engine.attempt_entry(
-        case=case,
-        quotes=no_short_bids,
-        context=replace(context, now=entry_at),
-        attempted_at=entry_at,
-        allow_wings_only_fallback=True,
-    )
-    assert position is not None
-    wing_sale_at = now + timedelta(hours=2)
-    wing_quotes = reprice_chain(
-        chain,
-        short_bid=Decimal("0.0010"),
-        short_ask=Decimal("0.0011"),
-        long_bid=Decimal("0.0010"),
-        long_ask=Decimal("0.0011"),
-        observed_at=wing_sale_at,
-    )
-    outcome = engine.dispose_wings(
-        position=position,
-        quotes=wing_quotes,
-        context=market_context(wing_sale_at),
-    )
-    passed = (
-        result.status is EntryStatus.WINGS_ONLY
-        and position.short_risk_flat_at == entry_at
-        and outcome is not None
-        and outcome.terminal_method == "MARKET_EXIT"
-        and not outcome.strategy_outcome_eligible
-    )
-    return ScenarioResult(
-        "wings_only_fallback_is_a_real_position",
-        passed,
-        {
-            "entry_status": result.status.value,
-            "short_risk_flat_at_entry": position.short_risk_flat_at == entry_at,
-            "terminal": outcome is not None,
-        },
-    )
-
-
-def source_skew_creates_partial_entry(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
-    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(now)
-    chain = base_chain(expiry=current_expiry(now), observed_at=now)
-    engine = ShadowEngine(policy=policy, case_root=root)
-    decision = engine.evaluate(quotes=chain, context=context)
-    case = engine.open_decision_case(decision=decision, opened_at=now)
-    entry_at = now + timedelta(minutes=1)
-    entry_chain = list(restamp_quotes(chain, entry_at))
-    entry_chain[3] = replace(
-        entry_chain[3],
-        source_timestamp_ms=entry_chain[2].source_timestamp_ms + 7000,
-        received_timestamp_ms=entry_chain[2].received_timestamp_ms + 5000,
-    )
-    result, position = engine.attempt_entry(
-        case=case,
-        quotes=tuple(entry_chain),
-        context=replace(context, now=entry_at),
-        attempted_at=entry_at,
-    )
-    passed = (
-        result.status is EntryStatus.PUT_SIDE_ONLY
-        and position is not None
-        and "CALL_ENTRY_PAIR_NOT_STRICTLY_FUTURE_OR_COHERENT" in result.blockers
-        and position.state is PositionState.EXIT_REQUIRED
-        and position.first_instruction is not None
-        and position.first_instruction.reason is ExitReason.ENTRY_ACQUISITION_INCOMPLETE
-    )
-    return ScenarioResult(
-        "source_skew_creates_partial_entry",
-        passed,
-        {"entry_status": result.status.value, "blockers": list(result.blockers)},
-    )
-
-
-def public_combo_is_an_optional_diagnostic(policy: BtcShortVolPolicy, root: Path) -> ScenarioResult:
-    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(now)
-    chain = base_chain(expiry=current_expiry(now), observed_at=now)
-    engine = ShadowEngine(policy=policy, case_root=root)
-    decision = engine.evaluate(quotes=chain, context=context)
-    case = engine.open_decision_case(decision=decision, opened_at=now)
-    entry_at = now + timedelta(minutes=1)
-    result, position = engine.attempt_entry(
-        case=case,
-        quotes=restamp_quotes(chain, entry_at),
-        context=replace(context, now=entry_at),
-        attempted_at=entry_at,
-        public_combo_observed=True,
-    )
-    passed = (
-        result.status is EntryStatus.FULL_ENTRY
-        and result.route is EntryRoute.TWO_VERTICALS
-        and result.public_combo_observed
-        and position is not None
-    )
-    return ScenarioResult(
-        "public_combo_is_an_optional_diagnostic",
-        passed,
-        {
-            "route": result.route.value,
-            "public_combo_observed": result.public_combo_observed,
-            "entry_status": result.status.value,
-        },
-    )
-
-
-def failed_entry_remains_a_durable_no_entry_case(
-    policy: BtcShortVolPolicy,
-    root: Path,
-) -> ScenarioResult:
-    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(now)
-    chain = base_chain(expiry=current_expiry(now), observed_at=now)
-    engine = ShadowEngine(policy=policy, case_root=root)
-    decision = engine.evaluate(quotes=chain, context=context)
-    case = engine.open_decision_case(decision=decision, opened_at=now)
-    entry_at = now + timedelta(minutes=1)
-    unavailable = tuple(replace(quote, bid=(), ask=()) for quote in restamp_quotes(chain, entry_at))
-    result, position = engine.attempt_entry(
-        case=case,
-        quotes=unavailable,
-        context=replace(context, now=entry_at),
-        attempted_at=entry_at,
-    )
-    events = CaseJournal(root, case.case_identity).read()
-    kinds = tuple(str(event["kind"]) for event in events)
-    passed = (
-        result.status is EntryStatus.NO_ENTRY
-        and position is None
-        and kinds == ("DECISION_OPENED", "ENTRY_TERMINAL")
-    )
-    return ScenarioResult(
-        "failed_entry_remains_a_durable_no_entry_case",
-        passed,
-        {
-            "entry_status": result.status.value,
-            "event_kinds": list(kinds),
-            "blockers": list(result.blockers),
-        },
-    )
-
-
-def friday_expiry_reserves_delivery_fees(
-    policy: BtcShortVolPolicy,
-    root: Path,
-) -> ScenarioResult:
-    now = datetime(2026, 8, 13, 18, 0, tzinfo=UTC)
-    context = market_context(now)
-    chain = base_chain(expiry=current_expiry(now), observed_at=now)
-    engine = ShadowEngine(policy=policy, case_root=root)
-    decision = engine.evaluate(quotes=chain, context=context)
-    case = engine.open_decision_case(decision=decision, opened_at=now)
-    entry_at = now + timedelta(minutes=1)
-    result, position = engine.attempt_entry(
-        case=case,
-        quotes=restamp_quotes(chain, entry_at),
-        context=replace(context, now=entry_at),
-        attempted_at=entry_at,
-    )
-    assert position is not None
-    outcome = engine.settle(
-        position=position,
-        delivery_price=Decimal("110000"),
-        settled_at=current_expiry(now),
-    )
-    passed = (
-        result.status is EntryStatus.FULL_ENTRY
-        and outcome.terminal_method == "CONTRACT_SETTLEMENT"
-        and outcome.total_delivery_fee_native > 0
-        and outcome.residual_wings_settled == 2
-        and outcome.residual_wing_count == 0
-    )
-    return ScenarioResult(
-        "friday_expiry_reserves_delivery_fees",
-        passed,
-        {
-            "delivery_fee_native": str(outcome.total_delivery_fee_native),
-            "residual_wings_settled": outcome.residual_wings_settled,
-            "boundary_valued_pnl_usd": str(outcome.boundary_valued_total_usd_pnl),
-            "terminal_valued_pnl_usd": str(outcome.terminal_valued_total_usd_pnl),
-        },
-    )
-
-
-def failed_exit_survives_process_recovery(
-    policy: BtcShortVolPolicy,
-    root: Path,
-) -> ScenarioResult:
-    now, engine, position, quotes = _opened_position(policy, root)
-    risk_at = now + timedelta(hours=2)
-    risk_quotes = _update_delta(
-        quotes,
-        put_delta=Decimal("-0.58"),
-        call_delta=Decimal("0.10"),
-        observed_at=risk_at,
-    )
-    armed = engine.observe_position(
-        position=position,
-        quotes=risk_quotes,
-        context=market_context(risk_at, index=Decimal("96000")),
-    )
-    blocked_at = risk_at + timedelta(seconds=1)
-    blocked_quotes = _remove_ask(
-        restamp_quotes(risk_quotes, blocked_at),
-        instrument_suffix="95000-P",
-    )
-    blocked = engine.observe_position(
-        position=position,
-        quotes=blocked_quotes,
-        context=market_context(blocked_at, index=Decimal("96000")),
-    )
-    restarted = ShadowEngine(policy=policy, case_root=root)
-    recovered = restarted.recover_position(position.case_identity)
-    assert recovered is not None
-    exit_at = blocked_at + timedelta(minutes=1)
-    second = restarted.observe_position(
-        position=recovered,
-        quotes=restamp_quotes(quotes, exit_at),
-        context=market_context(exit_at, index=Decimal("96000")),
-    )
-    passed = (
-        armed.instruction is not None
-        and armed.instruction.reason is ExitReason.PUT_SIDE_DELTA
-        and blocked.action is PositionRiskAction.SHORT_RISK_REDUCED
-        and recovered.put_side.exit_requested_reason is ExitReason.PUT_SIDE_DELTA
-        and second.action is PositionRiskAction.PORTFOLIO_TERMINAL
-        and not recovered.put_side.short_open
-        and len(recovered.instructions) == 1
-    )
-    return ScenarioResult(
-        "failed_exit_survives_process_recovery",
-        passed,
-        {
-            "first_reason": armed.instruction.reason.value if armed.instruction else None,
-            "blocked_action": blocked.action.value,
-            "recovered_pending_reason": (
-                recovered.put_side.exit_requested_reason.value
-                if recovered.put_side.exit_requested_reason is not None
+            "gap_action": gap.management_action.value
+            if gap.management_action is not None
+            else None,
+            "position_preserved": case.position_id == position_id,
+            "terminal_method": (
+                case.outcome.terminal_method.value if case.outcome is not None else None
+            ),
+            "continuous_path_eligible": (
+                case.outcome.eligibility.future_path_continuous.value
+                if case.outcome is not None
                 else None
             ),
-            "short_flat_after_recovery": not recovered.put_side.short_open,
-            "durable_instruction_count": len(recovered.instructions),
         },
     )
+
+
+def all_window_outcome_is_independent(
+    policy: BtcShortVolPolicy,
+    root: Path,
+) -> ScenarioResult:
+    at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    engine = Btc0DteShortVolEngine(policy=policy)
+    windows = engine.decision_windows(at=at)
+    ledger = ObservationLedger(root)
+    outcomes: list[WindowOutcome] = []
+    for window in windows:
+        engine.assess_window(
+            ledger=ledger,
+            window=window,
+            observation=None,
+            capacity=None,
+            known_at=window.input_deadline,
+        )
+        horizon = window.ends_at + timedelta(hours=1)
+        outcome = WindowOutcome(
+            decision_window_id=window.identity,
+            horizon_starts_at=window.ends_at,
+            horizon_ends_at=horizon,
+            known_at=horizon,
+            future_path_known=True,
+            future_path_continuous=True,
+            expiry_settlement=None,
+            future_path=FuturePathSummary(
+                source_id="DETERMINISTIC_PUBLIC_PATH_FIXTURE",
+                method_id="WINDOW_TO_PLUS_ONE_HOUR_SUMMARY_V1",
+                starts_at=window.ends_at,
+                ends_at=horizon,
+                observation_count=2,
+                start_index_price_usd=Decimal("100000"),
+                end_index_price_usd=Decimal("101000"),
+                minimum_index_price_usd=Decimal("99000"),
+                maximum_index_price_usd=Decimal("102000"),
+                maximum_rv_acceleration=Decimal("0.2"),
+            ),
+            regime_labels=("DETERMINISTIC_FORWARD_PATH",),
+            reason=None,
+            eligibility=window_outcome_eligibility(
+                decision_evaluable=False,
+                future_path_known=True,
+                future_path_continuous=True,
+            ),
+        )
+        ledger.append_outcome(outcome)
+        outcomes.append(outcome)
+    duplicate = ledger.append_outcome(outcomes[0])
+    outcome_summary = ledger.summarize_outcomes(expected_windows=windows)
+    passed = (
+        not duplicate
+        and outcome_summary.denominator == outcome_summary.recorded == 96
+        and outcome_summary.complete
+        and outcome_summary.future_path_known == 96
+        and outcome_summary.continuous == 96
+    )
+    return ScenarioResult(
+        "all_window_outcome_is_independent",
+        passed,
+        {
+            "decision_records": len(ledger.read()),
+            "window_outcomes": outcome_summary.recorded,
+            "future_paths_known": outcome_summary.future_path_known,
+            "strategy_population_eligible": outcome_summary.strategy_population_eligible,
+            "duplicate_added": duplicate,
+        },
+    )
+
+
+def _candidate_assessment(
+    policy: BtcShortVolPolicy,
+    root: Path,
+    at: datetime,
+) -> tuple[Btc0DteShortVolEngine, BtcWindowAssessment]:
+    engine = Btc0DteShortVolEngine(policy=policy)
+    window = _window_at(engine, at)
+    observation = engine.capture_observation(
+        quotes=base_chain(expiry=current_expiry(at), observed_at=at),
+        context=market_context(at),
+    )
+    assessment = engine.assess_window(
+        ledger=ObservationLedger(root / "ledger"),
+        window=window,
+        observation=observation,
+        capacity=ShadowCapacity.empty(
+            channel_id=policy.channel_id,
+            market_session_id=window.market_session_id,
+            known_at=window.input_deadline,
+        ),
+        known_at=window.input_deadline,
+    )
+    return engine, assessment
 
 
 def current_expiry(now: datetime) -> datetime:
@@ -831,18 +433,19 @@ def market_context(
     *,
     index: Decimal = Decimal("100000"),
     implied_variance: Decimal = Decimal("0.00240"),
-    physical_variance: Decimal = Decimal("0.00160"),
+    realized_variance: Decimal = Decimal("0.00160"),
     rv_acceleration: Decimal = Decimal("0.10"),
     jump_share: Decimal = Decimal("0.05"),
     directional_persistence: Decimal = Decimal("0.10"),
     event: EventState = EventState.NONE,
-    breakout: BreakoutState = BreakoutState.MEAN_REVERTING,
     evidence: MarketContextEvidence | None = None,
+    book_names: tuple[str, ...] = BASE_CHAIN_INSTRUMENTS,
 ) -> MarketContext:
     now_ms = int(now.timestamp() * 1000)
+    ordered_book_names = tuple(sorted(book_names))
     bound_evidence = evidence or MarketContextEvidence(
-        physical_variance_method=(
-            PhysicalVarianceMethod.DETERMINISTIC_MATCHED_HORIZON_REALIZED_VARIANCE_PROXY
+        realized_variance_method=(
+            RealizedVarianceMethod.DETERMINISTIC_MATCHED_HORIZON_REALIZED_VARIANCE_PROXY
         ),
         implied_variance_method=ImpliedVarianceMethod.DETERMINISTIC_ATM_MARK_VARIANCE_PROXY,
         event_state_source=EventStateSource.DETERMINISTIC_SCENARIO_INPUT,
@@ -856,20 +459,19 @@ def market_context(
         market_received_max_ms=now_ms,
         event_state_known_at_ms=now_ms,
         maximum_market_age_ms=5_000,
-        requested_books=("DETERMINISTIC_CHAIN",),
-        usable_books=("DETERMINISTIC_CHAIN",),
+        requested_books=ordered_book_names,
+        usable_books=ordered_book_names,
     )
     return MarketContext(
         now=now,
         index_price=index,
         forward_price=index,
-        physical_variance_forecast=physical_variance,
-        same_session_implied_variance=implied_variance,
+        trailing_realized_variance_proxy=realized_variance,
+        same_session_implied_variance_proxy=implied_variance,
         rv_acceleration=rv_acceleration,
         jump_share=jump_share,
         directional_persistence=directional_persistence,
         event_state=event,
-        breakout_state=breakout,
         concentrated_strike=Decimal("100000"),
         concentration_strength=Decimal("0.70"),
         evidence=bound_evidence,
@@ -886,7 +488,7 @@ def base_chain(*, expiry: datetime, observed_at: datetime | None = None) -> tupl
         _quote(
             "BTC-X-93000-P",
             expiry,
-            Decimal("93000"),
+            "93000",
             OptionType.PUT,
             "-0.05",
             "0.0008",
@@ -898,7 +500,7 @@ def base_chain(*, expiry: datetime, observed_at: datetime | None = None) -> tupl
         _quote(
             "BTC-X-95000-P",
             expiry,
-            Decimal("95000"),
+            "95000",
             OptionType.PUT,
             "-0.15",
             "0.0028",
@@ -910,7 +512,7 @@ def base_chain(*, expiry: datetime, observed_at: datetime | None = None) -> tupl
         _quote(
             "BTC-X-105000-C",
             expiry,
-            Decimal("105000"),
+            "105000",
             OptionType.CALL,
             "0.15",
             "0.0028",
@@ -922,7 +524,7 @@ def base_chain(*, expiry: datetime, observed_at: datetime | None = None) -> tupl
         _quote(
             "BTC-X-107000-C",
             expiry,
-            Decimal("107000"),
+            "107000",
             OptionType.CALL,
             "0.05",
             "0.0008",
@@ -940,232 +542,19 @@ def all_joint_adversarial_chain(
     observed_at: datetime,
 ) -> tuple[OptionQuote, ...]:
     tick = TickSchedule(Decimal("0.0001"))
-    return (
-        _quote(
-            "BTC-X-93000-P",
-            expiry,
-            Decimal("93000"),
-            OptionType.PUT,
-            "-0.05",
-            "0.0024",
-            "0.0025",
-            tick,
-            observed_at,
-            0,
-        ),
-        _quote(
-            "BTC-X-93500-P",
-            expiry,
-            Decimal("93500"),
-            OptionType.PUT,
-            "-0.20",
-            "0.0026",
-            "0.0027",
-            tick,
-            observed_at,
-            100,
-        ),
-        _quote(
-            "BTC-X-94000-P",
-            expiry,
-            Decimal("94000"),
-            OptionType.PUT,
-            "-0.20",
-            "0.0028",
-            "0.0029",
-            tick,
-            observed_at,
-            200,
-        ),
-        _quote(
-            "BTC-X-94500-P",
-            expiry,
-            Decimal("94500"),
-            OptionType.PUT,
-            "-0.20",
-            "0.0030",
-            "0.0031",
-            tick,
-            observed_at,
-            300,
-        ),
-        _quote(
-            "BTC-X-95000-P",
-            expiry,
-            Decimal("95000"),
-            OptionType.PUT,
-            "-0.25",
-            "0.0050",
-            "0.0051",
-            tick,
-            observed_at,
-            400,
-        ),
-        _quote(
-            "BTC-X-105000-C",
-            expiry,
-            Decimal("105000"),
-            OptionType.CALL,
-            "0.25",
-            "0.0050",
-            "0.0051",
-            tick,
-            observed_at,
-            500,
-        ),
-        _quote(
-            "BTC-X-107000-C",
-            expiry,
-            Decimal("107000"),
-            OptionType.CALL,
-            "0.05",
-            "0.0024",
-            "0.0025",
-            tick,
-            observed_at,
-            600,
-        ),
+    specs = (
+        ("BTC-X-93000-P", "93000", OptionType.PUT, "-0.05", "0.0024", "0.0025"),
+        ("BTC-X-93500-P", "93500", OptionType.PUT, "-0.20", "0.0026", "0.0027"),
+        ("BTC-X-94000-P", "94000", OptionType.PUT, "-0.20", "0.0028", "0.0029"),
+        ("BTC-X-94500-P", "94500", OptionType.PUT, "-0.20", "0.0030", "0.0031"),
+        ("BTC-X-95000-P", "95000", OptionType.PUT, "-0.25", "0.0050", "0.0051"),
+        ("BTC-X-105000-C", "105000", OptionType.CALL, "0.25", "0.0050", "0.0051"),
+        ("BTC-X-107000-C", "107000", OptionType.CALL, "0.05", "0.0024", "0.0025"),
     )
-
-
-def reprice_chain(
-    quotes: tuple[OptionQuote, ...],
-    *,
-    short_bid: Decimal,
-    short_ask: Decimal,
-    long_bid: Decimal,
-    long_ask: Decimal,
-    observed_at: datetime | None = None,
-) -> tuple[OptionQuote, ...]:
-    output: list[OptionQuote] = []
-    for quote in quotes:
-        is_short = quote.instrument_name.endswith("95000-P") or (
-            quote.instrument_name.endswith("105000-C")
-        )
-        bid = short_bid if is_short else long_bid
-        ask = short_ask if is_short else long_ask
-        output.append(
-            replace(
-                quote,
-                bid=(PriceLevel(bid, Decimal("1")),),
-                ask=(PriceLevel(ask, Decimal("1")),),
-            )
-        )
-    result = tuple(output)
-    return restamp_quotes(result, observed_at) if observed_at is not None else result
-
-
-def _quote(
-    name: str,
-    expiry: datetime,
-    strike: Decimal,
-    option_type: OptionType,
-    delta: str,
-    bid: str,
-    ask: str,
-    tick: TickSchedule,
-    observed_at: datetime,
-    offset_ms: int,
-    delivery_fee_exempt: bool | None = None,
-) -> OptionQuote:
-    return OptionQuote(
-        instrument_name=name,
-        product=BTC,
-        expiry=expiry,
-        strike=strike,
-        option_type=option_type,
-        signed_delta=Decimal(delta),
-        mark_iv=Decimal("0.55"),
-        bid=(PriceLevel(Decimal(bid), Decimal("1")),),
-        ask=(PriceLevel(Decimal(ask), Decimal("1")),),
-        tick_schedule=tick,
-        source_timestamp_ms=int(observed_at.timestamp() * 1000) - 1_000 + offset_ms,
-        received_timestamp_ms=int(observed_at.timestamp() * 1000) - 950 + offset_ms,
-        continuity_epoch=1,
-        delivery_fee_exempt=(
-            expiry.weekday() != 4 if delivery_fee_exempt is None else delivery_fee_exempt
-        ),
-        open_interest=Decimal("1000"),
-        gamma=Decimal("0.0001"),
+    return tuple(
+        _quote(name, expiry, strike, option_type, delta, bid, ask, tick, observed_at, index * 100)
+        for index, (name, strike, option_type, delta, bid, ask) in enumerate(specs)
     )
-
-
-def live_shock_forces_short_risk_exit(
-    policy: BtcShortVolPolicy,
-    root: Path,
-) -> ScenarioResult:
-    now, engine, position, quotes = _opened_position(policy, root)
-    shock_at = now + timedelta(hours=2)
-    observation = engine.observe_position(
-        position=position,
-        quotes=restamp_quotes(quotes, shock_at),
-        context=market_context(shock_at, event=EventState.UNSCHEDULED_SHOCK),
-    )
-    exit_at = shock_at + timedelta(minutes=1)
-    projected = engine.observe_position(
-        position=position,
-        quotes=restamp_quotes(quotes, exit_at),
-        context=market_context(exit_at, event=EventState.UNSCHEDULED_SHOCK),
-    )
-    passed = (
-        observation.instruction is not None
-        and observation.instruction.reason is ExitReason.EVENT_OR_SHOCK
-        and observation.instruction.scope is ExitScope.BOTH_SIDES
-        and projected.action is PositionRiskAction.PORTFOLIO_TERMINAL
-        and not position.has_short_risk
-    )
-    return ScenarioResult(
-        "live_shock_forces_short_risk_exit",
-        passed,
-        {
-            "instruction": (
-                observation.instruction.reason.value if observation.instruction else None
-            ),
-            "scope": observation.instruction.scope.value if observation.instruction else None,
-            "short_risk_remaining": position.has_short_risk,
-        },
-    )
-
-
-def _opened_position(
-    policy: BtcShortVolPolicy,
-    root: Path,
-) -> tuple[datetime, ShadowEngine, ShadowPosition, tuple[OptionQuote, ...]]:
-    now = datetime(2026, 8, 12, 18, 0, tzinfo=UTC)
-    context = market_context(now)
-    quotes = base_chain(expiry=current_expiry(now), observed_at=now)
-    engine = ShadowEngine(policy=policy, case_root=root)
-    decision = engine.evaluate(quotes=quotes, context=context)
-    case = engine.open_decision_case(decision=decision, opened_at=now)
-    entry_context = replace(context, now=now + timedelta(minutes=1))
-    result, position = engine.attempt_entry(
-        case=case,
-        quotes=restamp_quotes(quotes, entry_context.now),
-        context=entry_context,
-        attempted_at=entry_context.now,
-    )
-    if position is None or result.status is not EntryStatus.FULL_ENTRY:
-        raise AssertionError("scenario fixture did not establish the full position")
-    return now, engine, position, quotes
-
-
-def _update_delta(
-    quotes: tuple[OptionQuote, ...],
-    *,
-    put_delta: Decimal,
-    call_delta: Decimal,
-    observed_at: datetime | None = None,
-) -> tuple[OptionQuote, ...]:
-    output: list[OptionQuote] = []
-    for quote in quotes:
-        if quote.instrument_name.endswith("95000-P"):
-            output.append(replace(quote, signed_delta=put_delta))
-        elif quote.instrument_name.endswith("105000-C"):
-            output.append(replace(quote, signed_delta=call_delta))
-        else:
-            output.append(quote)
-    result = tuple(output)
-    return restamp_quotes(result, observed_at) if observed_at is not None else result
 
 
 def restamp_quotes(
@@ -1184,27 +573,41 @@ def restamp_quotes(
     )
 
 
-def _remove_bid(
-    quotes: tuple[OptionQuote, ...],
-    *,
-    instrument_suffix: str,
-) -> tuple[OptionQuote, ...]:
-    return tuple(
-        replace(quote, bid=()) if quote.instrument_name.endswith(instrument_suffix) else quote
-        for quote in quotes
+def _window_at(engine: Btc0DteShortVolEngine, at: datetime) -> DecisionWindow:
+    return next(
+        window
+        for window in engine.decision_windows(at=at)
+        if window.starts_at <= at < window.ends_at
     )
 
 
-def _remove_ask(
-    quotes: tuple[OptionQuote, ...],
-    *,
-    instrument_suffix: str,
-) -> tuple[OptionQuote, ...]:
-    return tuple(
-        replace(quote, ask=()) if quote.instrument_name.endswith(instrument_suffix) else quote
-        for quote in quotes
+def _quote(
+    name: str,
+    expiry: datetime,
+    strike: str,
+    option_type: OptionType,
+    delta: str,
+    bid: str,
+    ask: str,
+    tick: TickSchedule,
+    observed_at: datetime,
+    offset_ms: int,
+) -> OptionQuote:
+    return OptionQuote(
+        instrument_name=name,
+        product=BTC,
+        expiry=expiry,
+        strike=Decimal(strike),
+        option_type=option_type,
+        signed_delta=Decimal(delta),
+        mark_iv=Decimal("0.55"),
+        bid=(PriceLevel(Decimal(bid), Decimal("1")),),
+        ask=(PriceLevel(Decimal(ask), Decimal("1")),),
+        tick_schedule=tick,
+        source_timestamp_ms=int(observed_at.timestamp() * 1000) - 1_000 + offset_ms,
+        received_timestamp_ms=int(observed_at.timestamp() * 1000) - 950 + offset_ms,
+        continuity_epoch=1,
+        delivery_fee_exempt=True,
+        open_interest=Decimal("1000"),
+        gamma=Decimal("0.0001"),
     )
-
-
-def _score(decision: RadarDecision) -> str | None:
-    return str(decision.score.final_score) if decision.score is not None else None

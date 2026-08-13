@@ -1,53 +1,71 @@
 {
-  "schema_version": 2,
+  "schema_version": 5,
   "policy_name": "BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1",
   "channel_id": "INVERSE_BTC_SHORT_VOL",
   "status": "PUBLIC_SHADOW_UNQUALIFIED",
+  "window": {
+    "cadence_minutes": 15,
+    "alignment": "SESSION_START",
+    "input_grace_seconds": 60
+  },
+  "observation": {
+    "maximum_source_span_ms": 6000,
+    "maximum_receive_span_ms": 4000,
+    "maximum_age_ms": 5000
+  },
   "session": {
     "roll_reprice_minutes": 60,
     "late_theta_start_minutes_to_expiry": 180,
     "exit_only_minutes_to_expiry": 90,
     "delivery_twap_minutes_to_expiry": 30
   },
-  "radar": {
+  "environment": {
     "minimum_vrp_ratio": 1.12,
     "late_theta_minimum_vrp_ratio": 1.20,
-    "vrp_saturation_ratio": 1.50,
-    "minimum_theta_capture_proxy": 0.20,
     "maximum_rv_acceleration": 0.55,
     "maximum_jump_share": 0.35,
-    "maximum_directional_persistence": 0.65,
-    "minimum_body_distance_sigma": 0.70,
-    "maximum_abs_net_delta": 0.12,
-    "activation_score": 55
+    "maximum_directional_persistence": 0.65
   },
   "structure": {
-    "target_quantity": 0.1,
+    "option_amount": 0.1,
     "short_delta_min": 0.08,
     "short_delta_max": 0.25,
     "minimum_wing_width_usd": 500,
-    "maximum_wing_width_usd": 5000
+    "maximum_wing_width_usd": 5000,
+    "minimum_body_distance_sigma": 0.70,
+    "maximum_abs_net_delta": 0.12,
+    "maximum_retained_alternatives": 3
   },
   "underwriting": {
-    "minimum_combined_net_credit_usd": 10,
-    "minimum_credit_to_max_side_payoff": 0.07,
-    "maximum_entry_boundary_loss_usd": 300,
-    "maximum_total_fee_fraction_of_credit": 0.35
+    "minimum_boundary_net_credit_usd": 10,
+    "minimum_credit_to_payoff_cap": 0.07,
+    "maximum_boundary_reference_loss_usd": 300,
+    "maximum_combo_fee_fraction_of_credit": 0.35
   },
-  "position": {
+  "risk": {
+    "maximum_session_contractual_payoff_usd": 600,
+    "maximum_concurrent_positions": 2,
+    "delivery_price_stress_factors": [0.5, 1, 2],
+    "exit_cost_stress_fraction": 0.25
+  },
+  "lifecycle": {
+    "entry_evaluation_window_seconds": 120,
+    "monitoring_cadence_seconds": 60,
     "take_profit_fraction_of_credit": 0.50,
     "maximum_loss_multiple_of_credit": 2.00,
     "maximum_short_abs_delta": 0.50,
     "maximum_adverse_move_fraction": 0.03,
     "maximum_rv_acceleration": 0.70,
-    "latest_short_risk_exit_minutes_to_expiry": 30,
-    "acquisition_retry_interval_ms": 30000,
-    "allow_short_only_risk_exit": true
-  },
-  "shadow": {
-    "entry_acquisition_window_ms": 120000,
-    "maximum_pair_source_skew_ms": 6000,
-    "maximum_pair_receive_skew_ms": 4000,
-    "maximum_position_quote_age_ms": 5000
+    "latest_exit_minutes_to_expiry": 30,
+    "trigger_priority": [
+      "LATEST_EXIT",
+      "EVENT_OR_SHOCK",
+      "MAXIMUM_LOSS",
+      "SHORT_DELTA",
+      "ADVERSE_MOVE",
+      "RV_ACCELERATION",
+      "VRP_PROXY_DISSIPATED",
+      "TAKE_PROFIT"
+    ]
   }
 }
