@@ -21,10 +21,13 @@ from optimatrix.pricing import (
 from optimatrix.products import BTC, ProductId
 from optimatrix.radar import btc_environment_blockers
 from optimatrix.risk import SHADOW_STRESS_BUDGET_METRIC, stress_reserve_from_allocation_record
+from optimatrix.route import (
+    RouteEvidenceStatus,
+    ShadowRouteEvidence,
+    component_synthetic_route_evidence,
+)
 from optimatrix.session import SessionPhase, current_deribit_session
 from optimatrix.structure import Btc0DteCondorUnderwriting, underwrite_btc_0dte_condor
-
-SHADOW_PRICING_BASIS = "SYNTHETIC_FOUR_LEG_COMPONENT_BOOK_ESTIMATE_V1"
 
 
 class ShadowEntryStatus(StrEnum):
@@ -223,10 +226,10 @@ class ShadowEntryReunderwriting:
     observation_known_at: datetime | None
     known_at: datetime
     reason: str | None
-    pricing_basis: str
     policy_id: str
     selected_structure_id: str
     risk_allocation_id: str
+    route_evidence: ShadowRouteEvidence
     market_session_id: str | None
     decision_session_phase: SessionPhase
     entry_session_phase: SessionPhase | None
@@ -237,7 +240,6 @@ class ShadowEntryReunderwriting:
     structure_blockers: tuple[str, ...]
     economics_blockers: tuple[str, ...]
     allocation_blockers: tuple[str, ...]
-    route_blockers: tuple[str, ...]
     native_net_credit: Decimal | None
     combo_fee_native: Decimal | None
     boundary_index_price_usd: Decimal | None
@@ -270,7 +272,6 @@ class ShadowEntryReunderwriting:
             self.structure_blockers,
             self.economics_blockers,
             self.allocation_blockers,
-            self.route_blockers,
         )
         if any(len(set(group)) != len(group) for group in blocker_groups):
             raise ValueError("Entry reunderwriting blockers must be unique within each dimension")
@@ -278,17 +279,61 @@ class ShadowEntryReunderwriting:
             ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN: self.evidence_blockers,
             ShadowEntryStatus.ENTRY_THESIS_EXPIRED: self.environment_blockers,
             ShadowEntryStatus.ENTRY_STRUCTURE_LIMIT_BREACHED: self.structure_blockers,
-            ShadowEntryStatus.SHADOW_ATOMIC_NOT_EVALUABLE: self.route_blockers,
+            ShadowEntryStatus.SHADOW_ATOMIC_NOT_EVALUABLE: (),
             ShadowEntryStatus.ENTRY_PRICE_DETERIORATED: self.economics_blockers,
             ShadowEntryStatus.RISK_RESERVATION_INVALID: self.allocation_blockers,
             ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE: (),
         }[self.status]
         blockers = tuple(blocker for group in blocker_groups for blocker in group)
-        if self.reason != (status_blockers[0] if status_blockers else None):
+        expected_reason = (
+            self.route_evidence.reason
+            if self.status is ShadowEntryStatus.SHADOW_ATOMIC_NOT_EVALUABLE
+            else (status_blockers[0] if status_blockers else None)
+        )
+        if self.reason != expected_reason:
             raise ValueError("Entry reason must identify the status-owning blocker")
+        if (
+            self.route_evidence.policy_id != self.policy_id
+            or self.route_evidence.selected_structure_id != self.selected_structure_id
+            or self.route_evidence.evaluated_at != self.known_at
+        ):
+            raise ValueError("Entry route evidence does not bind its reunderwriting")
+        if self.route_evidence.observation_id is not None and (
+            self.route_evidence.observation_id != self.observation_id
+            or self.route_evidence.observed_at != self.observed_at
+            or self.route_evidence.observation_known_at != self.observation_known_at
+        ):
+            raise ValueError("Entry route source does not match its reunderwriting observation")
+        if self.status is ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN:
+            if (
+                not self.evidence_blockers
+                or self.route_evidence.status is not RouteEvidenceStatus.UNKNOWN
+                or self.route_evidence.reason != self.evidence_blockers[0]
+            ):
+                raise ValueError("unknown Entry requires matching unknown route evidence")
+        elif self.route_evidence.status is RouteEvidenceStatus.UNKNOWN:
+            raise ValueError("unknown route evidence requires unknown Entry evidence")
+        if self.status is ShadowEntryStatus.SHADOW_ATOMIC_NOT_EVALUABLE and (
+            self.route_evidence.status is not RouteEvidenceStatus.NOT_EVALUABLE
+        ):
+            raise ValueError("not-evaluable Entry requires not-evaluable route evidence")
+        if (
+            self.status
+            in {
+                ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE,
+                ShadowEntryStatus.ENTRY_PRICE_DETERIORATED,
+                ShadowEntryStatus.RISK_RESERVATION_INVALID,
+            }
+            and self.route_evidence.status is not RouteEvidenceStatus.EVALUABLE
+        ):
+            raise ValueError(
+                "economic or allocation Entry result requires evaluable route evidence"
+            )
         if self.status is ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE:
             if not self.final or blockers:
                 raise ValueError("evaluable Entry requires one final blocker-free reunderwriting")
+            if self.route_evidence.status is not RouteEvidenceStatus.EVALUABLE:
+                raise ValueError("evaluable Entry requires evaluable route evidence")
             if any(value is None for value in self.entry_metrics.__dict__.values()):
                 raise ValueError("evaluable Entry requires complete current Policy metrics")
             if (
@@ -297,6 +342,12 @@ class ShadowEntryReunderwriting:
                 or self.boundary_index_price_usd is None
             ):
                 raise ValueError("evaluable Entry requires complete Shadow economics")
+            if (
+                self.native_net_credit != self.route_evidence.native_net_credit
+                or self.combo_fee_native != self.route_evidence.standard_combo_fee_projection_native
+                or self.boundary_index_price_usd != self.route_evidence.boundary_index_price_usd
+            ):
+                raise ValueError("Entry economics do not match route evidence")
         elif self.status is ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN:
             if not self.evidence_blockers:
                 raise ValueError("unknown Entry evidence requires an evidence blocker")
@@ -305,12 +356,13 @@ class ShadowEntryReunderwriting:
 
     @property
     def identity(self) -> str:
-        return canonical_identity("ShadowEntryReunderwritingV1", self)
+        return canonical_identity("ShadowEntryReunderwritingV2", self)
 
     def as_object(self) -> dict[str, object]:
         value = _canonical_object(self)
         value["decision_metrics"] = self.decision_metrics.as_object()
         value["entry_metrics"] = self.entry_metrics.as_object()
+        value["route_evidence"] = self.route_evidence.as_object()
         value["entry_reunderwriting_id"] = self.identity
         return value
 
@@ -325,10 +377,10 @@ class ShadowEntryReunderwriting:
             observation_known_at=_optional_datetime(item, "observation_known_at"),
             known_at=_datetime(item, "known_at"),
             reason=_optional_text(item, "reason"),
-            pricing_basis=_text(item, "pricing_basis"),
             policy_id=_text(item, "policy_id"),
             selected_structure_id=_text(item, "selected_structure_id"),
             risk_allocation_id=_text(item, "risk_allocation_id"),
+            route_evidence=ShadowRouteEvidence.from_object(item.get("route_evidence")),
             market_session_id=_optional_text(item, "market_session_id"),
             decision_session_phase=SessionPhase(_text(item, "decision_session_phase")),
             entry_session_phase=(
@@ -343,7 +395,6 @@ class ShadowEntryReunderwriting:
             structure_blockers=_text_tuple(item, "structure_blockers"),
             economics_blockers=_text_tuple(item, "economics_blockers"),
             allocation_blockers=_text_tuple(item, "allocation_blockers"),
-            route_blockers=_text_tuple(item, "route_blockers"),
             native_net_credit=_optional_decimal(item, "native_net_credit"),
             combo_fee_native=_optional_decimal(item, "combo_fee_native"),
             boundary_index_price_usd=_optional_decimal(item, "boundary_index_price_usd"),
@@ -619,7 +670,8 @@ class TradeCase:
     risk_allocation_json: str
     opened_at: datetime
     entry_deadline: datetime
-    entry_pricing_basis: str
+    decision_route_evidence_id: str
+    decision_route_evidence_json: str
     entry_status: ShadowEntryStatus | None = None
     entry_final: bool = False
     entry_observation_id: str | None = None
@@ -642,14 +694,13 @@ class TradeCase:
     def __post_init__(self) -> None:
         if self.truth_layer != "SHADOW_PROJECTION":
             raise ValueError("B3 TradeCase truth layer must be SHADOW_PROJECTION")
-        if self.entry_pricing_basis != SHADOW_PRICING_BASIS:
-            raise ValueError("B3 TradeCase has an unsupported Shadow pricing basis")
         for value, field in (
             (self.decision_record_id, "decision_record_id"),
             (self.decision_window_id, "decision_window_id"),
             (self.decision_policy_id, "decision_policy_id"),
             (self.selected_structure_id, "selected_structure_id"),
             (self.risk_allocation_id, "risk_allocation_id"),
+            (self.decision_route_evidence_id, "decision_route_evidence_id"),
         ):
             require_identity(value, field)
         boundary = _utc(self.decision_boundary, "decision_boundary")
@@ -667,6 +718,26 @@ class TradeCase:
             raise ValueError("TradeCase allocation identity mismatch")
         if allocation.get("candidate_id") != self.selected_structure_id:
             raise ValueError("TradeCase allocation does not bind its structure")
+        decision_route = self.decision_route_evidence
+        if (
+            decision_route.identity != self.decision_route_evidence_id
+            or decision_route.status is not RouteEvidenceStatus.EVALUABLE
+            or decision_route.policy_id != self.decision_policy_id
+            or decision_route.selected_structure_id != self.selected_structure_id
+            or decision_route.target_amount != _structure_amount(self)
+            or decision_route.evaluated_at != self.decision_boundary
+        ):
+            raise ValueError("TradeCase Decision route evidence is incoherent")
+        if tuple(leg.instrument_name for leg in decision_route.legs) != _structure_instrument_names(
+            self
+        ):
+            raise ValueError("TradeCase Decision route legs do not match its structure")
+        selected_pricing = _mapping(
+            self.selected_structure.get("pricing"),
+            "selected_structure.pricing",
+        )
+        if _route_economics(decision_route) != _recorded_pricing_economics(selected_pricing):
+            raise ValueError("TradeCase Decision route economics do not match its structure")
         if self.entry_final and self.entry_status is None:
             raise ValueError("final Entry requires a status")
         if (self.entry_status is None) != (self.entry_reunderwriting_json is None):
@@ -683,7 +754,6 @@ class TradeCase:
             or reunderwriting.observed_at != self.entry_observed_at
             or reunderwriting.known_at != self.entry_known_at
             or reunderwriting.reason != self.entry_reason
-            or reunderwriting.pricing_basis != self.entry_pricing_basis
             or reunderwriting.policy_id != self.decision_policy_id
             or reunderwriting.selected_structure_id != self.selected_structure_id
             or reunderwriting.risk_allocation_id != self.risk_allocation_id
@@ -691,6 +761,18 @@ class TradeCase:
             or reunderwriting.decision_metrics.vrp_proxy_ratio != self.decision_vrp_proxy_ratio
         ):
             raise ValueError("TradeCase Entry fields do not match reunderwriting evidence")
+        if reunderwriting is not None:
+            entry_pricing = self.entry_pricing
+            route_is_evaluable = (
+                reunderwriting.route_evidence.status is RouteEvidenceStatus.EVALUABLE
+            )
+            if route_is_evaluable != (entry_pricing is not None):
+                raise ValueError("TradeCase Entry pricing does not match route evaluability")
+            if entry_pricing is not None and (
+                _route_economics(reunderwriting.route_evidence)
+                != _recorded_pricing_economics(entry_pricing)
+            ):
+                raise ValueError("TradeCase Entry route economics do not match its pricing")
         if self.position_id is not None and (
             self.entry_status is not ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE
             or not self.entry_final
@@ -721,7 +803,7 @@ class TradeCase:
     def identity(self) -> str:
         structure = self.selected_structure
         return canonical_identity(
-            "TradeCaseV1",
+            "TradeCaseV2",
             self.channel_id,
             self.truth_layer,
             self.decision_window_id,
@@ -729,11 +811,12 @@ class TradeCase:
             self.selected_structure_id,
             structure.get("option_amount"),
             self.decision_boundary,
+            self.decision_route_evidence_id,
         )
 
     @property
     def snapshot_identity(self) -> str:
-        return canonical_identity("TradeCaseSnapshotV1", self.as_object(include_snapshot=False))
+        return canonical_identity("TradeCaseSnapshotV2", self.as_object(include_snapshot=False))
 
     @property
     def selected_structure(self) -> dict[str, object]:
@@ -742,6 +825,12 @@ class TradeCase:
     @property
     def risk_allocation(self) -> dict[str, object]:
         return _json_mapping(self.risk_allocation_json, "risk_allocation")
+
+    @property
+    def decision_route_evidence(self) -> ShadowRouteEvidence:
+        return ShadowRouteEvidence.from_object(
+            _json_mapping(self.decision_route_evidence_json, "decision_route_evidence")
+        )
 
     @property
     def entry_pricing(self) -> dict[str, object] | None:
@@ -806,7 +895,8 @@ class TradeCase:
             risk_allocation_json=_text(item, "risk_allocation_json"),
             opened_at=_datetime(item, "opened_at"),
             entry_deadline=_datetime(item, "entry_deadline"),
-            entry_pricing_basis=_text(item, "entry_pricing_basis"),
+            decision_route_evidence_id=_text(item, "decision_route_evidence_id"),
+            decision_route_evidence_json=_text(item, "decision_route_evidence_json"),
             entry_status=_optional_enum(item, "entry_status", ShadowEntryStatus),
             entry_final=_boolean(item, "entry_final"),
             entry_observation_id=_optional_text(item, "entry_observation_id"),
@@ -855,6 +945,9 @@ def open_trade_case(record: DecisionRecord, policy: BtcShortVolPolicy) -> TradeC
         raise ValueError("TradeCase requires AVAILABLE ShadowRiskAllocation")
     if record.observation is None:
         raise ValueError("Candidate DecisionRecord lacks its causal MarketObservation")
+    route_evidence = record.route_evidence
+    if route_evidence is None or route_evidence.status is not RouteEvidenceStatus.EVALUABLE:
+        raise ValueError("Candidate DecisionRecord lacks evaluable route evidence")
     decision_session = current_deribit_session(
         record.observation.observed_at,
         phase_policy=policy.session,
@@ -879,7 +972,8 @@ def open_trade_case(record: DecisionRecord, policy: BtcShortVolPolicy) -> TradeC
         opened_at=record.known_at,
         entry_deadline=record.known_at
         + timedelta(seconds=policy.lifecycle.entry_evaluation_window_seconds),
-        entry_pricing_basis=SHADOW_PRICING_BASIS,
+        decision_route_evidence_id=route_evidence.identity,
+        decision_route_evidence_json=_json_text(route_evidence.as_object()),
     )
 
 
@@ -904,6 +998,28 @@ def evaluate_shadow_entry(
         elif not _quotes_strictly_after(legs, case.decision_boundary):
             evidence_blockers.append("ENTRY_QUOTES_NOT_STRICTLY_FUTURE")
     if evidence_blockers:
+        route_observation = (
+            observation
+            if observation is not None
+            and observation.channel_id is case.channel_id
+            and observation.known_at <= boundary
+            else None
+        )
+        route_evidence = component_synthetic_route_evidence(
+            policy_id=policy.identity,
+            selected_structure_id=case.selected_structure_id,
+            evaluated_at=boundary,
+            target_amount=_structure_amount(case),
+            instrument_names=_structure_instrument_names(case),
+            observation_id=(route_observation.identity if route_observation is not None else None),
+            observed_at=(route_observation.observed_at if route_observation is not None else None),
+            observation_known_at=(
+                route_observation.known_at if route_observation is not None else None
+            ),
+            quotes=None,
+            pricing=None,
+            unknown_reason=evidence_blockers[0],
+        )
         result = _entry_reunderwriting_result(
             case=case,
             policy=policy,
@@ -916,6 +1032,7 @@ def evaluate_shadow_entry(
             vrp_proxy_ratio=None,
             legs=None,
             underwriting=None,
+            route_evidence=route_evidence,
             evidence_blockers=tuple(evidence_blockers),
         )
         return _apply_entry_evaluation(case, result, pricing=None), result
@@ -942,10 +1059,17 @@ def evaluate_shadow_entry(
         policy=policy,
     )
     structure_blockers = underwriting.legal_blockers + underwriting.structure_limit_blockers
-    route_blockers = (
-        ("WHOLE_PRODUCT_NOT_PRICE_EVALUABLE_AT_OBSERVED_DEPTH",)
-        if not underwriting.legal_blockers and underwriting.pricing is None
-        else ()
+    route_evidence = component_synthetic_route_evidence(
+        policy_id=policy.identity,
+        selected_structure_id=case.selected_structure_id,
+        evaluated_at=boundary,
+        target_amount=_structure_amount(case),
+        instrument_names=_structure_instrument_names(case),
+        observation_id=observation.identity,
+        observed_at=observation.observed_at,
+        observation_known_at=observation.known_at,
+        quotes=legs,
+        pricing=underwriting.pricing,
     )
     allocation_blockers = _entry_allocation_blockers(
         case,
@@ -956,7 +1080,7 @@ def evaluate_shadow_entry(
         status = ShadowEntryStatus.ENTRY_THESIS_EXPIRED
     elif structure_blockers:
         status = ShadowEntryStatus.ENTRY_STRUCTURE_LIMIT_BREACHED
-    elif route_blockers:
+    elif route_evidence.status is RouteEvidenceStatus.NOT_EVALUABLE:
         status = ShadowEntryStatus.SHADOW_ATOMIC_NOT_EVALUABLE
     elif underwriting.economics_blockers:
         status = ShadowEntryStatus.ENTRY_PRICE_DETERIORATED
@@ -976,11 +1100,11 @@ def evaluate_shadow_entry(
         vrp_proxy_ratio=vrp_ratio,
         legs=legs,
         underwriting=underwriting,
+        route_evidence=route_evidence,
         environment_blockers=environment_blockers,
         structure_blockers=structure_blockers,
         economics_blockers=underwriting.economics_blockers,
         allocation_blockers=allocation_blockers,
-        route_blockers=route_blockers,
     )
     return _apply_entry_evaluation(
         case,
@@ -1353,18 +1477,18 @@ def _entry_reunderwriting_result(
     vrp_proxy_ratio: Decimal | None,
     legs: tuple[OptionQuote, OptionQuote, OptionQuote, OptionQuote] | None,
     underwriting: Btc0DteCondorUnderwriting | None,
+    route_evidence: ShadowRouteEvidence,
     evidence_blockers: tuple[str, ...] = (),
     environment_blockers: tuple[str, ...] = (),
     structure_blockers: tuple[str, ...] = (),
     economics_blockers: tuple[str, ...] = (),
     allocation_blockers: tuple[str, ...] = (),
-    route_blockers: tuple[str, ...] = (),
 ) -> ShadowEntryReunderwriting:
     status_blockers = {
         ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN: evidence_blockers,
         ShadowEntryStatus.ENTRY_THESIS_EXPIRED: environment_blockers,
         ShadowEntryStatus.ENTRY_STRUCTURE_LIMIT_BREACHED: structure_blockers,
-        ShadowEntryStatus.SHADOW_ATOMIC_NOT_EVALUABLE: route_blockers,
+        ShadowEntryStatus.SHADOW_ATOMIC_NOT_EVALUABLE: (),
         ShadowEntryStatus.ENTRY_PRICE_DETERIORATED: economics_blockers,
         ShadowEntryStatus.RISK_RESERVATION_INVALID: allocation_blockers,
         ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE: (),
@@ -1377,11 +1501,15 @@ def _entry_reunderwriting_result(
         observed_at=observation.observed_at if observation is not None else None,
         observation_known_at=observation.known_at if observation is not None else None,
         known_at=known_at,
-        reason=status_blockers[0] if status_blockers else None,
-        pricing_basis=case.entry_pricing_basis,
+        reason=(
+            route_evidence.reason
+            if status is ShadowEntryStatus.SHADOW_ATOMIC_NOT_EVALUABLE
+            else (status_blockers[0] if status_blockers else None)
+        ),
         policy_id=policy.identity,
         selected_structure_id=case.selected_structure_id,
         risk_allocation_id=case.risk_allocation_id,
+        route_evidence=route_evidence,
         market_session_id=market_session_id,
         decision_session_phase=case.decision_session_phase,
         entry_session_phase=session_phase,
@@ -1396,7 +1524,6 @@ def _entry_reunderwriting_result(
         structure_blockers=structure_blockers,
         economics_blockers=economics_blockers,
         allocation_blockers=allocation_blockers,
-        route_blockers=route_blockers,
         native_net_credit=pricing.native_net_credit if pricing is not None else None,
         combo_fee_native=pricing.combo_standard_fee_native if pricing is not None else None,
         boundary_index_price_usd=(
@@ -1646,6 +1773,32 @@ def _structure_legs(
     return tuple(output)  # type: ignore[return-value]
 
 
+def _structure_instrument_names(case: TradeCase) -> tuple[str, str, str, str]:
+    return tuple(leg[0] for leg in _structure_legs(case))  # type: ignore[return-value]
+
+
+def _route_economics(evidence: ShadowRouteEvidence) -> tuple[object, ...]:
+    return (
+        evidence.fee_model_id,
+        evidence.native_gross_credit,
+        evidence.standard_combo_fee_projection_native,
+        evidence.native_net_credit,
+        evidence.boundary_index_price_usd,
+        evidence.boundary_net_credit_usd,
+    )
+
+
+def _recorded_pricing_economics(pricing: dict[str, object]) -> tuple[object, ...]:
+    return (
+        _text(pricing, "fee_model_id"),
+        _decimal(pricing, "native_gross_credit"),
+        _decimal(pricing, "combo_standard_fee_native"),
+        _decimal(pricing, "native_net_credit"),
+        _decimal(pricing, "boundary_index_price_usd"),
+        _decimal(pricing, "boundary_net_credit_usd"),
+    )
+
+
 def _structure_amount(case: TradeCase) -> Decimal:
     return _decimal(case.selected_structure, "option_amount")
 
@@ -1746,7 +1899,7 @@ def _position_outcome(
         native_result_btc=native_result,
         boundary_reference_result_usd=boundary_result,
         fee_model_id=fee_model_id,
-        shadow_model_id=case.entry_pricing_basis,
+        shadow_model_id=case.decision_route_evidence.model_id,
         terminal_source=source,
         data_gap_observed=case.gap_observed,
         reason=None,
@@ -1778,7 +1931,7 @@ def _no_position_outcome(evaluation: ShadowEntryReunderwriting) -> ShadowCaseOut
         native_result_btc=None,
         boundary_reference_result_usd=None,
         fee_model_id=None,
-        shadow_model_id=evaluation.pricing_basis,
+        shadow_model_id=evaluation.route_evidence.model_id,
         terminal_source="ENTRY_EVALUATION",
         data_gap_observed=evaluation.status is ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN,
         reason=evaluation.reason,

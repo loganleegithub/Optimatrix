@@ -162,7 +162,9 @@ state. It belongs to private stages and cannot be inferred from Shadow allocatio
 
 The BTC contract owns each enrolled-Window `DecisionRecord`: it freezes DecisionWindow, Base Policy,
 known-at boundary, the complete immutable causal MarketObservation input, DataHealth, result,
-blockers, risk-allocation result, and selected structure or exact non-selection reason. The retained
+blockers, risk-allocation result, typed route evidence, and selected structure or exact
+non-selection reason. A Candidate's route evidence must be `EVALUABLE` and bind its exact selected
+four legs, ratios, full target amount, causal observation, and synthetic economics. The retained
 observation includes its context, method and source boundaries, and full bounded quote/depth input
 so the same Window can later be replayed against a Challenger without reconstructing or changing
 the Base fact. One Window produces exactly one Base result:
@@ -194,10 +196,40 @@ the later cut reruns the same frozen Policy dimensions used by the Decision:
 - the frozen Shadow allocation's `AVAILABLE` result, identity, Policy, Candidate, Channel, amount,
   Session, known-at boundary, structure expiry, and coverage of the Entry deadline.
 
-The typed reunderwriting result freezes the Decision and Entry Session phases; Decision-to-Entry
-VRP, short-leg Delta, net Delta, body-distance, credit/payoff, reference-loss, and fee-burden
-metrics; each dimension's blockers; the exact observation boundaries; and the Entry result. Its
-result is one of:
+Decision and Entry each freeze a separate content-addressed route-evidence record. Route truth kinds
+are disjoint:
+
+```text
+COMPONENT_SYNTHETIC_ESTIMATE   stressed estimate from four public component books
+COMBO_BOOK_QUOTE              quote observed on one actual Combo instrument
+RFQ                           request-for-quote fact; never a quote or execution
+ACTUAL_FILL                   authenticated trade plus account reconciliation
+```
+
+B3 Public Shadow constructors and codecs accept only `COMPONENT_SYNTHETIC_ESTIMATE`. A component
+record binds the Policy, frozen Candidate, causal observation boundaries, exact `+1/-1/-1/+1` leg
+ratios, full target amount, per-leg depth coverage, component-estimate model, projected standard
+Combo fee rule, and synthetic net economics. The fee projection is a cost-model fact; it does not
+turn component books into a Combo quote. The strict record shape has no Combo instrument, RFQ,
+order, trade, fill, account, executable-liquidity, or fill-probability field, and recovery rejects
+such additions or any non-component kind under B3.
+
+Route status is independent of the later business rejection dimension:
+
+```text
+EVALUABLE       one causal cut prices every exact ratio at the full target amount
+NOT_EVALUABLE   complete causal component facts cannot form that declared estimate
+UNKNOWN         a required causal or DataHealth fact is absent or invalid
+```
+
+`UNKNOWN` carries no invented depth or economics. `NOT_EVALUABLE` carries observed component depth
+but no invented whole-product price. Neither can create a Position. A route rejection does not
+claim that a future actual Combo is impossible; it describes only the named evidence kind.
+
+The typed reunderwriting result freezes the Decision and Entry route identities and Session phases;
+Decision-to-Entry VRP, short-leg Delta, net Delta, body-distance, credit/payoff, reference-loss,
+and fee-burden metrics; each dimension's blockers; the exact observation boundaries; and the Entry
+result. Its result is one of:
 
 ```text
 SHADOW_ATOMIC_EVALUABLE          every reunderwriting dimension and route pass
@@ -209,9 +241,9 @@ ENTRY_PRICE_DETERIORATED         current whole-product economics fail underwriti
 RISK_RESERVATION_INVALID         the frozen Shadow allocation no longer validates
 ```
 
-`SHADOW_ATOMIC_EVALUABLE` means the frozen four legs at the same ratios and full target amount can
-be priced by the declared Shadow model from one causal cut and still satisfy every Policy dimension
-above. It is not a Combo-executability or fill claim. It may open a
+`SHADOW_ATOMIC_EVALUABLE` means its Entry route evidence is `EVALUABLE` and the frozen four legs at
+the same ratios and full target amount still satisfy every Policy dimension above. It is not a
+Combo-executability or fill claim. It may open a
 `truth_layer=SHADOW_PROJECTION` Position for research.
 
 `SHADOW_ATOMIC_NOT_EVALUABLE` means complete facts prove that the declared Shadow model cannot
@@ -222,8 +254,9 @@ Policy or allocation rejection is terminal immediately and is not relabelled as 
 Public component-book failure, one evaluable side, or smaller-amount depth cannot create a partial
 acquisition, live short risk, leg remediation, or a Position.
 
-The estimate labels its pricing basis. A synthetic four-leg component-book estimate is distinct
-from an observed Combo book and neither reserves future liquidity.
+The content-addressed route record, rather than a free-standing pricing-basis label, owns this
+distinction. A synthetic four-leg component-book estimate is distinct from an observed Combo book
+and neither reserves future liquidity.
 
 ## Future real Entry via Deribit Combo
 

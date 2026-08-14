@@ -14,6 +14,7 @@ from optimatrix.risk import (
     ShadowCapacity,
     stress_reserve_from_allocation_record,
 )
+from optimatrix.route import RouteEvidenceKind, RouteEvidenceStatus
 from optimatrix.scenarios import (
     all_joint_adversarial_chain,
     base_chain,
@@ -130,6 +131,9 @@ def test_delivery_stress_uses_actual_inverse_condor_payoff(policy, tmp_path) -> 
         record,
         allocation_id=assessment.allocation.identity,
     ) == Decimal("200.0")
+    assert assessment.record.route_evidence is not None
+    assert assessment.record.route_evidence.kind is RouteEvidenceKind.COMPONENT_SYNTHETIC_ESTIMATE
+    assert assessment.record.route_evidence.status is RouteEvidenceStatus.EVALUABLE
 
 
 def test_exit_stress_that_exceeds_remaining_budget_is_unavailable(policy, tmp_path) -> None:

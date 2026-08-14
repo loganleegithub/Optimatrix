@@ -42,7 +42,7 @@ def test_policy_rejects_invalid_delivery_risk_range(tmp_path) -> None:
 
 
 def test_policy_identity_is_stable_and_content_addressed(policy) -> None:
-    assert policy.schema_version == 7
+    assert policy.schema_version == 8
     assert policy.window.cadence_minutes == 15
     assert policy.identity.startswith("sha256:")
     assert len(policy.identity) == 71

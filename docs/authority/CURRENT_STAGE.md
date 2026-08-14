@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 STRESS RISK RESERVATION — CLOSED
+**Status:** B3 ROUTE EVIDENCE SCHEMA — CLOSED
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -42,8 +42,8 @@ is retained without migration or mutation and remains ineligible for the current
 - Entry reunderwriting requires later environment, exact frozen structure, economics, allocation,
   and route evidence to pass before a Shadow Position exists, and its complete Decision-to-Entry
   result remains recoverable.
-- Policy schema 7 gives new Decisions, allocations, and Cases identities distinct from schema-6 and
-  frozen v1 evidence.
+- Policy schema 8 gives new Decisions, route evidence, allocations, and Cases identities distinct
+  from schema-7 and frozen v1 evidence.
 - `ShadowRiskAllocation` records nominal contractual payoff, boundary-valued exit-cost stress,
   every inverse-delivery stress, their maximum delivery loss, and one conservative stress reserve.
   The reserve is exactly the maximum of nominal payoff, exit stress, and maximum delivery stress.
@@ -54,13 +54,24 @@ is retained without migration or mutation and remains ineligible for the current
 - The adversarial deterministic Candidate has `200 USD` nominal payoff and `402 USD` exit stress.
   With `300 USD` already reserved against the unchanged `600 USD` Session budget, it is rejected;
   the former nominal-only permissive branch is therefore absent.
-- The complete repository gate passes: `193` tests and `8` deterministic business scenarios. This
+- Every selected current-Policy Decision freezes one content-addressed route record, and every
+  Entry freezes a distinct later record. Both bind the exact frozen `+1/-1/-1/+1` instruments,
+  full target amount, causal cut, per-leg component depth, synthetic model, fee projection, and
+  economics; Ledger, Journal, recovery, Outcome, and Workbench retain their identities.
+- Route status distinguishes `EVALUABLE`, `NOT_EVALUABLE`, and `UNKNOWN` without inventing depth or
+  whole-product economics. Only `EVALUABLE/COMPONENT_SYNTHETIC_ESTIMATE` can support a Shadow
+  Position.
+- B3 route constructors and strict codecs reject `COMBO_BOOK_QUOTE`, `RFQ`, and `ACTUAL_FILL`, plus
+  every injected Combo-instrument, RFQ, order, trade, fill, account, executable-liquidity, and
+  fill-probability field. A standard Combo fee projection remains only a cost-model fact.
+- The complete repository gate passes: `207` tests and `8` deterministic business scenarios. This
   is offline implementation evidence, not current market, execution, or profitability evidence.
 - Live runtime, stable-root writes, market calls, private facts, orders, and capital remain disabled.
 
-**Primary blocker:** `ROUTE_EVIDENCE_NOT_TYPED` — Public Shadow Entry still represents its route as
-a pricing-basis label plus blocker strings instead of one identity-bearing evidence record with an
-explicit route kind, full-ratio amount, causal source cut, and evaluability result.
+**Primary blocker:** `DATA_HEALTH_NOT_CANDIDATE_LOCAL` — one failed or absent option book can still
+mark the whole bounded universe unhealthy before structure search, even when that book is unrelated
+to the winning Candidate; conversely, a missing book that could change the Primary rank must not be
+silently ignored.
 
 ## Maturity ladder
 
@@ -74,7 +85,7 @@ explicit route kind, full-ratio amount, causal source cut, and evaluability resu
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Next closure:** a bounded `B3_ROUTE_EVIDENCE` task must replace the loose route label and blockers
-with one typed, identity-bearing Shadow route-evidence record for the exact frozen four-leg ratios
-and full target amount. It may not claim Combo executability or fills, change Entry underwriting or
-risk numerics, enable live calls, or authorize private facts, orders, capital, or Policy promotion.
+**Next closure:** a bounded `B3_CANDIDATE_LOCAL_DATA_READINESS` task must isolate book failures to
+the Candidates that depend on them and keep the Window `UNKNOWN` whenever an unresolved Candidate
+could still change the Primary rank. It may not weaken causal DataHealth, change ranking or Policy
+thresholds, enable live calls, or authorize execution truth.

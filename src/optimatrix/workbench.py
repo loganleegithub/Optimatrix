@@ -8,8 +8,9 @@ from pathlib import Path
 
 from optimatrix.channels import CHANNELS, ChannelId
 from optimatrix.lifecycle import TradeCase
+from optimatrix.route import ShadowRouteEvidence
 
-WORKBENCH_SCHEMA_VERSION = 4
+WORKBENCH_SCHEMA_VERSION = 5
 _ASSET_ROOT = Path(__file__).with_name("workbench_static")
 _STATIC_ASSETS = ("index.html", "styles.css", "app.js")
 
@@ -168,8 +169,29 @@ _ENTRY_EVIDENCE_LABELS = {
     "entry_observation_id": "Entry Market Observation identity",
     "entry_observed_at": "Entry observation observed at",
     "entry_known_at": "Entry observation known at",
-    "entry_pricing_basis": "Shadow pricing basis",
+    "decision_route_evidence_id": "Decision route evidence identity",
+    "entry_route_evidence_id": "Entry route evidence identity",
     "entry_reason": "Entry reason",
+}
+_ROUTE_EVIDENCE_LABELS = {
+    "route_evidence_id": "Route evidence identity",
+    "kind": "Route evidence kind",
+    "status": "Route evaluability",
+    "reason": "Route reason",
+    "policy_id": "Route Policy identity",
+    "selected_structure_id": "Frozen Candidate identity",
+    "observation_id": "Causal Market Observation identity",
+    "observed_at": "Route observation observed at",
+    "observation_known_at": "Route observation known at",
+    "evaluated_at": "Route evaluated at",
+    "model_id": "Component synthetic model",
+    "target_amount": "Full target amount",
+    "fee_model_id": "Projected fee model identity",
+    "native_gross_credit": "Synthetic gross credit (BTC)",
+    "standard_combo_fee_projection_native": "Standard Combo fee projection (BTC)",
+    "native_net_credit": "Synthetic net credit (BTC)",
+    "boundary_index_price_usd": "Boundary index price (USD)",
+    "boundary_net_credit_usd": "Boundary-valued net credit (USD)",
 }
 _ENTRY_ECONOMICS_LABELS = {
     "fee_model_id": "Fee model identity",
@@ -189,6 +211,9 @@ _ENTRY_REUNDERWRITING_LABELS = {
     "policy_id": "Frozen Policy identity",
     "selected_structure_id": "Frozen Candidate identity",
     "risk_allocation_id": "Frozen Shadow allocation identity",
+    "route_evidence_id": "Entry route evidence identity",
+    "route_kind": "Entry route evidence kind",
+    "route_status": "Entry route evaluability",
     "market_session_id": "Entry Market Session",
     "decision_session_phase": "Decision Session phase",
     "entry_session_phase": "Entry Session phase",
@@ -473,6 +498,8 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
             "selected_structure": _empty_case_structure_projection(),
             "risk_allocation": [],
             "entry_evidence": [],
+            "decision_route_evidence": _empty_route_evidence_projection(),
+            "entry_route_evidence": _empty_route_evidence_projection(),
             "entry_reunderwriting": _empty_entry_reunderwriting_projection(),
             "entry_economics": [],
             "exit_intent": [],
@@ -503,6 +530,16 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
     risk_allocation = _case_mapping(case, "risk_allocation", "TradeCase.risk_allocation")
     entry_pricing = _case_mapping(case, "entry_pricing", "TradeCase.entry_pricing")
     entry_reunderwriting = _entry_reunderwriting_projection(case)
+    decision_route_evidence = _route_evidence_projection(
+        getattr(case, "decision_route_evidence", None)
+    )
+    recovered_reunderwriting = getattr(case, "entry_reunderwriting", None)
+    entry_route = (
+        getattr(recovered_reunderwriting, "route_evidence", None)
+        if recovered_reunderwriting is not None
+        else None
+    )
+    entry_route_evidence = _route_evidence_projection(entry_route)
     entry_evidence = {
         "decision_record_id": getattr(case, "decision_record_id", None),
         "decision_policy_id": getattr(case, "decision_policy_id", None),
@@ -513,7 +550,8 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
         "entry_observation_id": getattr(case, "entry_observation_id", None),
         "entry_observed_at": _optional_isoformat(case.entry_observed_at),
         "entry_known_at": _optional_isoformat(getattr(case, "entry_known_at", None)),
-        "entry_pricing_basis": getattr(case, "entry_pricing_basis", None),
+        "decision_route_evidence_id": getattr(case, "decision_route_evidence_id", None),
+        "entry_route_evidence_id": entry_route.identity if entry_route is not None else None,
         "entry_reason": case.entry_reason,
     }
     entry_economics = dict(entry_pricing or {})
@@ -614,6 +652,8 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
             _RISK_ALLOCATION_LABELS,
         ),
         "entry_evidence": _display_rows(entry_evidence, _ENTRY_EVIDENCE_LABELS),
+        "decision_route_evidence": decision_route_evidence,
+        "entry_route_evidence": entry_route_evidence,
         "entry_reunderwriting": entry_reunderwriting,
         "entry_economics": _display_rows(entry_economics, _ENTRY_ECONOMICS_LABELS),
         "exit_intent": _optional_display_rows(intent, _EXIT_INTENT_LABELS),
@@ -782,6 +822,22 @@ def _empty_entry_reunderwriting_projection() -> dict[str, object]:
     }
 
 
+def _empty_route_evidence_projection() -> dict[str, object]:
+    return {"available": False, "summary": [], "legs": []}
+
+
+def _route_evidence_projection(evidence: ShadowRouteEvidence | None) -> dict[str, object]:
+    if evidence is None:
+        return _empty_route_evidence_projection()
+    value = evidence.as_object()
+    legs = value.pop("legs")
+    return {
+        "available": True,
+        "summary": _display_rows(value, _ROUTE_EVIDENCE_LABELS),
+        "legs": legs,
+    }
+
+
 def _entry_reunderwriting_projection(case: TradeCase) -> dict[str, object]:
     result = getattr(case, "entry_reunderwriting", None)
     if result is None:
@@ -793,6 +849,9 @@ def _entry_reunderwriting_projection(case: TradeCase) -> dict[str, object]:
         "policy_id": result.policy_id,
         "selected_structure_id": result.selected_structure_id,
         "risk_allocation_id": result.risk_allocation_id,
+        "route_evidence_id": result.route_evidence.identity,
+        "route_kind": result.route_evidence.kind.value,
+        "route_status": result.route_evidence.status.value,
         "market_session_id": result.market_session_id,
         "decision_session_phase": result.decision_session_phase.value,
         "entry_session_phase": (
@@ -812,7 +871,6 @@ def _entry_reunderwriting_projection(case: TradeCase) -> dict[str, object]:
         ("STRUCTURE", result.structure_blockers),
         ("ECONOMICS", result.economics_blockers),
         ("ALLOCATION", result.allocation_blockers),
-        ("ROUTE", result.route_blockers),
     )
     return {
         "available": True,

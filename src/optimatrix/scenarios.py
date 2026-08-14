@@ -36,6 +36,7 @@ from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.products import BTC
 from optimatrix.radar import BtcWindowAssessment
 from optimatrix.risk import AllocationResult, ShadowCapacity
+from optimatrix.route import RouteEvidenceKind, RouteEvidenceStatus
 from optimatrix.session import current_deribit_session
 from optimatrix.structure import select_btc_0dte_condor
 
@@ -93,6 +94,9 @@ def whole_product_candidate(policy: BtcShortVolPolicy, root: Path) -> ScenarioRe
     passed = (
         assessment.record.result is DecisionResult.CANDIDATE
         and candidate is not None
+        and assessment.record.route_evidence is not None
+        and assessment.record.route_evidence.kind is RouteEvidenceKind.COMPONENT_SYNTHETIC_ESTIMATE
+        and assessment.record.route_evidence.status is RouteEvidenceStatus.EVALUABLE
         and assessment.allocation is not None
         and assessment.allocation.result is AllocationResult.AVAILABLE
     )
@@ -106,6 +110,11 @@ def whole_product_candidate(policy: BtcShortVolPolicy, root: Path) -> ScenarioRe
                 assessment.selection.legal_structure_count
                 if assessment.selection is not None
                 else 0
+            ),
+            "route_kind": (
+                assessment.record.route_evidence.kind.value
+                if assessment.record.route_evidence is not None
+                else None
             ),
             "combo_fee_native": (
                 str(candidate.pricing.combo_standard_fee_native) if candidate is not None else None
@@ -301,6 +310,11 @@ def atomic_shadow_case_exit(policy: BtcShortVolPolicy, root: Path) -> ScenarioRe
         and monitor.exit_intent is not None
         and exit_evaluation.terminal
         and recovered == case
+        and entry.route_evidence.kind is RouteEvidenceKind.COMPONENT_SYNTHETIC_ESTIMATE
+        and entry.route_evidence.status is RouteEvidenceStatus.EVALUABLE
+        and recovered.decision_route_evidence_id == assessment.record.route_evidence_id
+        and recovered.entry_reunderwriting is not None
+        and recovered.entry_reunderwriting.route_evidence.identity == entry.route_evidence.identity
         and case.outcome is not None
         and case.outcome.terminal_method is TerminalMethod.WHOLE_PRODUCT_EXIT
     )
@@ -314,6 +328,9 @@ def atomic_shadow_case_exit(policy: BtcShortVolPolicy, root: Path) -> ScenarioRe
                 case.outcome.terminal_method.value if case.outcome is not None else None
             ),
             "journal_snapshots": len(journal.read(case.identity)),
+            "decision_route_evidence_id": assessment.record.route_evidence_id,
+            "entry_route_evidence_id": entry.route_evidence.identity,
+            "route_kind": entry.route_evidence.kind.value,
         },
     )
 

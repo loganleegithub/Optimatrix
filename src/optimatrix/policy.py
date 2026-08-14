@@ -123,7 +123,7 @@ class BtcShortVolPolicy:
     @property
     def identity(self) -> str:
         return canonical_identity(
-            "BtcTwoSidedShortVolPolicyV7",
+            "BtcTwoSidedShortVolPolicyV8",
             self.schema_version,
             self.policy_name,
             self.channel_id,
@@ -264,7 +264,7 @@ def load_btc_short_vol_policy(path: Path) -> BtcShortVolPolicy:
 
 
 def _validate(policy: BtcShortVolPolicy) -> None:
-    if policy.schema_version != 7:
+    if policy.schema_version != 8:
         raise ValueError("unsupported policy schema")
     if policy.status != "PUBLIC_SHADOW_UNQUALIFIED":
         raise ValueError("policy status must be PUBLIC_SHADOW_UNQUALIFIED")

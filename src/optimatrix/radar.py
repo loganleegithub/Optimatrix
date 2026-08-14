@@ -21,6 +21,7 @@ from optimatrix.risk import (
     ShadowRiskAllocation,
     allocate_btc_condor_shadow_risk,
 )
+from optimatrix.route import ShadowRouteEvidence, component_synthetic_route_evidence
 from optimatrix.session import SessionPhase, current_deribit_session
 from optimatrix.structure import (
     Btc0DteCondorCandidate,
@@ -145,6 +146,29 @@ def evaluate_btc_short_vol_window(
         capacity=capacity,
         known_at=decision_boundary,
     )
+    selected = selection.selected
+    route_evidence = component_synthetic_route_evidence(
+        policy_id=policy.identity,
+        selected_structure_id=selected.identity,
+        evaluated_at=decision_boundary,
+        target_amount=selected.option_amount,
+        instrument_names=(
+            selected.long_put.instrument_name,
+            selected.short_put.instrument_name,
+            selected.short_call.instrument_name,
+            selected.long_call.instrument_name,
+        ),
+        observation_id=observation.identity,
+        observed_at=observation.observed_at,
+        observation_known_at=observation.known_at,
+        quotes=(
+            selected.long_put,
+            selected.short_put,
+            selected.short_call,
+            selected.long_call,
+        ),
+        pricing=selected.pricing,
+    )
     if allocation.result is AllocationResult.UNKNOWN:
         result = DecisionResult.UNKNOWN
     elif allocation.result is AllocationResult.UNAVAILABLE:
@@ -162,6 +186,7 @@ def evaluate_btc_short_vol_window(
         risk_allocation_id=allocation.identity,
         selected_structure=_structure_record(selection),
         risk_allocation=_allocation_record(allocation),
+        route_evidence=route_evidence,
         known_at=decision_boundary,
     )
     return BtcWindowAssessment(record, selection, allocation, observed_session.phase, vrp_ratio)
@@ -209,6 +234,7 @@ def _record(
     risk_allocation_id: str | None = None,
     selected_structure: dict[str, object] | None = None,
     risk_allocation: dict[str, object] | None = None,
+    route_evidence: ShadowRouteEvidence | None = None,
     known_at: datetime,
 ) -> DecisionRecord:
     return DecisionRecord(
@@ -223,6 +249,10 @@ def _record(
         risk_allocation_id=risk_allocation_id,
         selected_structure_json=_payload_json(selected_structure),
         risk_allocation_json=_payload_json(risk_allocation),
+        route_evidence_id=(route_evidence.identity if route_evidence is not None else None),
+        route_evidence_json=(
+            _payload_json(route_evidence.as_object()) if route_evidence is not None else None
+        ),
     )
 
 

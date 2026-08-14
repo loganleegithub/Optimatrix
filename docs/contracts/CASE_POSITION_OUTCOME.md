@@ -19,14 +19,14 @@ coverage and is never backfilled. Candidate selection is not the start of the le
 A Candidate opens at most one TradeCase in `CaseJournal`. It freezes truth layer, product, Window,
 optional Episode, Policy, causal Decision boundary, selected four-leg structure, target amount,
 `ShadowRiskAllocation` or future `AccountRiskReservation`, EntryEvaluationPolicy, planned window,
-maximum wait boundary, pricing basis, Decision Session phase, and Decision VRP proxy. Permanent
-non-claims remain owned by the Constitution and are inherited through the frozen truth layer rather
-than copied into each Case. The actual causal Entry observation boundary and typed reunderwriting
-result are later immutable facts. That result binds the same Policy, structure, allocation, and
-Decision metrics; stores current metrics and dimension-specific blockers; and is recovered with the
-Case. All later facts bind the same identities. A TradeCase may end without a Position; it cannot
-rewrite its Decision or Entry result, and a Shadow TradeCase cannot be upgraded in place to a
-private-execution TradeCase.
+maximum wait boundary, Decision component-route evidence, Decision Session phase, and Decision VRP
+proxy. Permanent non-claims remain owned by the Constitution and are inherited through the frozen
+truth layer rather than copied into each Case. The actual causal Entry observation boundary and
+typed reunderwriting result are later immutable facts. That result binds the same Policy,
+structure, allocation, and Decision metrics; stores current metrics, dimension-specific blockers,
+and its distinct later route-evidence identity; and is recovered with the Case. All later facts bind
+the same identities. A TradeCase may end without a Position; it cannot rewrite its Decision or
+Entry result, and a Shadow TradeCase cannot be upgraded in place to a private-execution TradeCase.
 
 `TradeCaseId` content-binds product, truth layer, DecisionWindowId, DecisionPolicyId, selected
 structure, amount, and Decision boundary.
@@ -43,8 +43,10 @@ releases that exact reserve; restart, Gap, ExitIntent, or a merely attempted exi
 ## Position truth
 
 A Public Shadow Position exists only after `SHADOW_ATOMIC_EVALUABLE` establishes complete
-whole-product counterfactual economics. It keeps `truth_layer=SHADOW_PROJECTION` and must never be
-described as held, filled, bought, sold, or exposed account risk.
+whole-product counterfactual economics and one `EVALUABLE/COMPONENT_SYNTHETIC_ESTIMATE` Entry route
+record for the exact frozen ratios and amount. Its different Decision and Entry route identities
+remain recoverable. It keeps `truth_layer=SHADOW_PROJECTION` and must never be described as held,
+filled, bought, sold, or exposed account risk.
 
 A real Position is created from authenticated Combo trade and reconciled against account-position
 truth. On recovery, an authenticated nonzero account Position is sufficient to restore risk

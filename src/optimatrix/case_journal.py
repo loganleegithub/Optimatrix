@@ -177,7 +177,8 @@ def _validate_transition(previous: TradeCase, current: TradeCase) -> None:
         "risk_allocation_json",
         "opened_at",
         "entry_deadline",
-        "entry_pricing_basis",
+        "decision_route_evidence_id",
+        "decision_route_evidence_json",
     )
     if any(getattr(previous, field) != getattr(current, field) for field in stable):
         raise ValueError("frozen TradeCase facts cannot change")

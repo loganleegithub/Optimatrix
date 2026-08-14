@@ -35,6 +35,7 @@ from optimatrix.market import (
 from optimatrix.observation_ledger import ObservationLedger
 from optimatrix.products import BTC
 from optimatrix.risk import ShadowCapacity
+from optimatrix.route import RouteEvidenceKind, RouteEvidenceStatus
 from optimatrix.scenarios import (
     all_joint_adversarial_chain,
     base_chain,
@@ -118,7 +119,13 @@ def test_atomic_entry_creates_one_whole_product_shadow_position(policy, tmp_path
     assert case.entry_reunderwriting.structure_blockers == ()
     assert case.entry_reunderwriting.economics_blockers == ()
     assert case.entry_reunderwriting.allocation_blockers == ()
-    assert case.entry_reunderwriting.route_blockers == ()
+    assert (
+        case.entry_reunderwriting.route_evidence.kind
+        is RouteEvidenceKind.COMPONENT_SYNTHETIC_ESTIMATE
+    )
+    assert case.entry_reunderwriting.route_evidence.status is RouteEvidenceStatus.EVALUABLE
+    assert case.decision_route_evidence.identity == case.decision_route_evidence_id
+    assert case.entry_reunderwriting.route_evidence.observation_id == case.entry_observation_id
     assert case.entry_reunderwriting.decision_metrics.vrp_proxy_ratio == Decimal("1.5")
     assert case.entry_reunderwriting.entry_metrics.vrp_proxy_ratio == Decimal("1.5")
     assert case.position_id is not None
@@ -143,6 +150,7 @@ def test_entry_requires_frozen_legs_and_strictly_future_quote_boundaries(
     )
     assert evaluation.status is ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN
     assert evaluation.reason == "ENTRY_QUOTES_NOT_STRICTLY_FUTURE"
+    assert evaluation.route_evidence.status is RouteEvidenceStatus.UNKNOWN
     assert unknown.position_id is None
 
     later = record.known_at + timedelta(seconds=30)
@@ -161,6 +169,7 @@ def test_entry_requires_frozen_legs_and_strictly_future_quote_boundaries(
     )
     assert evaluation.status is ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN
     assert evaluation.reason == "SELECTED_STRUCTURE_QUOTES_MISSING"
+    assert evaluation.route_evidence.status is RouteEvidenceStatus.UNKNOWN
     assert unknown.position_id is None
 
 
@@ -217,6 +226,8 @@ def test_complete_but_shallow_entry_is_not_evaluable_and_never_partial(
         known_at=observation.known_at,
     )
     assert evaluation.status is ShadowEntryStatus.SHADOW_ATOMIC_NOT_EVALUABLE
+    assert evaluation.route_evidence.status is RouteEvidenceStatus.NOT_EVALUABLE
+    assert evaluation.route_evidence.legs[1].depth_coverage == Decimal("0.5")
     assert terminal.position_id is None
     assert terminal.outcome is not None
     assert terminal.outcome.eligibility.shadow_entry_evaluable.value is False
@@ -721,11 +732,13 @@ def test_case_journal_is_idempotent_recovers_prefix_and_rejects_tampering(
 
     changed_result = replace(
         entry_result,
-        known_at=entry_result.known_at + timedelta(microseconds=1),
+        entry_metrics=replace(
+            entry_result.entry_metrics,
+            net_delta=entry_result.entry_metrics.net_delta + Decimal("0.000001"),
+        ),
     )
     changed_case = replace(
         entered,
-        entry_known_at=changed_result.known_at,
         entry_reunderwriting_json=json.dumps(
             changed_result.as_object(),
             ensure_ascii=False,

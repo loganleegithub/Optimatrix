@@ -2,7 +2,7 @@
   'use strict';
 
   const workbench = window.OPTIMATRIX_WORKBENCH;
-  if (!workbench || workbench.schema_version !== 4) {
+  if (!workbench || workbench.schema_version !== 5) {
     document.body.textContent = 'Workbench 数据缺失或版本不受支持。';
     return;
   }
@@ -490,10 +490,12 @@
     const allocation = valueMap(caseView.risk_allocation);
     const reunderwriting = caseView.entry_reunderwriting || {};
     const reunderwritingSummary = valueMap(reunderwriting.summary);
+    const decisionRoute = valueMap((caseView.decision_route_evidence || {}).summary);
     const blocks = [
       ['为什么发现', `本窗口状态为 ${translate(workbench.projection.state)}；IV/RV、跳跃占比与事件状态都是具名公开代理，不是 Edge 或预测。`],
       ['为什么选它', `四腿作为一个不可拆的铁鹰整体冻结。短腿、翼宽与 Combo 费都属于同一候选，不能拆成两笔 Vertical。`],
       ['为什么允许打开 Case', `Shadow 风险预算结果为 ${translate(allocation.result)}；市场上下文为 ${translate(context.knowledge)}。这是研究名义限额，不是保证金或资本预留。`],
+      ['Decision 路由证据', `${translate(decisionRoute.kind)} / ${translate(decisionRoute.status)}；完整目标数量 ${decisionRoute.target_amount || '未知'} BTC。仅为公众 component books 合成估价。`],
       ['Entry 二次承销', reunderwriting.available === false
         ? '尚未取得严格更晚的 Entry 证据。'
         : `结果为 ${translate(reunderwritingSummary.status)}；${reunderwriting.comparison || '指标对比未知'}。冻结四腿与预算未被替换。`]
@@ -508,9 +510,12 @@
 
   function renderManagement(caseView) {
     const display = caseView.display;
-    const entry = valueMap(caseView.entry_evidence);
     const outcome = valueMap(caseView.outcome);
     const entryReunderwriting = caseView.entry_reunderwriting || {};
+    const routeProjection = (caseView.entry_route_evidence || {}).available
+      ? caseView.entry_route_evidence
+      : caseView.decision_route_evidence || {};
+    const route = valueMap(routeProjection.summary);
     const summary = byId('management-summary');
     summary.replaceChildren(
       metricItem('入场结果', translate(display.entry_status)),
@@ -539,8 +544,8 @@
     appendText(knownBlock, 'strong', '', display.gap_observed ? '存在数据 Gap' : '因果前缀连续');
     appendText(knownBlock, 'span', '', 'DataHealth 不等于 TradingRisk；Gap 不会擦除 Position 或退出责任');
     const pricingBlock = create('div', 'quality-block');
-    appendText(pricingBlock, 'strong', '', translate(entry.entry_pricing_basis || 'SYNTHETIC_FOUR_LEG_COMPONENT_BOOK_ESTIMATE_V1'));
-    appendText(pricingBlock, 'span', '', '公众四腿合成估价，不代表 Combo 可成交或已预留流动性');
+    appendText(pricingBlock, 'strong', '', `${translate(route.kind || 'COMPONENT_SYNTHETIC_ESTIMATE')} · ${translate(route.status || 'UNKNOWN')}`);
+    appendText(pricingBlock, 'span', '', `${route.model_id || 'SYNTHETIC_FOUR_LEG_COMPONENT_BOOK_ESTIMATE_V1'}；不代表 Combo 报价、RFQ、订单、成交、账户仓位或已预留流动性`);
     quality.append(knownBlock, pricingBlock);
   }
 
