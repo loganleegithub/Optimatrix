@@ -20,12 +20,12 @@ launchd label `com.optimatrix.b3-public-shadow`. It must execute only the merged
   --workbench-port 8765
 ```
 
-The existing validation PID may be operator-interrupted once to release v2. The old launchd job may
-be booted out, its plist updated in place, and the same label bootstrapped once with `RunAtLoad` and
-`KeepAlive`. Read-only `launchctl`, `ps`, `lsof`, loopback HTTP, root-recovery, and log checks are
-authorized. The registered detached worktree `/Users/logan/Optimatrix-live` may be removed only
-after the replacement job is healthy. No other runtime, root, port, label, deployment target, or
-private method is authorized.
+The validation process and old launchd job were stopped, the plist was updated in place, and this
+same label was bootstrapped once with `RunAtLoad` and `KeepAlive`. The registered detached worktree
+`/Users/logan/Optimatrix-live` was removed only after the replacement job was healthy. launchd now
+owns recovery of this exact command. Read-only `launchctl`, `ps`, `lsof`, loopback HTTP,
+root-recovery, and log checks remain authorized. No other runtime, root, port, label, deployment
+target, or private method is authorized.
 
 **Superseded validation command:** the three bounded launches below are exhausted historical
 evidence and are no longer authorized:
@@ -132,8 +132,9 @@ active non-template task.
 ## Closure
 
 **Given:** the corrected current Policy and WebSocket-forward Runtime pass `225` tests and `8`
-deterministic business scenarios; the isolated v2 root began absent, now preserves only its exact
-launch-2 natural evidence, and the lost v1 root is excluded for the reason recorded below
+deterministic business scenarios; the isolated v2 root began absent, now preserves the append-only
+natural evidence from the authorized validation launches and persistent successor, and the lost v1
+root is excluded for the reason recorded below
 
 **When:** the exact persistent launchd command resumes that isolated root and naturally observes
 public BTC data without modifying Policy values or manufacturing a Candidate
@@ -195,15 +196,16 @@ existing cut wait to reach its owning Window's source boundary before consuming 
 **Cheapest falsification:** public clock preflight plus first naturally enrolled Window must produce
 either one strict current-Policy DecisionRecord or an exact `UNKNOWN`/Gap without HTTP market polling
 
-**Repository gate:** `make check` passes `225` tests and all `8` deterministic business scenarios;
-rerun it after the live process stops and before closure
+**Repository gate:** `make check` passed `225` tests and all `8` deterministic business scenarios
+immediately before deployment; rerun it if implementation changes before closure
 
-**External evidence:** REQUIRED — deployment first requires the launchd PID to execute from current
-`main`, exclusively lock v2, expose HTTP `200` on `127.0.0.1:8765`, and append one healthy public
-market cut without a startup error. Task closure still requires recovery of the complete natural
-chain from the durable root; absence remains unverified and cannot close
+**External evidence:** deployment gate SATISFIED — launchd executes merge `a3ba716` from `main`,
+exclusively locks v2, exposes HTTP `200` on `127.0.0.1:8765`, and appended healthy public cut
+`sha256:a6b09ceaa75803d689fda2169319cc5b493df6c042ee9ccfb19a16453ff4b897` at
+`2026-08-14T14:45:07.048000Z` without a startup error. Task closure still requires recovery of the
+complete natural chain from the durable root; absence remains unverified and cannot close
 
-## Observed falsification
+## Observed public evidence
 
 - Launch `1/3` used the exact command and new root; preflight, metadata/history bootstrap, heartbeat,
   and the unauthenticated public subscription all succeeded.
@@ -268,8 +270,8 @@ chain from the durable root; absence remains unverified and cannot close
 - This directly falsifies the one-shot scheduling assumption: after marking a Window attempted, the
   Runtime must use the existing bounded wait to require a source watermark at or after the Window
   start. It may not consume a pre-Window cache state and then leave the full input grace unused.
-  Launch `3/3` remains running on commit `9a065cd`; it is not restarted and no fourth launch is
-  authorized.
+  At that time launch `3/3` remained on commit `9a065cd`, and the bounded validation ceiling did not
+  authorize a fourth validation launch.
 - The Window-source lower bound passes its focused cache/source tests and the complete repository
   gate: `225` tests and all `8` deterministic business scenarios. The already running launch cannot
   load this correction. Its next `12:45–13:00` cut happened naturally to fall inside the Window at
@@ -278,8 +280,15 @@ chain from the durable root; absence remains unverified and cannot close
 - At `2026-08-14T13:01:01.087798Z`, launch `3/3` had durably recorded `5` natural Windows:
   `3 ABSTAIN`, `2 UNKNOWN`, and `0 Cases`. The valid `12:45–13:00` Window was `ABSTAIN`; the next
   running-process cut again exposed the old race with `observed_at=2026-08-14T12:59:59.315000Z`
-  for a `13:00` Window. The process remains live on its original loaded commit and this is not
-  evidence that the committed lower-bound correction ran in production.
+  for a `13:00` Window. That process was later operator-interrupted for the authorized persistent
+  successor deployment; its observations do not prove the committed lower-bound correction.
+- Merge `a3ba716` was pushed to `origin/main`, then launchd label
+  `com.optimatrix.b3-public-shadow` started it from `/Users/logan/Optimatrix` with the exact v2 root,
+  Policy, EventState, and port. The job exclusively locked v2, served loopback HTTP `200`, and
+  appended public cut `sha256:a6b09ceaa75803d689fda2169319cc5b493df6c042ee9ccfb19a16453ff4b897`
+  at `2026-08-14T14:45:07.048000Z`. The source watermark crossed the Window boundary under the
+  corrected code. The interrupted startup Window remained `UNKNOWN/NO_OBSERVATION`, so this proves
+  deployment health but not the natural acceptance chain.
 
 Close only after directly observing the declared delta. Replace Stage with the post-task snapshot
 and remove this file; do not append completion history.

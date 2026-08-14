@@ -41,9 +41,9 @@ loopback Workbench port `8765`, and no duration expansion into another process o
 
 **Private read-only account permission:** `NONE`
 
-**Orders, capital, and deployment:** deployment is limited to replacing the existing local launchd
-job with the exact active-task public Shadow command. Orders, fills, capital, private access, and
-remote deployment remain `NONE`
+**Orders, capital, and deployment:** the exact active-task local launchd public Shadow job is
+deployed and may remain under `KeepAlive`. Any other local or remote deployment, orders, fills,
+capital, and private access remain `NONE`
 
 **Policy qualification / Edge claim:** `NONE`
 
@@ -122,6 +122,11 @@ remote deployment remain `NONE`
 - A scheduled Window may consume its one public cut only after the source watermark reaches that
   Window's start. The existing bounded cache wait owns this lower boundary; retained pre-Window
   state cannot consume the attempt while the input grace remains available.
+- Merge `a3ba716` deployed that correction under launchd from `/Users/logan/Optimatrix` onto v2.
+  The job exclusively acquired the v2 lock, served loopback HTTP `200`, and appended complete public
+  cut `sha256:a6b09ceaa75803d689fda2169319cc5b493df6c042ee9ccfb19a16453ff4b897` at
+  `2026-08-14T14:45:07.048000Z` without a startup error. The interrupted startup Window still failed
+  closed as `UNKNOWN/NO_OBSERVATION`; this is deployment evidence, not chain acceptance.
 - Disconnect, incomplete initialization, staleness, and sequence loss fail through the exact
   Runtime Gap path. One affected-book REST snapshot may seed resynchronization, but that instrument
   rejoins only after a matching WebSocket continuation or a new full WebSocket snapshot.
@@ -134,13 +139,11 @@ remote deployment remain `NONE`
   disabled. Private facts, orders, capital, and any other local or remote deployment remain
   unconditionally disabled.
 
-**Primary blocker:** `AUTHORIZED_RUNTIME_DEPLOYMENT_PENDING` — launch `3/3` directly falsified a
-steady-Window boundary race, while correctly failing that Window closed as
-`UNKNOWN/OBSERVATION_OUTSIDE_WINDOW`. The source-watermark lower bound now passes `225` tests and all
-`8` business scenarios. The user has explicitly superseded the exhausted validation-launch ceiling
-with one persistent local launchd deployment of current `origin/main`; the old v1 job and launch
-`3/3` must stop before that job acquires v2. After deployment, `NATURAL_FORWARD_CHAIN_UNVERIFIED`
-remains until the complete chain is recovered. Policy, ranking, lifecycle, route, risk, and Outcome
+**Primary blocker:** `NATURAL_FORWARD_CHAIN_UNVERIFIED` — the current launchd runtime passed its
+deployment gate and the lower-bound correction produced a healthy boundary cut, but v2 still has no
+causally complete Candidate → Entry → Shadow Position → monitoring → terminal Outcome chain. The
+durable startup Gap correctly kept the interrupted Window `UNKNOWN`; future uninterrupted natural
+Windows must provide the remaining evidence. Policy, ranking, lifecycle, route, risk, and Outcome
 semantics remain unchanged.
 
 ## Maturity ladder
@@ -155,8 +158,7 @@ semantics remain unchanged.
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Active closure boundary:** merge and push the verified remediation to `main`, replace the exact
-local launchd job onto v2, verify one healthy public cut and loopback Workbench, and continue until
-the exact natural chain exists. The deployment is a newly authorized persistent successor, not a
-fourth bounded validation launch. Private facts, orders, v1 reuse, threshold changes, Edge claims,
-remote deployment, and B4 remain forbidden.
+**Active closure boundary:** keep the exact deployed launchd job on v2 and close only when the exact
+natural chain exists. launchd `KeepAlive` may recover that same command, but no other process, root,
+port, code target, or deployment is authorized. Private facts, orders, v1 reuse, threshold changes,
+Edge claims, remote deployment, and B4 remain forbidden.
