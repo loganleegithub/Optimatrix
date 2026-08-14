@@ -1061,7 +1061,8 @@ def _fetch_books(
     )
     if failed_requests:
         raise DeribitSourceError(
-            f"{len(failed_requests)} of {len(metadata)} requested option books failed"
+            f"{len(failed_requests)} of {len(metadata)} requested option books failed: "
+            + ",".join(sorted(failed_requests))
         )
     quotes.sort(key=lambda quote: (quote.strike, quote.option_type.value, quote.instrument_name))
     if len(response_boundaries_ms) != len(metadata):

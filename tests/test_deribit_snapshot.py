@@ -429,7 +429,13 @@ def test_snapshot_retries_as_a_whole_when_any_requested_book_call_fails(policy) 
                 raise DeribitSourceError("bounded book request failed")
             return super().call(method, params)
 
-    with pytest.raises(DeribitSourceError, match="1 of 6 requested option books failed"):
+    with pytest.raises(
+        DeribitSourceError,
+        match=(
+            "1 of 6 requested option books failed: "
+            "BOOK_REQUEST_OR_PARSE_FAILED:BTC-X-99000-P:DeribitSourceError"
+        ),
+    ):
         evaluate_live_btc_snapshot(
             client=FailedBookClient(now),
             policy=policy,
