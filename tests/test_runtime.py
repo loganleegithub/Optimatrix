@@ -1978,7 +1978,7 @@ def test_authorized_root_rejects_nonproduction_source_before_creation(
     authorized_root = tmp_path / "authorized"
     monkeypatch.setattr("optimatrix.runtime.AUTHORIZED_RUNTIME_ROOT", authorized_root)
 
-    with pytest.raises(ValueError, match="authorized frozen Policy"):
+    with pytest.raises(ValueError, match="production public source"):
         BtcPublicShadowRuntime(
             root=authorized_root,
             policy=policy,

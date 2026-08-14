@@ -34,12 +34,16 @@ recovery seed, affected-book resync, and official settlement calls made by the e
 **Frozen prior evidence:** `/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1`
 is retained without migration or mutation and remains ineligible for the current Policy.
 
-**Continuous runtime:** only the exact active-task command, current Policy identity, maximum three
-launches on the same root, and `604800` monotonic seconds per launch
+**Continuous runtime:** only launchd label `com.optimatrix.b3-public-shadow`, executing the current
+`origin/main` console script from `/Users/logan/Optimatrix`, with EventState `NONE`, Policy identity
+`sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`, the exact v2 root,
+loopback Workbench port `8765`, and no duration expansion into another process or root
 
 **Private read-only account permission:** `NONE`
 
-**Orders, capital, and deployment:** `NONE`
+**Orders, capital, and deployment:** deployment is limited to replacing the existing local launchd
+job with the exact active-task public Shadow command. Orders, fills, capital, private access, and
+remote deployment remain `NONE`
 
 **Policy qualification / Edge claim:** `NONE`
 
@@ -127,14 +131,16 @@ launches on the same root, and `604800` monotonic seconds per launch
 - The complete repository gate passes: `225` tests and `8` deterministic business scenarios. This
   is offline implementation evidence, not current market, execution, or profitability evidence.
 - Outside the exact active-task command, live runtime, stable-root writes, and market calls remain
-  disabled. Private facts, orders, capital, and deployment remain unconditionally disabled.
+  disabled. Private facts, orders, capital, and any other local or remote deployment remain
+  unconditionally disabled.
 
-**Primary blocker:** `NATURAL_FORWARD_CHAIN_UNVERIFIED` — launch `3/3` directly falsified a
+**Primary blocker:** `AUTHORIZED_RUNTIME_DEPLOYMENT_PENDING` — launch `3/3` directly falsified a
 steady-Window boundary race, while correctly failing that Window closed as
 `UNKNOWN/OBSERVATION_OUTSIDE_WINDOW`. The source-watermark lower bound now passes `225` tests and all
-`8` business scenarios, but the already running process loaded commit `9a065cd` and cannot acquire
-that correction without a forbidden fourth launch. It remains running on the preserved root and
-must still naturally prove the complete chain. Policy, ranking, lifecycle, route, risk, and Outcome
+`8` business scenarios. The user has explicitly superseded the exhausted validation-launch ceiling
+with one persistent local launchd deployment of current `origin/main`; the old v1 job and launch
+`3/3` must stop before that job acquires v2. After deployment, `NATURAL_FORWARD_CHAIN_UNVERIFIED`
+remains until the complete chain is recovered. Policy, ranking, lifecycle, route, risk, and Outcome
 semantics remain unchanged.
 
 ## Maturity ladder
@@ -149,6 +155,8 @@ semantics remain unchanged.
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Active closure boundary:** keep launch `3/3` on the same root and close only on the exact natural
-chain. No restart or fourth launch is authorized. Private facts, orders, old-root reuse, threshold
-changes, Edge claims, and B4 remain forbidden.
+**Active closure boundary:** merge and push the verified remediation to `main`, replace the exact
+local launchd job onto v2, verify one healthy public cut and loopback Workbench, and continue until
+the exact natural chain exists. The deployment is a newly authorized persistent successor, not a
+fourth bounded validation launch. Private facts, orders, v1 reuse, threshold changes, Edge claims,
+remote deployment, and B4 remain forbidden.

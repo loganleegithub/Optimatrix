@@ -7,13 +7,28 @@
 **Target maturity stage:** `B3_ATOMIC_PUBLIC_SHADOW`
 
 **Runtime implementation:** REQUIRED, limited to defects directly falsified by the authorized
-natural feed before the unchanged acceptance command resumes
+natural feed and the exact runtime authorization required by the persistent successor deployment
 
-**Live commands:** authorize only the exact Python command below from `/Users/logan/Optimatrix`,
-at most three process launches against the same root, each bounded to `604800` monotonic seconds.
-The Runtime's existing bounded public-call retries are the only request retries. A launch stops at
-the first accepted complete chain, the hard duration bound, a fatal validation error, or operator
-interrupt; restart must resume the same root and may not erase or rewrite it.
+**Live commands:** the user explicitly authorizes one persistent replacement deployment under
+launchd label `com.optimatrix.b3-public-shadow`. It must execute only the merged and pushed
+`origin/main` console script from `/Users/logan/Optimatrix`, with exactly:
+
+```bash
+/Users/logan/Optimatrix/.venv/bin/optimatrix-shadow runtime \
+  --event-state NONE \
+  --root "/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2" \
+  --workbench-port 8765
+```
+
+The existing validation PID may be operator-interrupted once to release v2. The old launchd job may
+be booted out, its plist updated in place, and the same label bootstrapped once with `RunAtLoad` and
+`KeepAlive`. Read-only `launchctl`, `ps`, `lsof`, loopback HTTP, root-recovery, and log checks are
+authorized. The registered detached worktree `/Users/logan/Optimatrix-live` may be removed only
+after the replacement job is healthy. No other runtime, root, port, label, deployment target, or
+private method is authorized.
+
+**Superseded validation command:** the three bounded launches below are exhausted historical
+evidence and are no longer authorized:
 
 ```bash
 PYTHONPATH=src .venv/bin/python - <<'PY'
@@ -92,16 +107,17 @@ raise SystemExit(result)
 PY
 ```
 
-Also authorize one schema diagnostic launch, bounded to `30` seconds and stdout only, using the existing
+**Exhausted diagnostics:** the prior schema diagnostic was bounded to `30` seconds and stdout only,
+using the existing
 public WebSocket dependency to inspect the `timestamp`, `state`, Greeks/IV, and book-action shape of
 the already selected `BTC-15AUG26-62500-P` and `BTC-15AUG26-63000-C` aggregated `100ms` channels.
-It may call only `public/subscribe`, must not authenticate, and must not write any root or raw tape.
-Authorize one further composition diagnostic, bounded to `60` seconds and stdout only, using the
-production source preflight/bootstrap/subscription and the same current bounded shortlist. It may
-print only per-instrument option side and quote-validation success/failure summaries, must close the
-feed, and must not create a Ledger, Journal, root, or raw tape.
-Authorize one final fresh-cache diagnostic with the same `60`-second, stdout-only, public-call and
-no-root bounds. It may inspect only the first coherent cut and print per-side counts plus exact
+It called only `public/subscribe`, did not authenticate, and did not write any root or raw tape.
+The prior composition diagnostic was bounded to `60` seconds and stdout only, using the
+production source preflight/bootstrap/subscription and the same current bounded shortlist. It
+printed only per-instrument option side and quote-validation success/failure summaries, closed the
+feed, and did not create a Ledger, Journal, root, or raw tape.
+The prior final fresh-cache diagnostic used the same `60`-second, stdout-only, public-call and
+no-root bounds. It inspected only the first coherent cut and printed per-side counts plus exact
 quote-validation error classes/reasons needed to distinguish a transient state, crossed book, or
 missing field. No further diagnostic launch is authorized.
 
@@ -119,8 +135,8 @@ active non-template task.
 deterministic business scenarios; the isolated v2 root began absent, now preserves only its exact
 launch-2 natural evidence, and the lost v1 root is excluded for the reason recorded below
 
-**When:** the exact bounded command resumes that isolated root and naturally observes public BTC
-data without modifying Policy values or manufacturing a Candidate
+**When:** the exact persistent launchd command resumes that isolated root and naturally observes
+public BTC data without modifying Policy values or manufacturing a Candidate
 
 **Then:** one causally complete chain is recovered from durable evidence:
 Candidate → strictly later Entry reunderwriting → Shadow Position → at least two later monitoring
@@ -154,19 +170,20 @@ acceptance command reads the append-only Journal to count distinct post-Entry Po
 **Legacy-data effect:** NONE; the frozen prior root is neither read as current evidence nor written,
 copied, migrated, or deleted
 
-**Permission effect:** temporarily authorize unauthenticated production public market calls and one
-continuous public Shadow process only for the exact command, current Policy identity
-`sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`, exact isolated root, and
-duration/launch bounds above. No other permission changes
+**Permission effect:** authorize unauthenticated production public market calls and one persistent
+local launchd public Shadow process only for the exact command, current Policy identity
+`sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`, exact isolated root, label,
+port, source checkout, and loopback surface above. No other permission changes
 
 **Files and behavior in scope:** the ignored isolated runtime root, exact public observations and
-derived B3 records, this task and matching Stage snapshot, and the smallest direct correction to
-`deribit_websocket.py` / `deribit_snapshot.py` with focused tests and owning documentation. Policy,
+derived B3 records, this task and matching Stage snapshot, runtime authorization constants, direct
+tests and README, `/Users/logan/Library/LaunchAgents/com.optimatrix.b3-public-shadow.plist`, merge and
+push to `main`, local remediation-branch deletion, and registered-worktree removal. Policy,
 thresholds, ranking, lifecycle, route, risk, and Outcome behavior remain read-only
 
 **Out of scope:** deleting or resetting the root, deterministic fixtures as acceptance, threshold
 changes, forced EventState, backfill, old-root evidence, private/authenticated facts, `raw` channel,
-accounts, orders, fills, capital, deployment, Edge or profitability claims, and B4
+accounts, orders, fills, capital, remote deployment, Edge or profitability claims, and B4
 
 **Complexity added / deleted:** add no abstraction or option; delete only the disproven strict
 ticker-timestamp assumption, source-state coercion that caused the first-cut side loss, and the
@@ -181,8 +198,10 @@ either one strict current-Policy DecisionRecord or an exact `UNKNOWN`/Gap withou
 **Repository gate:** `make check` passes `225` tests and all `8` deterministic business scenarios;
 rerun it after the live process stops and before closure
 
-**External evidence:** REQUIRED — the isolated root must recover the complete natural chain and the
-command must emit `B3_NATURAL_FORWARD_CHAIN_ACCEPTED`; absence remains unverified and cannot close
+**External evidence:** REQUIRED — deployment first requires the launchd PID to execute from current
+`main`, exclusively lock v2, expose HTTP `200` on `127.0.0.1:8765`, and append one healthy public
+market cut without a startup error. Task closure still requires recovery of the complete natural
+chain from the durable root; absence remains unverified and cannot close
 
 ## Observed falsification
 

@@ -161,26 +161,6 @@ def test_runtime_rejects_foreign_policy_identity_before_source_construction(
     assert "policy identity" in json.loads(capsys.readouterr().out)["error"]
 
 
-def test_runtime_rejects_the_new_entry_policy_without_network(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    authorized_root = tmp_path / "authorized"
-    monkeypatch.setattr(cli, "AUTHORIZED_RUNTIME_ROOT", authorized_root)
-    policy_copy = tmp_path / "policy-copy.json"
-    policy_copy.write_text(
-        DEFAULT_BTC_SHORT_VOL_POLICY_PATH.read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-    constructions = _forbid_runtime_source(monkeypatch)
-
-    assert cli.main(_runtime_command(authorized_root, policy_path=policy_copy)) == 2
-
-    assert constructions == []
-    assert "policy identity" in json.loads(capsys.readouterr().out)["error"]
-
-
 def _clock_reading(at: datetime) -> DeribitClockReading:
     return DeribitClockReading(
         earliest_at=at - timedelta(milliseconds=1),

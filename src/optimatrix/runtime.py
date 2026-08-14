@@ -66,10 +66,10 @@ from optimatrix.session import DeribitSession, current_deribit_session
 from optimatrix.workbench import write_workbench
 
 AUTHORIZED_RUNTIME_ROOT = Path(
-    "/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1"
+    "/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2"
 )
 AUTHORIZED_RUNTIME_POLICY_IDENTITY = (
-    "sha256:e5dbee6192a1d76696f88bfd30584924f22cbbd041a28f593109962a67618c5f"
+    "sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888"
 )
 AUTHORIZED_WORKBENCH_PORT = 8765
 ROOT_SCHEMA_VERSION = 3

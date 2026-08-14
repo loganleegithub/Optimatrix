@@ -19,24 +19,24 @@ task and Stage; CLI help and source own its syntax.
 
 ## Active B3 public runtime
 
-While `B3_PUBLIC_SHADOW_RUNTIME` remains the sole active task, its exact command is:
+While `B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE` remains the sole active task, launchd label
+`com.optimatrix.b3-public-shadow` executes the merged `main` console script with exactly:
 
 ```bash
-.venv/bin/optimatrix-shadow runtime \
+/Users/logan/Optimatrix/.venv/bin/optimatrix-shadow runtime \
   --event-state NONE \
-  --root "/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1" \
+  --root "/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2" \
   --workbench-port 8765
 ```
 
-The loopback Workbench is then available at `http://127.0.0.1:8765/`. `Ctrl-C` stops the process
-without deleting its accepted Ledger or Journal prefixes; invoking the same command preserves the
-root manifest's first-enrollment provenance and resumes the Session then active. A new empty root
-starts with the currently active Session and current Window; earlier Windows remain absent and are
-never backfilled. While the command remains running, the same process, stable root, and Workbench
-roll to each new Session at `08:00 UTC`; unresolved older Cases continue to later valuation or
-official settlement, and both Ledger and Journal append across Sessions. A complete 24-hour sample
-or `96/96` live population is not a startup or trader-acceptance gate. The active task remains open
-until current public market operation and explicit trader acceptance are directly verified.
+The loopback Workbench is available at `http://127.0.0.1:8765/`. launchd keeps the process alive;
+restarting the same job preserves the root manifest's first-enrollment provenance and accepted
+Ledger or Journal prefixes. A new empty root starts with the currently active Session and current
+Window; earlier Windows remain absent and are never backfilled. While the command remains running,
+the same stable root and Workbench roll to each new Session at `08:00 UTC`; unresolved older Cases
+continue to later valuation or official settlement, and both Ledger and Journal append across
+Sessions. A complete 24-hour sample or `96/96` live population is not a startup gate. The active
+task remains open until the exact natural Candidate-to-Outcome chain is directly observed.
 
 The runtime establishes Deribit UTC before it creates or mutates the stable root. Deribit time owns
 Session, Window, lifecycle, expiry, and settlement boundaries; the host wall clock is not a business
