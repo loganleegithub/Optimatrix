@@ -15,15 +15,20 @@ from optimatrix.market import (
     ImpliedVarianceMethod,
     MarketContext,
     MarketContextEvidence,
+    MarketDataSource,
+    OptionBookUnavailableReason,
     OptionQuote,
     OptionType,
     PriceLevel,
     RealizedVarianceMethod,
     TickSchedule,
     TickStep,
+    UnavailableOptionBook,
 )
 from optimatrix.policy import ObservationPolicy, WindowSchedulePolicy
+from optimatrix.pricing import Action
 from optimatrix.products import PRODUCTS, ProductId
+from optimatrix.route import RouteEvidenceStatus, ShadowRouteEvidence
 from optimatrix.session import DeribitSession
 
 
@@ -139,6 +144,7 @@ class MarketObservation:
     context: MarketContext
     quotes: tuple[OptionQuote, ...]
     data_health_blockers: tuple[str, ...]
+    unavailable_books: tuple[UnavailableOptionBook, ...] = ()
 
     def __post_init__(self) -> None:
         require_identity(self.data_health_policy_id, "data_health_policy_id")
@@ -153,6 +159,17 @@ class MarketObservation:
             raise ValueError("MarketObservation DataHealth does not match MarketContext")
         if len({quote.instrument_name for quote in self.quotes}) != len(self.quotes):
             raise ValueError("MarketObservation quotes must have unique instruments")
+        quote_names = {quote.instrument_name for quote in self.quotes}
+        unavailable_names = tuple(book.instrument_name for book in self.unavailable_books)
+        if len(set(unavailable_names)) != len(unavailable_names):
+            raise ValueError("MarketObservation unavailable books must have unique instruments")
+        readiness_mismatch = set(unavailable_names) != set(
+            self.context.evidence.requested_books
+        ) - set(self.context.evidence.usable_books) or bool(set(unavailable_names) & quote_names)
+        if readiness_mismatch != (
+            "OPTION_BOOK_READINESS_EVIDENCE_MISMATCH" in self.data_health_blockers
+        ):
+            raise ValueError("MarketObservation option-book readiness evidence is incoherent")
         if len(set(self.data_health_blockers)) != len(self.data_health_blockers) or any(
             not blocker for blocker in self.data_health_blockers
         ):
@@ -161,7 +178,7 @@ class MarketObservation:
     @property
     def identity(self) -> str:
         return canonical_identity(
-            "MarketObservationV1",
+            "MarketObservationV3",
             self.channel_id,
             self.data_health_policy_id,
             self.observed_at,
@@ -169,6 +186,7 @@ class MarketObservation:
             self.context,
             tuple(sorted(self.quotes, key=lambda quote: quote.instrument_name)),
             self.data_health_blockers,
+            tuple(sorted(self.unavailable_books, key=lambda book: book.instrument_name)),
         )
 
     @classmethod
@@ -179,6 +197,7 @@ class MarketObservation:
         policy: ObservationPolicy,
         context: MarketContext,
         quotes: tuple[OptionQuote, ...],
+        unavailable_books: tuple[UnavailableOptionBook, ...] = (),
         known_at: datetime | None = None,
     ) -> Self:
         causal_known_at = context.now if known_at is None else _utc(known_at, "known_at")
@@ -188,6 +207,12 @@ class MarketObservation:
         quote_names = {quote.instrument_name for quote in quotes}
         if quote_names != set(context.evidence.usable_books):
             blockers.append("OBSERVATION_UNIVERSE_MISMATCH")
+        unavailable_names = {book.instrument_name for book in unavailable_books}
+        expected_unavailable_names = set(context.evidence.requested_books) - set(
+            context.evidence.usable_books
+        )
+        if unavailable_names != expected_unavailable_names or unavailable_names & quote_names:
+            blockers.append("OPTION_BOOK_READINESS_EVIDENCE_MISMATCH")
         if context.evidence.maximum_market_age_ms != policy.maximum_age_ms:
             blockers.append("DATA_HEALTH_POLICY_AGE_MISMATCH")
         if not quotes:
@@ -240,6 +265,7 @@ class MarketObservation:
             context=context,
             quotes=quotes,
             data_health_blockers=tuple(dict.fromkeys(blockers)),
+            unavailable_books=unavailable_books,
         )
 
     def as_object(self) -> dict[str, object]:
@@ -251,6 +277,9 @@ class MarketObservation:
             "known_at": _iso(self.known_at),
             "context": _market_context_object(self.context),
             "quotes": [_option_quote_object(quote) for quote in self.quotes],
+            "unavailable_books": [
+                _unavailable_option_book_object(book) for book in self.unavailable_books
+            ],
             "data_health_blockers": list(self.data_health_blockers),
         }
 
@@ -267,6 +296,7 @@ class MarketObservation:
                 "known_at",
                 "context",
                 "quotes",
+                "unavailable_books",
                 "data_health_blockers",
             },
             "market_observation",
@@ -279,6 +309,10 @@ class MarketObservation:
             context=_market_context_from_object(item.get("context")),
             quotes=tuple(_option_quote_from_object(member) for member in _array(item, "quotes")),
             data_health_blockers=_string_tuple(item, "data_health_blockers"),
+            unavailable_books=tuple(
+                _unavailable_option_book_from_object(member)
+                for member in _array(item, "unavailable_books")
+            ),
         )
         if _text(item, "market_observation_id") != observation.identity:
             raise ValueError("MarketObservation identity mismatch")
@@ -297,6 +331,8 @@ class DecisionRecord:
     risk_allocation_id: str | None = None
     selected_structure_json: str | None = None
     risk_allocation_json: str | None = None
+    route_evidence_id: str | None = None
+    route_evidence_json: str | None = None
     observation: MarketObservation | None = None
 
     def __post_init__(self) -> None:
@@ -312,12 +348,18 @@ class DecisionRecord:
             require_identity(self.selected_structure_id, "selected_structure_id")
         if self.risk_allocation_id is not None:
             require_identity(self.risk_allocation_id, "risk_allocation_id")
+        if self.route_evidence_id is not None:
+            require_identity(self.route_evidence_id, "route_evidence_id")
         if (self.selected_structure_id is None) != (self.selected_structure_json is None):
             raise ValueError("selected structure identity and payload must appear together")
         if (self.risk_allocation_id is None) != (self.risk_allocation_json is None):
             raise ValueError("risk allocation identity and payload must appear together")
+        if (self.route_evidence_id is None) != (self.route_evidence_json is None):
+            raise ValueError("route evidence identity and payload must appear together")
         if self.risk_allocation_id is not None and self.selected_structure_id is None:
             raise ValueError("risk allocation requires a selected structure")
+        if self.route_evidence_id is not None and self.selected_structure_id is None:
+            raise ValueError("route evidence requires a selected structure")
         if len(set(self.blockers)) != len(self.blockers) or any(not item for item in self.blockers):
             raise ValueError("DecisionRecord blockers must be unique non-empty strings")
         if self.result is DecisionResult.UNKNOWN and not self.blockers:
@@ -329,9 +371,11 @@ class DecisionRecord:
             or self.risk_allocation_id is None
             or self.selected_structure_json is None
             or self.risk_allocation_json is None
+            or self.route_evidence_id is None
+            or self.route_evidence_json is None
         ):
             raise ValueError(
-                "CANDIDATE requires observation, structure, allocation, and no blockers"
+                "CANDIDATE requires observation, structure, allocation, route, and no blockers"
             )
         if self.selected_structure is not None:
             candidate_id = self.selected_structure.get("candidate_id")
@@ -344,6 +388,36 @@ class DecisionRecord:
                 raise ValueError("risk allocation payload does not match its identity")
             if candidate_id != self.selected_structure_id:
                 raise ValueError("risk allocation does not bind the selected structure")
+        route_evidence = self.route_evidence
+        if route_evidence is not None:
+            if route_evidence.identity != self.route_evidence_id:
+                raise ValueError("route evidence payload does not match its identity")
+            if (
+                route_evidence.status is not RouteEvidenceStatus.EVALUABLE
+                or route_evidence.policy_id != self.decision_policy_id
+                or route_evidence.selected_structure_id != self.selected_structure_id
+                or route_evidence.observation_id != self.observation_id
+                or route_evidence.evaluated_at != self.known_at
+            ):
+                raise ValueError("Candidate route evidence does not bind its Decision")
+            if self.observation is None:
+                raise ValueError("Candidate route evidence requires its causal observation")
+            if (
+                route_evidence.observed_at != self.observation.observed_at
+                or route_evidence.observation_known_at != self.observation.known_at
+            ):
+                raise ValueError("Candidate route evidence boundaries do not match its observation")
+            quotes = {quote.instrument_name: quote for quote in self.observation.quotes}
+            for leg in route_evidence.legs:
+                quote = quotes.get(leg.instrument_name)
+                if quote is None:
+                    raise ValueError("Candidate route evidence references a missing component book")
+                levels = quote.ask if leg.action is Action.BUY else quote.bid
+                available = sum((level.quantity for level in levels), Decimal(0))
+                coverage = min(Decimal(1), available / leg.requested_amount)
+                if (leg.available_amount, leg.depth_coverage) != (available, coverage):
+                    raise ValueError("Candidate route depth does not match its observation")
+            self._validate_route_against_structure(route_evidence)
 
     @property
     def selected_structure(self) -> dict[str, object] | None:
@@ -354,9 +428,52 @@ class DecisionRecord:
         return _payload_mapping(self.risk_allocation_json, "risk_allocation")
 
     @property
+    def route_evidence(self) -> ShadowRouteEvidence | None:
+        return (
+            ShadowRouteEvidence.from_object(
+                _payload_mapping(self.route_evidence_json, "route_evidence")
+            )
+            if self.route_evidence_json is not None
+            else None
+        )
+
+    def _validate_route_against_structure(self, evidence: ShadowRouteEvidence) -> None:
+        structure = self.selected_structure
+        if structure is None:
+            raise ValueError("route evidence requires a selected structure payload")
+        legs = _mapping(structure.get("legs"), "selected_structure.legs")
+        names = tuple(
+            _text(_mapping(legs.get(role), f"selected_structure.legs.{role}"), "instrument_name")
+            for role in ("long_put", "short_put", "short_call", "long_call")
+        )
+        if tuple(leg.instrument_name for leg in evidence.legs) != names:
+            raise ValueError("route evidence instruments do not match the selected structure")
+        if evidence.target_amount != _decimal(structure, "option_amount"):
+            raise ValueError("route evidence amount does not match the selected structure")
+        pricing = _mapping(structure.get("pricing"), "selected_structure.pricing")
+        expected = (
+            _text(pricing, "fee_model_id"),
+            _decimal(pricing, "native_gross_credit"),
+            _decimal(pricing, "combo_standard_fee_native"),
+            _decimal(pricing, "native_net_credit"),
+            _decimal(pricing, "boundary_index_price_usd"),
+            _decimal(pricing, "boundary_net_credit_usd"),
+        )
+        actual = (
+            evidence.fee_model_id,
+            evidence.native_gross_credit,
+            evidence.standard_combo_fee_projection_native,
+            evidence.native_net_credit,
+            evidence.boundary_index_price_usd,
+            evidence.boundary_net_credit_usd,
+        )
+        if actual != expected:
+            raise ValueError("route evidence economics do not match the selected structure")
+
+    @property
     def identity(self) -> str:
         return canonical_identity(
-            "DecisionRecordV2",
+            "DecisionRecordV3",
             self.window.identity,
             self.decision_policy_id,
             self.known_at,
@@ -368,6 +485,8 @@ class DecisionRecord:
             self.risk_allocation_id,
             self.selected_structure_json,
             self.risk_allocation_json,
+            self.route_evidence_id,
+            self.route_evidence_json,
         )
 
     @property
@@ -386,8 +505,12 @@ class DecisionRecord:
             "blockers": list(self.blockers),
             "selected_structure_id": self.selected_structure_id,
             "risk_allocation_id": self.risk_allocation_id,
+            "route_evidence_id": self.route_evidence_id,
             "selected_structure": self.selected_structure,
             "risk_allocation": self.risk_allocation,
+            "route_evidence": (
+                self.route_evidence.as_object() if self.route_evidence is not None else None
+            ),
         }
 
     @classmethod
@@ -406,8 +529,10 @@ class DecisionRecord:
                 "blockers",
                 "selected_structure_id",
                 "risk_allocation_id",
+                "route_evidence_id",
                 "selected_structure",
                 "risk_allocation",
+                "route_evidence",
             },
             "decision_record",
         )
@@ -419,6 +544,7 @@ class DecisionRecord:
             raise ValueError("decision_record.observation_id must be text or null")
         selected_structure_id = _optional_text(item, "selected_structure_id")
         risk_allocation_id = _optional_text(item, "risk_allocation_id")
+        route_evidence_id = _optional_text(item, "route_evidence_id")
         encoded_observation = item.get("observation")
         observation = (
             None
@@ -427,6 +553,7 @@ class DecisionRecord:
         )
         selected_structure = _optional_mapping(item, "selected_structure")
         risk_allocation = _optional_mapping(item, "risk_allocation")
+        route_evidence = _optional_mapping(item, "route_evidence")
         record = cls(
             window=DecisionWindow.from_object(item.get("window")),
             decision_policy_id=_text(item, "decision_policy_id"),
@@ -438,6 +565,8 @@ class DecisionRecord:
             risk_allocation_id=risk_allocation_id,
             selected_structure_json=_payload_text(selected_structure),
             risk_allocation_json=_payload_text(risk_allocation),
+            route_evidence_id=route_evidence_id,
+            route_evidence_json=_payload_text(route_evidence),
             observation=observation,
         )
         if _text(item, "decision_record_id") != record.identity:
@@ -555,6 +684,9 @@ def _market_context_evidence_object(evidence: MarketContextEvidence) -> dict[str
         "event_state_source": (
             evidence.event_state_source.value if evidence.event_state_source is not None else None
         ),
+        "market_data_source": (
+            evidence.market_data_source.value if evidence.market_data_source is not None else None
+        ),
         "required_history_start_ms": evidence.required_history_start_ms,
         "history_coverage_start_ms": evidence.history_coverage_start_ms,
         "history_coverage_end_ms": evidence.history_coverage_end_ms,
@@ -579,6 +711,7 @@ def _market_context_evidence_from_object(value: object) -> MarketContextEvidence
             "realized_variance_method",
             "implied_variance_method",
             "event_state_source",
+            "market_data_source",
             "required_history_start_ms",
             "history_coverage_start_ms",
             "history_coverage_end_ms",
@@ -598,6 +731,7 @@ def _market_context_evidence_from_object(value: object) -> MarketContextEvidence
     realized_method = _optional_text(item, "realized_variance_method")
     implied_method = _optional_text(item, "implied_variance_method")
     event_source = _optional_text(item, "event_state_source")
+    market_data_source = _optional_text(item, "market_data_source")
     return MarketContextEvidence(
         realized_variance_method=(
             RealizedVarianceMethod(realized_method) if realized_method is not None else None
@@ -606,6 +740,9 @@ def _market_context_evidence_from_object(value: object) -> MarketContextEvidence
             ImpliedVarianceMethod(implied_method) if implied_method is not None else None
         ),
         event_state_source=(EventStateSource(event_source) if event_source is not None else None),
+        market_data_source=(
+            MarketDataSource(market_data_source) if market_data_source is not None else None
+        ),
         required_history_start_ms=_optional_integer(item, "required_history_start_ms"),
         history_coverage_start_ms=_optional_integer(item, "history_coverage_start_ms"),
         history_coverage_end_ms=_optional_integer(item, "history_coverage_end_ms"),
@@ -642,6 +779,55 @@ def _option_quote_object(quote: OptionQuote) -> dict[str, object]:
         "open_interest": str(quote.open_interest),
         "gamma": str(quote.gamma),
     }
+
+
+def _unavailable_option_book_object(book: UnavailableOptionBook) -> dict[str, object]:
+    return {
+        "unavailable_book_id": book.identity,
+        "instrument_name": book.instrument_name,
+        "product_id": book.product.product_id.value,
+        "product_spec_id": book.product.identity,
+        "expiry": _iso(book.expiry),
+        "strike": str(book.strike),
+        "option_type": book.option_type.value,
+        "reason": book.reason.value,
+    }
+
+
+def _unavailable_option_book_from_object(value: object) -> UnavailableOptionBook:
+    item = _mapping(value, "market_observation.unavailable_book")
+    _require_fields(
+        item,
+        {
+            "unavailable_book_id",
+            "instrument_name",
+            "product_id",
+            "product_spec_id",
+            "expiry",
+            "strike",
+            "option_type",
+            "reason",
+        },
+        "market_observation.unavailable_book",
+    )
+    product_id = ProductId(_text(item, "product_id"))
+    try:
+        product = PRODUCTS[product_id]
+    except KeyError as exc:
+        raise ValueError("market_observation.unavailable_book product is unsupported") from exc
+    if _text(item, "product_spec_id") != product.identity:
+        raise ValueError("UnavailableOptionBook product specification identity mismatch")
+    book = UnavailableOptionBook(
+        instrument_name=_text(item, "instrument_name"),
+        product=product,
+        expiry=_datetime(item, "expiry"),
+        strike=_decimal(item, "strike"),
+        option_type=OptionType(_text(item, "option_type")),
+        reason=OptionBookUnavailableReason(_text(item, "reason")),
+    )
+    if _text(item, "unavailable_book_id") != book.identity:
+        raise ValueError("UnavailableOptionBook identity mismatch")
+    return book
 
 
 def _option_quote_from_object(value: object) -> OptionQuote:

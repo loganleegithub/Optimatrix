@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 import optimatrix.deribit_snapshot as deribit_snapshot
-from optimatrix.decision import schedule_decision_windows
+from optimatrix.decision import MarketObservation, schedule_decision_windows
 from optimatrix.deribit_snapshot import (
     DERIBIT_DELIVERY_PRICE_METHOD_ID,
     DERIBIT_DELIVERY_PRICE_SOURCE_ID,
@@ -156,10 +156,62 @@ def test_incomplete_book_universe_is_unknown_and_skips_structure(policy) -> None
         maximum_books=8,
         depth=20,
     )
-    assert "SELECTION_UNIVERSE_INCOMPLETE" in evaluation.observation.data_health_blockers
-    assert evaluation.selection is None
+    assert not evaluation.observation.data_health_blockers
+    assert [book.instrument_name for book in evaluation.observation.unavailable_books] == [
+        "BTC-X-99000-P"
+    ]
+    assert evaluation.selection is not None
+    assert not evaluation.selection.primary_rank_resolved
+    assert evaluation.selection.selected is None
+    assert evaluation.selection.primary_rank_unresolved_book_names == ("BTC-X-99000-P",)
+    assert (
+        MarketObservation.from_object(evaluation.observation.as_object()) == evaluation.observation
+    )
+    malformed = evaluation.observation.as_object()
+    unavailable = malformed["unavailable_books"]
+    assert isinstance(unavailable, list) and isinstance(unavailable[0], dict)
+    unavailable[0]["combo_instrument_name"] = "FORBIDDEN"
+    with pytest.raises(ValueError, match="fields are invalid"):
+        MarketObservation.from_object(malformed)
     snapshot = evaluation.as_object()
     assert snapshot["projection"]["state"] == "UNKNOWN"
+    assert snapshot["projection"]["blockers"] == ["PRIMARY_RANK_UNRESOLVED_BY_MISSING_BOOKS"]
+
+
+def test_irrelevant_unavailable_book_does_not_pollute_primary_rank(policy) -> None:
+    now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+
+    class IrrelevantClosedBookClient(FakeDeribitClient):
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            if method == "public/get_instruments":
+                instruments = super().call(method, params)
+                assert isinstance(instruments, list)
+                return [*instruments, self._instrument("BTC-X-80000-P", 80000, "put")]
+            if method == "public/get_order_book" and params["instrument_name"] == "BTC-X-80000-P":
+                return {"state": "closed", "instrument_name": "BTC-X-80000-P"}
+            return super().call(method, params)
+
+    evaluation = evaluate_live_btc_snapshot(
+        client=IrrelevantClosedBookClient(now),
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=8,
+        depth=20,
+    )
+
+    assert not evaluation.observation.data_health_blockers
+    assert evaluation.selection is not None and evaluation.selection.primary_rank_resolved
+    assert evaluation.selection.selected is not None
+    assert evaluation.selection.unavailable_book_names == ("BTC-X-80000-P",)
+    assert not evaluation.selection.primary_rank_unresolved_book_names
+    snapshot = evaluation.as_object()
+    assert snapshot["projection"]["state"] == "STRUCTURE_FOUND"
+    assert snapshot["candidate_data_readiness"] == {
+        "status": "COMPLETE",
+        "unavailable_books": ["BTC-X-80000-P"],
+        "primary_rank_unresolved_books": [],
+    }
 
 
 def test_incomplete_book_response_still_advances_complete_cut_known_at(policy) -> None:
@@ -200,8 +252,8 @@ def test_incomplete_book_response_still_advances_complete_cut_known_at(policy) -
     assert evaluation.observation.known_at == now + timedelta(milliseconds=8_500)
     assert evaluation.context.evidence.market_received_min_ms == boundary_ms + 20
     assert evaluation.context.evidence.market_received_max_ms == boundary_ms + 8_500
-    assert "SELECTION_UNIVERSE_INCOMPLETE" in evaluation.observation.data_health_blockers
     assert "MARKET_RECEIVE_SPAN_EXCEEDED" in evaluation.observation.data_health_blockers
+    assert "SELECTION_UNIVERSE_INCOMPLETE" not in evaluation.observation.data_health_blockers
 
 
 def test_default_elapsed_clock_advances_across_macos_sleep(monkeypatch) -> None:
@@ -417,7 +469,7 @@ def test_snapshot_captures_independent_inputs_and_all_books_concurrently(policy)
     assert not evaluation.observation.data_health_blockers
 
 
-def test_snapshot_retries_as_a_whole_when_any_requested_book_call_fails(policy) -> None:
+def test_snapshot_rejects_request_failure_without_causal_completion_boundary(policy) -> None:
     now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
 
     class FailedBookClient(FakeDeribitClient):
@@ -432,8 +484,8 @@ def test_snapshot_retries_as_a_whole_when_any_requested_book_call_fails(policy) 
     with pytest.raises(
         DeribitSourceError,
         match=(
-            "1 of 6 requested option books failed: "
-            "BOOK_REQUEST_OR_PARSE_FAILED:BTC-X-99000-P:DeribitSourceError"
+            "1 of 6 requested option books failed without a validated causal completion boundary: "
+            "BOOK_REQUEST_FAILED:BTC-X-99000-P:DeribitSourceError"
         ),
     ):
         evaluate_live_btc_snapshot(
@@ -444,6 +496,93 @@ def test_snapshot_retries_as_a_whole_when_any_requested_book_call_fails(policy) 
             maximum_books=8,
             depth=20,
         )
+
+
+def test_causally_bounded_irrelevant_request_failure_is_candidate_local(policy) -> None:
+    now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    boundary_us = int(now.timestamp() * 1_000_000)
+
+    class FailedIrrelevantBookClient(FakeDeribitClient):
+        def __init__(self, boundary: datetime) -> None:
+            super().__init__(boundary)
+            self.clock = DeribitClock(monotonic_ns=lambda: 1_000_000_000)
+            envelope = PublicRpcResponse(
+                jsonrpc="2.0",
+                request_id=1,
+                result={},
+                testnet=False,
+                server_received_at_us=boundary_us,
+                server_sent_at_us=boundary_us,
+                server_processing_us=0,
+                request_sent_monotonic_ns=1_000_000_000,
+                response_received_monotonic_ns=1_000_000_000,
+            )
+            self.clock.initialize(
+                envelope.clock_reading,
+                server_sent_at_us=envelope.server_sent_at_us,
+            )
+
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            if method == "public/get_instruments":
+                instruments = super().call(method, params)
+                assert isinstance(instruments, list)
+                return [*instruments, self._instrument("BTC-X-80000-P", 80000, "put")]
+            if (
+                method == "public/get_order_book"
+                and params.get("instrument_name") == "BTC-X-80000-P"
+            ):
+                raise DeribitSourceError("bounded book request failed")
+            return super().call(method, params)
+
+    evaluation = evaluate_live_btc_snapshot(
+        client=FailedIrrelevantBookClient(now),
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=8,
+        depth=20,
+    )
+
+    assert not evaluation.observation.data_health_blockers
+    assert evaluation.selection is not None and evaluation.selection.selected is not None
+    assert evaluation.observation.unavailable_books[0].reason.value == "BOOK_REQUEST_FAILED"
+    assert "BOOK_REQUEST_FAILED:BTC-X-80000-P:DeribitSourceError" in evaluation.warnings
+
+
+def test_irrelevant_invalid_book_response_is_candidate_local(policy) -> None:
+    now = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+
+    class InvalidIrrelevantBookClient(FakeDeribitClient):
+        def call(self, method: str, params: Mapping[str, object]) -> object:
+            if method == "public/get_instruments":
+                instruments = super().call(method, params)
+                assert isinstance(instruments, list)
+                return [*instruments, self._instrument("BTC-X-80000-P", 80000, "put")]
+            if (
+                method == "public/get_order_book"
+                and params.get("instrument_name") == "BTC-X-80000-P"
+            ):
+                return {
+                    "state": "open",
+                    "instrument_name": "BTC-X-80000-P",
+                    "timestamp": int(now.timestamp() * 1000),
+                    "greeks": None,
+                }
+            return super().call(method, params)
+
+    evaluation = evaluate_live_btc_snapshot(
+        client=InvalidIrrelevantBookClient(now),
+        policy=policy,
+        now=now,
+        event_state=EventState.NONE,
+        maximum_books=8,
+        depth=20,
+    )
+
+    assert not evaluation.observation.data_health_blockers
+    assert evaluation.selection is not None and evaluation.selection.selected is not None
+    assert evaluation.observation.unavailable_books[0].reason.value == "BOOK_RESPONSE_INVALID"
+    assert "BOOK_RESPONSE_INVALID:BTC-X-80000-P:DeribitSourceError" in evaluation.warnings
 
 
 def test_snapshot_uses_server_response_envelope_for_causal_book_receipt(policy) -> None:
@@ -549,7 +688,10 @@ def test_snapshot_rejects_source_timestamp_after_its_server_response_envelope(po
                 response_received_monotonic_ns=1_800_000_000,
             )
 
-    with pytest.raises(DeribitSourceError, match="6 of 6 requested option books failed"):
+    with pytest.raises(
+        DeribitSourceError,
+        match="order book source timestamp follows its response envelope",
+    ):
         evaluate_live_btc_snapshot(
             client=InvalidBookCausalityClient(now),
             policy=policy,

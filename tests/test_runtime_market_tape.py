@@ -18,6 +18,7 @@ from optimatrix.deribit_snapshot import (
     fetch_btc_index_history,
 )
 from optimatrix.lifecycle import (
+    MAX_RETAINED_EXPLANATION_POINTS,
     ObservationStatus,
     PositionState,
     TerminalMethod,
@@ -429,6 +430,10 @@ def test_raw_four_leg_tape_runs_candidate_to_strictly_later_whole_product_exit(
         assert allocation["candidate_id"] == structure["candidate_id"]
         assert allocation["option_amount"] == "0.1"
         assert allocation["maximum_contractual_payoff_usd"] == "200.0"
+        assert allocation["stress_reserve_usd"] == "200.0"
+        assert allocation["budget_metric"] == (
+            "MAX_OF_CONTRACTUAL_PAYOFF_EXIT_AND_DELIVERY_STRESS_USD_SUM"
+        )
         assert allocation["session_budget_usd"] == "600"
         assert allocation["session_used_before_usd"] == "0"
         assert allocation["session_remaining_after_usd"] == "400.0"
@@ -570,6 +575,17 @@ def test_raw_four_leg_tape_runs_candidate_to_strictly_later_whole_product_exit(
             "ADVERSE_TRIGGER",
             "FULL_DEPTH_EXIT",
         )
+        enriched = runtime.cases[opened.identity]
+        assert enriched.outcome is not None
+        assert enriched.outcome.explanation.complete
+        assert enriched.outcome.explanation.hold_to_expiry.terminal_evidence_id == (
+            runtime.settlement_fact.identity
+        )
+        assert enriched.outcome.native_result_btc == terminal.outcome.native_result_btc
+        assert enriched.outcome.boundary_reference_result_usd == (
+            terminal.outcome.boundary_reference_result_usd
+        )
+        assert runtime.journal.read(enriched.identity)[-1] == enriched
         document = _document(root / "workbench/workbench-data.js")
         assert document["runtime"]["status"] == "COMPLETE_PENDING_TRADER_ACCEPTANCE"
         assert document["population"]["decisions"]["recorded"] == "96"
@@ -699,6 +715,9 @@ def test_raw_shallow_buyback_keeps_exit_intent_until_official_settlement(
         assert terminal.outcome.terminal_evidence_id == runtime.settlement_fact.identity
         assert terminal.outcome.data_gap_observed
         assert runtime.settlement_fact.delivery_price_usd == Decimal("104000.0")
+        assert terminal.explanation_path.observation_count > len(terminal.explanation_path.points)
+        assert len(terminal.explanation_path.points) <= MAX_RETAINED_EXPLANATION_POINTS
+        assert terminal.explanation_path.statistics
 
         journal = runtime.journal.read(terminal.identity)
         assert journal[-1] == terminal
@@ -718,5 +737,8 @@ def test_raw_shallow_buyback_keeps_exit_intent_until_official_settlement(
         assert _row_value(rendered["exit_intent"], "reason") == "ADVERSE_MOVE"
         assert _row_value(rendered["outcome"], "terminal_method") == "CONTRACT_SETTLEMENT"
         assert _row_value(rendered["outcome"], "data_gap_observed") == "YES"
+        assert rendered["outcome_explanation"]["observation_count"] == (
+            terminal.explanation_path.observation_count
+        )
     finally:
         runtime.close()

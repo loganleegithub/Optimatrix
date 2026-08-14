@@ -2,7 +2,7 @@
   'use strict';
 
   const workbench = window.OPTIMATRIX_WORKBENCH;
-  if (!workbench || workbench.schema_version !== 3) {
+  if (!workbench || workbench.schema_version !== 7) {
     document.body.textContent = 'Workbench 数据缺失或版本不受支持。';
     return;
   }
@@ -16,6 +16,7 @@
     cases: (document.cases || []).map(item => ({
       tradeCaseId: item.trade_case_id,
       entryStatus: item.entry_status,
+      entryReunderwritingId: item.entry_reunderwriting?.summary?.find(row => row.key === 'entry_reunderwriting_id')?.value,
       positionState: item.position_state,
       terminalAt: item.display?.terminal_at,
       gapObserved: item.display?.gap_observed
@@ -83,9 +84,20 @@
     STOPPED_FOR_RESTART: '等待重启',
     SNAPSHOT_ONLY: '单次快照',
     COMPLETE: '已完成',
+    PRIMARY_RANK_UNRESOLVED: 'Primary 排名未决',
     COMPLETE_PENDING_TRADER_ACCEPTANCE: '完成 · 待交易员验收',
     UNKNOWN: '未知',
     KNOWN: '已知',
+    EVALUABLE: '可评估',
+    NOT_EVALUABLE: '不可评估',
+    NOT_APPLICABLE: '不适用',
+    DECISION: '决策',
+    ENTRY: '入场重承保',
+    MONITOR: '持续监控',
+    EXIT: '退出估价',
+    NO_ENTRY: '不入场对照',
+    HOLD_TO_EXPIRY: '持有到期对照',
+    OFFICIAL_EXPIRY_SETTLEMENT_PENDING: '等待匹配的官方交割事实',
     YES: '是',
     NO: '否',
     NONE: '无',
@@ -94,6 +106,7 @@
     NO_LEGAL_FOUR_LEG_STRUCTURE: '当前到期与行权价组合未形成合法完整四腿',
     NO_PRICE_EVALUABLE_FOUR_LEG_STRUCTURE: '已有合法结构，但完整四腿无法估价',
     NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE: '已有合法且可估价结构，但没有符合当前 Policy 的候选',
+    PRIMARY_RANK_UNRESOLVED_BY_MISSING_BOOKS: '缺失盘口仍可能改变 Primary 排名',
     PUBLIC_MARKET_GAP: '公开行情切面不完整，本窗口无法判断',
     RESTART_INTERRUPTED_CAUSAL_CUT: '重启中断因果切面，本窗口不重抓',
     BOUNDARY_NET_CREDIT_TOO_SMALL: '净权利金不足',
@@ -116,6 +129,11 @@
     TAKE_PROFIT: '止盈',
     SHADOW_ATOMIC_EVALUABLE: '完整组合可估价',
     SHADOW_ATOMIC_NOT_EVALUABLE: '完整事实证明无法估价',
+    ENTRY_EVIDENCE_UNKNOWN: '入场证据未知',
+    ENTRY_THESIS_EXPIRED: '入场论点已失效',
+    ENTRY_STRUCTURE_LIMIT_BREACHED: '入场结构限制已突破',
+    ENTRY_PRICE_DETERIORATED: '入场经济性已恶化',
+    RISK_RESERVATION_INVALID: '冻结研究预算无效',
     MONITORING: '管理中',
     EXIT_INTENT_FROZEN: '退出意图已冻结',
     TERMINAL: '终局已冻结',
@@ -374,6 +392,7 @@
     renderLifecycle(display.timeline);
     renderStructure(caseView);
     renderManagement(caseView);
+    renderOutcomeExplanation(caseView);
     renderResponsibility(caseView);
   }
 
@@ -409,6 +428,7 @@
       metricItem('入场净权利金', economics.native_net_credit ? `${economics.native_net_credit} BTC` : '未知', 'positive'),
       metricItem('标准 Combo 手续费', economics.combo_standard_fee_native ? `${economics.combo_standard_fee_native} BTC` : allocation.combo_fee_native ? `${allocation.combo_fee_native} BTC` : '未知'),
       metricItem('契约赔付上限', allocation.maximum_contractual_payoff_usd ? `${allocation.maximum_contractual_payoff_usd} USD` : '未知'),
+      metricItem('压力预算占用', allocation.stress_reserve_usd ? `${allocation.stress_reserve_usd} USD` : '未知'),
       metricItem('研究预算结果', translate(display.allocation_result), display.allocation_result === 'AVAILABLE' ? 'positive' : 'warning'),
       metricItem('到期', formatTimestamp(display.expiry))
     );
@@ -481,10 +501,17 @@
     target.replaceChildren();
     const context = valueMap(workbench.context);
     const allocation = valueMap(caseView.risk_allocation);
+    const reunderwriting = caseView.entry_reunderwriting || {};
+    const reunderwritingSummary = valueMap(reunderwriting.summary);
+    const decisionRoute = valueMap((caseView.decision_route_evidence || {}).summary);
     const blocks = [
       ['为什么发现', `本窗口状态为 ${translate(workbench.projection.state)}；IV/RV、跳跃占比与事件状态都是具名公开代理，不是 Edge 或预测。`],
       ['为什么选它', `四腿作为一个不可拆的铁鹰整体冻结。短腿、翼宽与 Combo 费都属于同一候选，不能拆成两笔 Vertical。`],
-      ['为什么允许打开 Case', `Shadow 风险预算结果为 ${translate(allocation.result)}；市场上下文为 ${translate(context.knowledge)}。这是研究名义限额，不是保证金或资本预留。`]
+      ['为什么允许打开 Case', `Shadow 风险预算结果为 ${translate(allocation.result)}；市场上下文为 ${translate(context.knowledge)}。这是研究名义限额，不是保证金或资本预留。`],
+      ['Decision 路由证据', `${translate(decisionRoute.kind)} / ${translate(decisionRoute.status)}；完整目标数量 ${decisionRoute.target_amount || '未知'} BTC。仅为公众 component books 合成估价。`],
+      ['Entry 二次承销', reunderwriting.available === false
+        ? '尚未取得严格更晚的 Entry 证据。'
+        : `结果为 ${translate(reunderwritingSummary.status)}；${reunderwriting.comparison || '指标对比未知'}。冻结四腿与预算未被替换。`]
     ];
     blocks.forEach(([title, copy]) => {
       const block = create('article', 'story-block');
@@ -496,11 +523,16 @@
 
   function renderManagement(caseView) {
     const display = caseView.display;
-    const entry = valueMap(caseView.entry_evidence);
     const outcome = valueMap(caseView.outcome);
+    const entryReunderwriting = caseView.entry_reunderwriting || {};
+    const routeProjection = (caseView.entry_route_evidence || {}).available
+      ? caseView.entry_route_evidence
+      : caseView.decision_route_evidence || {};
+    const route = valueMap(routeProjection.summary);
     const summary = byId('management-summary');
     summary.replaceChildren(
       metricItem('入场结果', translate(display.entry_status)),
+      metricItem('Entry VRP', entryReunderwriting.entry_vrp || '未知'),
       metricItem('Position 状态', translate(display.position_state), display.tone),
       metricItem('最后生命周期观察', formatTimestamp(valueMap(caseView.facts).last_observed_at)),
       metricItem('首次退出原因', translate(display.exit_reason)),
@@ -525,9 +557,49 @@
     appendText(knownBlock, 'strong', '', display.gap_observed ? '存在数据 Gap' : '因果前缀连续');
     appendText(knownBlock, 'span', '', 'DataHealth 不等于 TradingRisk；Gap 不会擦除 Position 或退出责任');
     const pricingBlock = create('div', 'quality-block');
-    appendText(pricingBlock, 'strong', '', translate(entry.entry_pricing_basis || 'SYNTHETIC_FOUR_LEG_COMPONENT_BOOK_ESTIMATE_V1'));
-    appendText(pricingBlock, 'span', '', '公众四腿合成估价，不代表 Combo 可成交或已预留流动性');
+    appendText(pricingBlock, 'strong', '', `${translate(route.kind || 'COMPONENT_SYNTHETIC_ESTIMATE')} · ${translate(route.status || 'UNKNOWN')}`);
+    appendText(pricingBlock, 'span', '', `${route.model_id || 'SYNTHETIC_FOUR_LEG_COMPONENT_BOOK_ESTIMATE_V1'}；不代表 Combo 报价、RFQ、订单、成交、账户仓位或已预留流动性`);
     quality.append(knownBlock, pricingBlock);
+  }
+
+  function renderOutcomeExplanation(caseView) {
+    const explanation = caseView.outcome_explanation || {};
+    const summary = valueMap(explanation.summary);
+    const metrics = byId('outcome-explanation-summary');
+    metrics.replaceChildren(
+      metricItem('解释状态', explanation.complete === true ? '完整' : explanation.complete === false ? '等待官方交割补全' : '路径累积中', explanation.complete === true ? 'positive' : 'warning'),
+      metricItem('MFE', summary.maximum_favorable_excursion_btc ? `${summary.maximum_favorable_excursion_btc} BTC` : '未知'),
+      metricItem('MAE', summary.maximum_adverse_excursion_btc ? `${summary.maximum_adverse_excursion_btc} BTC` : '未知'),
+      metricItem('最大短腿 Delta', summary.maximum_short_abs_delta || '未知'),
+      metricItem('Put 最近距离', summary.minimum_put_short_distance_usd ? `${summary.minimum_put_short_distance_usd} USD` : '未知'),
+      metricItem('Call 最近距离', summary.minimum_call_short_distance_usd ? `${summary.minimum_call_short_distance_usd} USD` : '未知'),
+      metricItem('观察 / 代表点', `${explanation.observation_count || 0} / ${(explanation.path || []).length}`),
+      metricItem('路径 Gap', String((explanation.gaps || []).length), (explanation.gaps || []).length ? 'warning' : 'positive'),
+      metricItem('冻结替代结果', String((explanation.alternative_outcomes || []).length))
+    );
+    const path = byId('outcome-explanation-path');
+    path.replaceChildren();
+    (explanation.path || []).forEach(point => {
+      const card = create('article', 'explanation-point');
+      appendText(card, 'strong', '', `${translate(point.phase)} · ${translate(point.observation_status)}`);
+      appendText(card, 'span', '', formatTimestamp(point.observed_at));
+      appendText(card, 'span', '', point.native_result_btc === null ? translate(point.valuation_reason || point.reason) : `${point.native_result_btc} BTC`);
+      appendText(card, 'small', '', point.observation_status === 'KNOWN'
+        ? `Put/Call Delta ${point.short_put_abs_delta} / ${point.short_call_abs_delta} · IV ${point.short_put_mark_iv} / ${point.short_call_mark_iv} · RV ${point.trailing_realized_variance_proxy}`
+        : translate(point.reason));
+      path.append(card);
+    });
+    if (!(explanation.path || []).length) {
+      path.append(create('p', 'trace-empty', '尚无可展示的解释路径。'));
+    }
+    const counterfactuals = byId('outcome-counterfactuals');
+    counterfactuals.replaceChildren();
+    (explanation.counterfactuals || []).forEach(item => {
+      const card = create('article', 'quality-block');
+      appendText(card, 'strong', '', `${translate(item.kind)} · ${translate(item.status)}`);
+      appendText(card, 'span', '', item.native_result_btc === null ? translate(item.reason) : `${item.native_result_btc} BTC · ${item.boundary_reference_result_usd} USD`);
+      counterfactuals.append(card);
+    });
   }
 
   function renderResponsibility(caseView) {

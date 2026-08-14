@@ -28,6 +28,7 @@ channels.py          fixed Channel descriptors
 session.py           Deribit Session and phase classification
 market.py            typed market facts, settlement facts, and evidence validation
 deribit_snapshot.py  bounded public-response translation
+deribit_websocket.py BTC-only public incremental cache, continuity, watermark, and REST resync
 pricing.py           neutral depth projections plus fee, payoff, valuation, and settlement math
 policy.py            fixed launch hypotheses and causal budgets
 structure.py         BTC 0DTE whole-four-leg discovery and ranking
@@ -55,7 +56,9 @@ are never selected from the host wall clock or a browser timezone. Deribit sourc
 when a market fact occurred. A distinct `known_at` states when that fact was causally available to
 Optimatrix, but it is mapped into the same Deribit UTC clock domain from validated response timing.
 Keeping those two meanings separate prevents look-ahead; it does not create a second business
-clock.
+clock. Public WebSocket notifications have no HTTP response envelope, so their receipt boundary is
+the conservative latest value of that already validated and monotonically projected Deribit clock
+at frame receipt. This projection does not turn local elapsed time into a market timestamp.
 
 Elapsed request time, retry delay, and process sleep use a suspend-aware monotonic clock and are
 never serialized as market facts. On the authorized macOS runtime that elapsed clock must continue
@@ -72,6 +75,23 @@ change an identity or backend calculation.
 `UNKNOWN` or a Gap; it cannot synthesize a market-risk trigger, Entry, Position, close, or terminal
 fact. Only the owning contract may define how a known risk fact changes a Decision or Position.
 
+The production forward-observation owner is one BTC-specific in-memory public WebSocket cache.
+Each option book verifies its own ordered change chain; cross-instrument notifications remain
+asynchronous and become one immutable cut only when the BTC index and every requested book/ticker
+pair share the current connection epoch and satisfy the Policy's source and receive watermarks. A
+book snapshot remains the current depth state through silence while that verified chain and epoch
+remain intact. The effective member watermark is the later boundary of the retained book/ticker
+pair, so content-change time is not confused with continuity time; cross-instrument freshness and
+span checks still apply to the index and every effective instrument member. For a scheduled Window,
+the cache also waits until the source watermark reaches the Window start instead of consuming the
+retained pre-Window cut; that wait remains bounded by the existing source timeout and Window input
+grace. Disconnect or sequence loss is an exact Gap. A bounded REST book snapshot may seed recovery,
+but the instrument cannot rejoin the incremental cut until a later matching WebSocket continuation
+or new full snapshot proves continuity. HTTP remains the clock, Session metadata, initial
+index-history recovery seed, official settlement, and explicit resynchronization path; it is not
+the continuous Runtime market-cut path. The cache is transient and creates no new durable record
+owner.
+
 ## Record boundaries
 
 `ObservationLedger` measures each scheduled Session denominator and appends the enrolled-Window
@@ -82,7 +102,10 @@ It is implemented and authorized only when `CURRENT_STAGE.md` says so.
 
 `CaseJournal` begins only after a Candidate opens a TradeCase. It stores accepted immutable-prefix
 snapshots of the TradeCase, later Entry truth, Position lifecycle, and Case/Position Outcome defined
-by the same contract. It cannot replace Session coverage or infer missing Window evidence.
+by the same contract. A terminal snapshot is otherwise closed; the only post-terminal append is the
+contract-owned official-settlement enrichment of an already pending early-exit hold counterfactual,
+with all terminal economics and risk state unchanged. It cannot replace Session coverage or infer
+missing Window evidence.
 At B3 the active runtime task authorizes one exact manifest-enrolled stable root and one process-
 exclusive continuous writer. The manifest freezes implementation and Policy identity plus the
 Session, Window, and boundary of first enrollment; it does not bind the root forever to that

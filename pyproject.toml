@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Deribit inverse BTC 0DTE two-sided premium-sale Shadow core"
 readme = "README.md"
 requires-python = ">=3.13,<3.15"
-dependencies = []
+dependencies = ["websockets==17.0.1"]
 
 [project.scripts]
 optimatrix-shadow = "optimatrix.cli:main"

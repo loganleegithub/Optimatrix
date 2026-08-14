@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 PUBLIC SHADOW RUNTIME — ACTIVE
+**Status:** B3 NATURAL FORWARD CHAIN ACCEPTANCE — ACTIVE
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -10,130 +10,153 @@
 
 **Current task kind:** `IMPLEMENTATION`
 
-**Sole authorized closure:** [`../../tasks/B3_PUBLIC_SHADOW_RUNTIME.md`](../../tasks/B3_PUBLIC_SHADOW_RUNTIME.md)
+**Sole authorized closure:** [`B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE`](../../tasks/B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE.md)
 
 ## Current permissions
 
 Stage is the permission ceiling; a future active task may only narrow it.
 
-**Offline checks and simulation:** authorized in disposable ignored `build/` roots
+**Offline checks and simulation:** authorized only in caller-supplied ignored roots
 
-**Public market calls:** production Deribit public methods and exact bounds authorized only by the
-active task
+**Public market calls:** only unauthenticated production `wss://www.deribit.com/ws/api/v2` public
+heartbeat, subscribe, unsubscribe, test, BTC index, and aggregated `100ms` BTC option book/ticker
+channels, plus `https://www.deribit.com/api/v2` public clock, instrument metadata, initial index-path
+recovery seed, affected-book resync, and official settlement calls made by the exact active command
 
-**Stable ObservationLedger root:** `/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1`
-for one process-exclusive, cross-Session append history during the active task only
+**Stable ObservationLedger root:** only
+`/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2`
 
 **Disposable offline ObservationLedger:** authorized only under caller-supplied ignored roots
 
-**Stable CaseJournal root:** the same cross-Session active-task root, isolated from every legacy or
-foreign root
+**Stable CaseJournal root:** only
+`/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2`
 
-**Continuous runtime:** one local Python process that rolls the active Deribit Session in place at
-each `08:00 UTC` boundary, plus one loopback-only Workbench, authorized by the active task
+**Frozen prior evidence:** `/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1`
+is retained without migration or mutation and remains ineligible for the current Policy.
 
-**Backend time authority:** validated Deribit UTC only for every absolute business boundary;
-monotonic process time only for elapsed waits, and browser-local time only for presentation
+**Continuous runtime:** only launchd label `com.optimatrix.b3-public-shadow`, executing the current
+`origin/main` console script from `/Users/logan/Optimatrix`, with EventState `NONE`, Policy identity
+`sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`, the exact v2 root,
+loopback Workbench port `8765`, and no duration expansion into another process or root
 
 **Private read-only account permission:** `NONE`
 
-**Orders, capital, and deployment:** `NONE`
+**Orders, capital, and deployment:** deployment is limited to replacing the existing local launchd
+job with the exact active-task public Shadow command. Orders, fills, capital, private access, and
+remote deployment remain `NONE`
 
 **Policy qualification / Edge claim:** `NONE`
 
-**B3 Policy correction:** current numeric filters and trigger thresholds are provisional research
-hypotheses, not Authority. The active task may correct a value only when primary-source mechanism
-evidence or a causal-market falsification shows the current value is internally inconsistent or
-unsafe; every correction must preserve the prior value in Git, rerun the same tape before and after,
-and may not be tuned to manufacture Candidates, Outcomes, win rate, or an Edge claim.
-
 ## Current implementation truth
 
-- `DecisionWindow` is a Policy-scheduled, Session-aligned denominator. The current 15-minute
-  schedule produces 96 immutable Windows per Deribit Session. An encountered Window produces at
-  most one DecisionRecord; a pre-enrollment Window remains missing, while an attempted unhealthy
-  observation produces `UNKNOWN`.
-- `MarketObservation` binds one bounded universe, causal timestamps, DataHealth Policy, public
-  facts, and named proxies. `ObservationLedger` appends at most one DecisionRecord and one distinct
-  WindowOutcome per Window under a caller-supplied root.
-- Deribit UTC is the backend clock authority. Session rollover is anchored at `08:00 UTC`;
-  source/observed and causal-known boundaries retain separate meanings in that one domain. Host
-  wall time cannot select or advance business state, monotonic time measures only durations, and
-  the Workbench browser owns local-time display conversion.
-- BTC selection directly evaluates whole same-Session four-leg structures. It separately reports
-  legal, price-evaluable, and Policy-eligible populations, freezes bounded comparable alternatives,
-  uses standard Combo fee projection, and treats current close depth as a diagnostic rather than an
-  Entry veto.
-- Current environment, leg-selection, underwriting, allocation, and exit numerics are unqualified
-  B3 hypotheses. Their identities are frozen per Decision/Case for causal comparison, but the active
-  implementation may replace an obviously incoherent value under the correction rule above; no
-  present value is called optimal, portable across markets, or profitable.
-- A Candidate requires one `AVAILABLE` ShadowRiskAllocation with explicit USD contractual-payoff
-  budget, native-BTC economics, inverse delivery-price stresses, capacity boundary, expiry, and
-  release rule.
-- A Candidate opens one `truth_layer=SHADOW_PROJECTION` TradeCase. Entry is strictly later and only
-  `SHADOW_ATOMIC_EVALUABLE` creates one whole-product Shadow Position; missing or shallow component
-  facts never create partial exposure or remediation states.
-- Position monitoring uses the frozen structure expiry and Policy cadence. DataHealth gaps preserve
-  the Position and existing intent; the first known whole-product ExitIntent is immutable; only a
-  strictly later whole-product estimate or a matching typed expiry-settlement fact terminalizes it.
-- `CaseJournal` stores an append-only accepted TradeCase prefix under a caller-supplied root and can
-  discard only an unterminated final write. `ShadowCaseOutcome` keeps terminal economics separate
-  from enrolled-Window future-path truth and exposes eight independent eligibility facts.
-- `runtime.py` implements one production-public BTC process whose root manifest preserves immutable
-  first-enrollment provenance rather than binding the root forever to one Session. A new empty root
-  records the Session, current Window, and boundary first encountered at process start; earlier
-  Windows remain absent rather than being backfilled. The same process rolls to the next Session at
-  each `08:00 UTC` boundary, appends that Session's Window facts to the same Ledger, recovers every
-  accepted unresolved Case across prior Sessions, and continues monitoring or official settlement
-  alongside the current Session. Restart preserves first-enrollment provenance, resumes the Session
-  then active without inventing missed facts, reconstructs only that Session's Shadow capacity, and
-  continuously rewrites one loopback-only Workbench. Its public method allowlist, exact stable root,
-  Policy identity, bounds, and port are fail-closed to the active task.
-- The deterministic acceptance population contains `96/96` DecisionRecords and `96/96`
-  WindowOutcomes. In addition to fault-injected restart recovery, an append-only causal tape of raw
-  Deribit-shaped responses now drives every Window through the production public translator. It
-  proves frozen four-leg risk, Entry, monitoring, public-market triggers, strictly later atomic
-  exit or official-settlement fallback, capacity recovery/release, and their trader-visible Case
-  evidence. These simulations falsify the runtime implementation but are not production market
-  evidence.
+- Entry reunderwriting requires later environment, exact frozen structure, economics, allocation,
+  and route evidence to pass before a Shadow Position exists, and its complete Decision-to-Entry
+  result remains recoverable.
+- Policy schema 9 gives new MarketObservations, Decisions, route evidence, allocations, and Cases
+  identities distinct from schema-8 and frozen v1 evidence without changing any Policy threshold or
+  ranking rule.
+- `ShadowRiskAllocation` records nominal contractual payoff, boundary-valued exit-cost stress,
+  every inverse-delivery stress, their maximum delivery loss, and one conservative stress reserve.
+  The reserve is exactly the maximum of nominal payoff, exit stress, and maximum delivery stress.
+- The same reserve and metric own Decision admission, Session aggregation, the frozen allocation
+  record, Case validation, restart reconstruction, and terminal release. Missing, malformed,
+  identity-incoherent, or retired-metric allocation records fail closed rather than contributing an
+  invented zero.
+- The adversarial deterministic Candidate has `200 USD` nominal payoff and `402 USD` exit stress.
+  With `300 USD` already reserved against the unchanged `600 USD` Session budget, it is rejected;
+  the former nominal-only permissive branch is therefore absent.
+- Every selected current-Policy Decision freezes one content-addressed route record, and every
+  Entry freezes a distinct later record. Both bind the exact frozen `+1/-1/-1/+1` instruments,
+  full target amount, causal cut, per-leg component depth, synthetic model, fee projection, and
+  economics; Ledger, Journal, recovery, Outcome, and Workbench retain their identities.
+- Route status distinguishes `EVALUABLE`, `NOT_EVALUABLE`, and `UNKNOWN` without inventing depth or
+  whole-product economics. Only `EVALUABLE/COMPONENT_SYNTHETIC_ESTIMATE` can support a Shadow
+  Position.
+- B3 route constructors and strict codecs reject `COMBO_BOOK_QUOTE`, `RFQ`, and `ACTUAL_FILL`, plus
+  every injected Combo-instrument, RFQ, order, trade, fill, account, executable-liquidity, and
+  fill-probability field. A standard Combo fee projection remains only a cost-model fact.
+- Every requested-but-unusable option book is retained as typed, content-addressed metadata with
+  its instrument, product, expiry, strike, option type, and reason. A request failure is localizable
+  only when the validated Deribit clock supplies its causal completion boundary; otherwise the
+  bounded snapshot fails.
+- Structure search evaluates every usable-book Candidate under the unchanged Policy. Missing books
+  that cannot participate in any Policy-legal four-leg geometry do not block the observed Primary;
+  if an unresolved Candidate could still change the rank, the Window is `UNKNOWN` with the exact
+  missing book identities and cannot allocate risk.
+- Source/receive span, freshness, continuity, required metadata, response timing, and instrument
+  identity remain global causal DataHealth. The slow-unavailable-book fixture still fails globally
+  on its original receive-span and stale boundaries.
+- Every current-Policy Candidate Case owns one content-addressed Decision-to-Outcome explanation.
+  It retains at most `20` representative market points while every accepted observation advances
+  an exact count and monotonic evidence-bound landmarks for MFE/MAE, maximum short Delta, minimum
+  distance to both short strikes, IV/RV range, and jump or directional extremes.
+- Exact typed Gaps replace the former scalar flag and bind their causal source, known-at boundary,
+  observation when one exists, Entry reunderwriting when applicable, and reason. `CaseJournal`
+  rejects erased prefixes, non-monotonic extrema, and extrema not owned by the advancing cut.
+- Final Entry freezes the status and later route evidence of every bounded Decision alternative.
+  Evaluable alternatives use the same actual Entry and terminal cuts; unavailable alternatives
+  preserve `UNKNOWN`, `NOT_EVALUABLE`, or `NOT_APPLICABLE` with an exact reason and are never
+  reselected after the Decision.
+- `ShadowCaseOutcomeV2` binds Decision and Entry metrics, path and Gap identities, standard Combo
+  fee projections, MFE/MAE, Delta and short-strike breaches, alternative Outcomes, the primary
+  terminal reason, an exact zero no-entry baseline, and a hold-to-expiry counterfactual. It makes
+  no fill, slippage, account, executable-liquidity, real-Position, or realized-PnL claim.
+- A strictly later whole-product Shadow exit remains economically terminal and releases its exact
+  reserve immediately. Only the matching official settlement may append one hold-counterfactual
+  enrichment; it cannot rewrite exit economics, primary reason, path, terminality, or risk state.
+- Runtime root schema 3, `MarketObservationV3`, `TradeCaseSnapshotV3`,
+  `ShadowExplanationPathV2`, and Workbench schema 7 reject prior source or explanatory shapes rather
+  than migrating the frozen prior root. Workbench exposes market-source identity, Candidate-local
+  readiness, the Decision-to-Outcome path, extrema, Gaps, alternatives, fees, and counterfactuals
+  without inventing missing facts.
+- The production Runtime source now composes every future market cut from one BTC-only
+  unauthenticated public WebSocket cache over the BTC index and aggregated `100ms` option book and
+  ticker channels. It no longer performs continuous HTTP index or component-book polling.
+- Each option book validates its own `change_id` / `prev_change_id` chain. A cut is available only
+  when every requested book/ticker pair and the index share one connection epoch and satisfy the
+  unchanged source, receive, freshness, and cross-input bounds.
+- An initialized book retains its depth through notification silence while its connection epoch and
+  verified change chain remain intact. Each option contributes the later book/ticker source and
+  receive boundary to cross-instrument freshness and span checks; a last content-change timestamp is
+  not itself a continuity failure.
+- A scheduled Window may consume its one public cut only after the source watermark reaches that
+  Window's start. The existing bounded cache wait owns this lower boundary; retained pre-Window
+  state cannot consume the attempt while the input grace remains available.
+- Disconnect, incomplete initialization, staleness, and sequence loss fail through the exact
+  Runtime Gap path. One affected-book REST snapshot may seed resynchronization, but that instrument
+  rejoins only after a matching WebSocket continuation or a new full WebSocket snapshot.
+- HTTP remains limited to clock preflight/re-anchor, Session instrument metadata, initial index-path
+  recovery seed, official settlement, and explicit affected-book recovery fallback. The feed adds
+  no durable store, database, bus, replay framework, private method, or authenticated `raw` channel.
+- The complete repository gate passes: `225` tests and `8` deterministic business scenarios. This
+  is offline implementation evidence, not current market, execution, or profitability evidence.
+- Outside the exact active-task command, live runtime, stable-root writes, and market calls remain
+  disabled. Private facts, orders, capital, and any other local or remote deployment remain
+  unconditionally disabled.
 
-The component-Vertical acquisition path, public-Combo discovery gate, buyback-depth hard veto,
-partial/remediation graph, residual-wing lifecycle, and pre-A0 journal codec are absent.
-
-The continuous runtime and stable-root implementation now exist, but current production market
-operation and trader page acceptance have not yet been directly observed. A full 24-hour sample and
-a deliberately forced restart are not product prerequisites. No private account truth, real Combo
-order or fill lifecycle, account capital reservation, qualified Policy, Edge, Alpha, win-rate, or
-profitability evidence exists.
-
-**Primary blocker:** `CURRENT_PUBLIC_SHADOW_NOT_OBSERVED` — source can express the complete research
-loop, but current production Deribit facts have not yet been driven into the runtime and accepted on
-the trader page. The active task must close this before C1 may be activated.
+**Primary blocker:** `AUTHORIZED_RUNTIME_DEPLOYMENT_PENDING` — launch `3/3` directly falsified a
+steady-Window boundary race, while correctly failing that Window closed as
+`UNKNOWN/OBSERVATION_OUTSIDE_WINDOW`. The source-watermark lower bound now passes `225` tests and all
+`8` business scenarios. The user has explicitly superseded the exhausted validation-launch ceiling
+with one persistent local launchd deployment of current `origin/main`; the old v1 job and launch
+`3/3` must stop before that job acquires v2. After deployment, `NATURAL_FORWARD_CHAIN_UNVERIFIED`
+remains until the complete chain is recovered. Policy, ranking, lifecycle, route, risk, and Outcome
+semantics remain unchanged.
 
 ## Maturity ladder
 
-This is the only maturity ladder. A stage name describes evidence maturity; it grants no permission.
-Entry into a later stage requires a new active task, exact permissions, and measured acceptance of
-its predecessor.
+- `A0_AUTHORITY_CORRECTION` — one owner per concept, explicit truth layers, and no cross-layer
+  inference.
+- `B1_WINDOW_OBSERVATION` — causal all-Window ObservationLedger and measured reachability.
+- `B2_STRUCTURE_PRICING` — route-independent whole-four-leg discovery and inverse-unit economics.
+- `B3_ATOMIC_PUBLIC_SHADOW` — complete whole-product Shadow Case, monitoring, terminality, and
+  explanatory Outcome without fill claims.
+- `C1_PRIVATE_READ_ONLY` — authenticated account truth with no order permission.
+- `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
+- `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-- `A0_AUTHORITY_CORRECTION` — one owner per concept, four online identities plus one optional
-  derived Episode grouping, explicit truth layers, and no cross-layer inference.
-- `B1_WINDOW_OBSERVATION` — pre-registered public DecisionWindows, causal DataHealth, all-Window
-  ObservationLedger, measured denominator, and blocker/Candidate reachability.
-- `B2_STRUCTURE_PRICING` — route-independent four-leg discovery, bounded alternatives, inverse-unit
-  correctness, Combo fees, and measured liquidity/stress evidence.
-- `B3_ATOMIC_PUBLIC_SHADOW` — complete whole-product public Shadow TradeCase, monitoring, exit or
-  settlement, Outcome, and future-path population without fill claims.
-- `C1_PRIVATE_READ_ONLY` — authenticated account, margin, order, fill, fee, and Position
-  reconciliation with no order permission.
-- `C2_AUTHORIZED_COMBO_EXECUTION` — bounded Deribit Combo execution beginning on testnet; any real
-  capital requires separate exact authorization and acceptance.
-- `D1_OFFLINE_AI_CHALLENGER` — sufficient forward Outcomes support frozen chronological or
-  walk-forward Base-versus-Challenger recommendations with human promotion only.
-
-**Next upgrade condition:** only after current production public market operation and explicit trader
-Workbench acceptance close the active runtime task may a bounded `C1_PRIVATE_READ_ONLY` task be
-activated. That task must name an exact private read-only permission, authenticated evidence source,
-redaction boundary, and reconciliation acceptance. It may not place, edit, cancel, or simulate an
-order, reserve capital, promote Policy, or infer real Position truth from Public Shadow records.
+**Active closure boundary:** merge and push the verified remediation to `main`, replace the exact
+local launchd job onto v2, verify one healthy public cut and loopback Workbench, and continue until
+the exact natural chain exists. The deployment is a newly authorized persistent successor, not a
+fourth bounded validation launch. Private facts, orders, v1 reuse, threshold changes, Edge claims,
+remote deployment, and B4 remain forbidden.

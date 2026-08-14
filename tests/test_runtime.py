@@ -1342,6 +1342,10 @@ def test_fixed_runtime_preflight_retries_without_consulting_host_wall(
 
     monkeypatch.setattr("optimatrix.runtime.datetime", ForbiddenHostWall)
     monkeypatch.setattr("optimatrix.runtime.preflight_public_clock", fake_preflight)
+    monkeypatch.setattr(
+        "optimatrix.runtime.AUTHORIZED_RUNTIME_POLICY_IDENTITY",
+        policy.identity,
+    )
     source = DeribitPublicRuntimeSource(policy=policy, event_state=EventState.NONE)
     runtime = BtcPublicShadowRuntime(
         root=tmp_path / "stable",

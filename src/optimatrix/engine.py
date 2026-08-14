@@ -10,17 +10,23 @@ from optimatrix.decision import (
     schedule_decision_windows,
 )
 from optimatrix.lifecycle import (
-    ShadowEntryEvaluation,
+    ShadowEntryReunderwriting,
     ShadowExitEvaluation,
     ShadowMonitorEvaluation,
     TradeCase,
+    enrich_shadow_exit_outcome_at_settlement,
     evaluate_shadow_entry,
     evaluate_shadow_exit,
     monitor_shadow_position,
     open_trade_case,
     settle_shadow_position,
 )
-from optimatrix.market import ExpirySettlementFact, MarketContext, OptionQuote
+from optimatrix.market import (
+    ExpirySettlementFact,
+    MarketContext,
+    OptionQuote,
+    UnavailableOptionBook,
+)
 from optimatrix.observation_ledger import ObservationLedger
 from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.radar import BtcWindowAssessment, evaluate_btc_short_vol_window
@@ -47,12 +53,14 @@ class Btc0DteShortVolEngine:
         *,
         quotes: tuple[OptionQuote, ...],
         context: MarketContext,
+        unavailable_books: tuple[UnavailableOptionBook, ...] = (),
     ) -> MarketObservation:
         return MarketObservation.capture(
             channel_id=self.policy.channel_id,
             policy=self.policy.observation,
             context=context,
             quotes=quotes,
+            unavailable_books=unavailable_books,
         )
 
     def assess_window(
@@ -89,7 +97,7 @@ class Btc0DteShortVolEngine:
         case: TradeCase,
         observation: MarketObservation | None,
         known_at: datetime,
-    ) -> tuple[TradeCase, ShadowEntryEvaluation]:
+    ) -> tuple[TradeCase, ShadowEntryReunderwriting]:
         updated, evaluation = evaluate_shadow_entry(
             case,
             observation=observation,
@@ -137,6 +145,21 @@ class Btc0DteShortVolEngine:
         settlement: ExpirySettlementFact,
     ) -> TradeCase:
         updated = settle_shadow_position(
+            case,
+            settlement=settlement,
+            policy=self.policy,
+        )
+        journal.append(updated)
+        return updated
+
+    def enrich_exit_outcome(
+        self,
+        *,
+        journal: CaseJournal,
+        case: TradeCase,
+        settlement: ExpirySettlementFact,
+    ) -> TradeCase:
+        updated = enrich_shadow_exit_outcome_at_settlement(
             case,
             settlement=settlement,
             policy=self.policy,

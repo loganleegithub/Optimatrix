@@ -9,6 +9,7 @@ from optimatrix.case_journal import CaseJournal
 from optimatrix.decision import DecisionResult, DecisionWindow
 from optimatrix.engine import Btc0DteShortVolEngine
 from optimatrix.lifecycle import (
+    CounterfactualStatus,
     FuturePathSummary,
     ObservationStatus,
     PositionState,
@@ -23,6 +24,7 @@ from optimatrix.market import (
     ImpliedVarianceMethod,
     MarketContext,
     MarketContextEvidence,
+    MarketDataSource,
     OptionQuote,
     OptionType,
     PriceLevel,
@@ -36,6 +38,7 @@ from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.products import BTC
 from optimatrix.radar import BtcWindowAssessment
 from optimatrix.risk import AllocationResult, ShadowCapacity
+from optimatrix.route import RouteEvidenceKind, RouteEvidenceStatus
 from optimatrix.session import current_deribit_session
 from optimatrix.structure import select_btc_0dte_condor
 
@@ -57,6 +60,10 @@ class ScenarioResult:
 def run_all_scenarios(policy: BtcShortVolPolicy, *, root: Path) -> tuple[ScenarioResult, ...]:
     return (
         whole_product_candidate(policy, root / "candidate"),
+        stress_reserve_blocks_nominally_fitting_candidate(
+            policy,
+            root / "stress-reserve",
+        ),
         missing_window_is_unknown(policy, root / "missing"),
         shallow_close_depth_is_diagnostic(policy),
         known_path_risk_abstains(policy, root / "path-risk"),
@@ -89,6 +96,9 @@ def whole_product_candidate(policy: BtcShortVolPolicy, root: Path) -> ScenarioRe
     passed = (
         assessment.record.result is DecisionResult.CANDIDATE
         and candidate is not None
+        and assessment.record.route_evidence is not None
+        and assessment.record.route_evidence.kind is RouteEvidenceKind.COMPONENT_SYNTHETIC_ESTIMATE
+        and assessment.record.route_evidence.status is RouteEvidenceStatus.EVALUABLE
         and assessment.allocation is not None
         and assessment.allocation.result is AllocationResult.AVAILABLE
     )
@@ -103,12 +113,73 @@ def whole_product_candidate(policy: BtcShortVolPolicy, root: Path) -> ScenarioRe
                 if assessment.selection is not None
                 else 0
             ),
+            "route_kind": (
+                assessment.record.route_evidence.kind.value
+                if assessment.record.route_evidence is not None
+                else None
+            ),
             "combo_fee_native": (
                 str(candidate.pricing.combo_standard_fee_native) if candidate is not None else None
             ),
             "allocation": (
                 assessment.allocation.result.value if assessment.allocation is not None else None
             ),
+        },
+    )
+
+
+def stress_reserve_blocks_nominally_fitting_candidate(
+    policy: BtcShortVolPolicy,
+    root: Path,
+) -> ScenarioResult:
+    at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    engine = Btc0DteShortVolEngine(policy=policy)
+    window = _window_at(engine, at)
+    quotes = tuple(
+        replace(quote, ask=(PriceLevel(Decimal("0.020"), Decimal("1")),))
+        if quote.instrument_name.endswith(("95000-P", "105000-C"))
+        else quote
+        for quote in base_chain(expiry=current_expiry(at), observed_at=at)
+    )
+    observation = engine.capture_observation(quotes=quotes, context=market_context(at))
+    assessment = engine.assess_window(
+        ledger=ObservationLedger(root),
+        window=window,
+        observation=observation,
+        capacity=ShadowCapacity(
+            channel_id=policy.channel_id,
+            market_session_id=window.market_session_id,
+            stress_reserve_used_usd=Decimal("300"),
+            open_position_count=0,
+            known_at=window.input_deadline,
+        ),
+        known_at=window.input_deadline,
+    )
+    allocation = assessment.allocation
+    passed = (
+        assessment.record.result is DecisionResult.ABSTAIN
+        and allocation is not None
+        and allocation.result is AllocationResult.UNAVAILABLE
+        and allocation.maximum_contractual_payoff_usd == Decimal("200.0")
+        and allocation.stress_reserve_usd == Decimal("402.00000")
+        and allocation.reason == "SESSION_SHADOW_STRESS_BUDGET_EXCEEDED"
+    )
+    return ScenarioResult(
+        "stress_reserve_blocks_nominally_fitting_candidate",
+        passed,
+        {
+            "decision": assessment.record.result.value,
+            "nominal_payoff_usd": (
+                str(allocation.maximum_contractual_payoff_usd) if allocation is not None else None
+            ),
+            "stress_reserve_usd": (
+                str(allocation.stress_reserve_usd) if allocation is not None else None
+            ),
+            "session_used_before_usd": (
+                str(allocation.session_used_before_usd) if allocation is not None else None
+            ),
+            "allocation": allocation.result.value if allocation is not None else None,
+            "reason": allocation.reason if allocation is not None else None,
         },
     )
 
@@ -234,15 +305,45 @@ def atomic_shadow_case_exit(policy: BtcShortVolPolicy, root: Path) -> ScenarioRe
             context=market_context(exit_at),
         ),
     )
+    exit_outcome = case.outcome
+    expiry = current_expiry(exit_at)
+    case = engine.enrich_exit_outcome(
+        journal=journal,
+        case=case,
+        settlement=ExpirySettlementFact(
+            product_id=BTC.product_id,
+            expiry=expiry,
+            delivery_price_usd=Decimal("110000"),
+            known_at=expiry + timedelta(minutes=5),
+            evidence_kind=SettlementEvidenceKind.DETERMINISTIC_ACCEPTANCE_FIXTURE,
+            source_id="DETERMINISTIC_DELIVERY_FIXTURE",
+            method_id="FIXED_DELIVERY_PRICE_V1",
+        ),
+    )
     recovered = journal.recover(case.identity)
+    explanation = case.outcome.explanation if case.outcome is not None else None
     passed = (
         entry.final
         and case.position_state is PositionState.TERMINAL
         and monitor.exit_intent is not None
         and exit_evaluation.terminal
         and recovered == case
+        and entry.route_evidence.kind is RouteEvidenceKind.COMPONENT_SYNTHETIC_ESTIMATE
+        and entry.route_evidence.status is RouteEvidenceStatus.EVALUABLE
+        and recovered.decision_route_evidence_id == assessment.record.route_evidence_id
+        and recovered.entry_reunderwriting is not None
+        and recovered.entry_reunderwriting.route_evidence.identity == entry.route_evidence.identity
         and case.outcome is not None
         and case.outcome.terminal_method is TerminalMethod.WHOLE_PRODUCT_EXIT
+        and exit_outcome is not None
+        and not exit_outcome.explanation.complete
+        and explanation is not None
+        and explanation.complete
+        and explanation.maximum_favorable_excursion_btc is not None
+        and explanation.maximum_adverse_excursion_btc is not None
+        and explanation.maximum_short_abs_delta is not None
+        and explanation.hold_to_expiry.status is CounterfactualStatus.EVALUABLE
+        and case.outcome.native_result_btc == exit_outcome.native_result_btc
     )
     return ScenarioResult(
         "atomic_shadow_case_exit",
@@ -254,6 +355,18 @@ def atomic_shadow_case_exit(policy: BtcShortVolPolicy, root: Path) -> ScenarioRe
                 case.outcome.terminal_method.value if case.outcome is not None else None
             ),
             "journal_snapshots": len(journal.read(case.identity)),
+            "decision_route_evidence_id": assessment.record.route_evidence_id,
+            "entry_route_evidence_id": entry.route_evidence.identity,
+            "route_kind": entry.route_evidence.kind.value,
+            "explanation_complete": explanation.complete if explanation is not None else None,
+            "path_observations": case.explanation_path.observation_count,
+            "retained_path_points": len(case.explanation_path.points),
+            "alternative_outcomes": (
+                len(explanation.alternative_outcomes) if explanation is not None else 0
+            ),
+            "hold_counterfactual": (
+                explanation.hold_to_expiry.status.value if explanation is not None else None
+            ),
         },
     )
 
@@ -449,6 +562,7 @@ def market_context(
         ),
         implied_variance_method=ImpliedVarianceMethod.DETERMINISTIC_ATM_MARK_VARIANCE_PROXY,
         event_state_source=EventStateSource.DETERMINISTIC_SCENARIO_INPUT,
+        market_data_source=MarketDataSource.DETERMINISTIC_SCENARIO,
         required_history_start_ms=now_ms - 120 * 60_000,
         history_coverage_start_ms=now_ms - 120 * 60_000,
         history_coverage_end_ms=now_ms,

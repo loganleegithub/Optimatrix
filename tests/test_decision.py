@@ -80,6 +80,28 @@ def test_market_observation_identity_is_causal_and_content_addressed(policy) -> 
     assert observation.identity != changed.identity
 
 
+def test_missing_candidate_readiness_metadata_is_global_unknown(policy) -> None:
+    _session, _windows, _window, observation = _window_and_observation(policy)
+    context = replace(
+        observation.context,
+        evidence=replace(
+            observation.context.evidence,
+            requested_books=tuple(
+                sorted((*observation.context.evidence.requested_books, "BTC-X-97000-P"))
+            ),
+        ),
+    )
+
+    malformed = MarketObservation.capture(
+        channel_id=policy.channel_id,
+        policy=policy.observation,
+        context=context,
+        quotes=observation.quotes,
+    )
+
+    assert malformed.data_health_blockers == ("OPTION_BOOK_READINESS_EVIDENCE_MISMATCH",)
+
+
 def test_decision_record_embeds_complete_roundtrippable_observation(policy) -> None:
     _session, _windows, window, observation = _window_and_observation(policy)
     record = unassessed_decision_record(

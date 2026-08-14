@@ -19,24 +19,39 @@ coverage and is never backfilled. Candidate selection is not the start of the le
 A Candidate opens at most one TradeCase in `CaseJournal`. It freezes truth layer, product, Window,
 optional Episode, Policy, causal Decision boundary, selected four-leg structure, target amount,
 `ShadowRiskAllocation` or future `AccountRiskReservation`, EntryEvaluationPolicy, planned window,
-maximum wait boundary, and pricing basis. Permanent non-claims remain owned by the Constitution and
-are inherited through the frozen truth layer rather than copied into each Case. The actual causal
-Entry observation boundary and result are later immutable facts. All later facts bind the same
-identities. A TradeCase may end without a Position; it cannot rewrite its Decision or Entry result,
-and a Shadow TradeCase cannot be upgraded in place to a private-execution TradeCase.
+maximum wait boundary, Decision component-route evidence, Decision Session phase, and Decision VRP
+proxy. Permanent non-claims remain owned by the Constitution and are inherited through the frozen
+truth layer rather than copied into each Case. The actual causal Entry observation boundary and
+typed reunderwriting result are later immutable facts. That result binds the same Policy,
+structure, allocation, and Decision metrics; stores current metrics, dimension-specific blockers,
+and its distinct later route-evidence identity; and is recovered with the Case. All later facts bind
+the same identities. A TradeCase may end without a Position; it cannot rewrite its Decision or
+Entry result, and a Shadow TradeCase cannot be upgraded in place to a private-execution TradeCase.
 
 `TradeCaseId` content-binds product, truth layer, DecisionWindowId, DecisionPolicyId, selected
 structure, amount, and Decision boundary.
 
 `CaseJournal` preserves the accepted causal prefix needed to recover the TradeCase and any Position.
-It does not record every tick and does not validate the all-Window denominator. Exact codec and
-event shape are implementation facts, not a second business specification.
+It retains bounded representative Decision, Entry, monitoring, and exit points rather than every
+tick. Every accepted observation still advances one exact count and updates content-addressed
+landmarks for MFE/MAE, maximum short Delta, minimum distance to each short strike, IV/RV range, and
+jump or directional extremes. Typed Gaps preserve their causal source, observation when one exists,
+known-at boundary, and exact reason. The retained points, landmarks, and Gaps form one monotonic
+explanatory prefix; they do not validate the all-Window denominator. Exact codec and event shape are
+implementation facts, not a second business specification.
+
+An unresolved same-Session Shadow Case retains its frozen `stress_reserve_usd` whether Entry is
+pending or a Position exists. Recovery verifies the allocation identity and conservative component
+maximum before reconstructing capacity. A terminal no-Position Entry or terminal Position Outcome
+releases that exact reserve; restart, Gap, ExitIntent, or a merely attempted exit does not.
 
 ## Position truth
 
 A Public Shadow Position exists only after `SHADOW_ATOMIC_EVALUABLE` establishes complete
-whole-product counterfactual economics. It keeps `truth_layer=SHADOW_PROJECTION` and must never be
-described as held, filled, bought, sold, or exposed account risk.
+whole-product counterfactual economics and one `EVALUABLE/COMPONENT_SYNTHETIC_ESTIMATE` Entry route
+record for the exact frozen ratios and amount. Its different Decision and Entry route identities
+remain recoverable. It keeps `truth_layer=SHADOW_PROJECTION` and must never be described as held,
+filled, bought, sold, or exposed account risk.
 
 A real Position is created from authenticated Combo trade and reconciled against account-position
 truth. On recovery, an authenticated nonzero account Position is sufficient to restore risk
@@ -108,10 +123,12 @@ order after the trigger against the currently available book.
 
 ## Terminal truth
 
-A Shadow TradeCase without a Position terminates when its `SHADOW_ATOMIC_NOT_EVALUABLE` or `UNKNOWN`
-Entry result and reason are frozen. With a Position, it terminates only when whole-product exit
-economics or official expiry settlement economics are known. Its truth layer remains
-`SHADOW_PROJECTION`.
+A Shadow TradeCase without a Position terminates when its final Entry result and owning reason are
+frozen. A known route, thesis, structure, economics, or Shadow-allocation rejection terminates
+immediately; missing or causally invalid evidence remains provisional until the Entry deadline and
+then terminates as `ENTRY_EVIDENCE_UNKNOWN`. With a Position, the Case terminates only when
+whole-product exit economics or official expiry settlement economics are known. Its truth layer
+remains `SHADOW_PROJECTION`.
 
 For a real Position:
 
@@ -137,7 +154,29 @@ denominator.
 `ShadowCaseOutcome` contains either the no-Position Entry result and reason or the counterfactual
 entry plus whole-product exit or settlement economics. It also records standard/public fee model,
 Shadow model identity, native BTC result when evaluable, explicit boundary-valued USD diagnostics,
-and observation quality. It is never called realized PnL.
+and observation quality. Its explanation binds the final Decision-to-Entry reunderwriting change,
+the accepted path landmarks and Gaps, projected Entry and terminal Combo fees, primary terminal
+category and reason, a zero-economics no-entry counterfactual, and a hold-to-expiry counterfactual.
+These are Shadow projections and are never called realized PnL, fill, slippage, account Position,
+or executable liquidity.
+
+Alternative Outcomes are limited to the bounded alternative structures frozen by the owning
+Decision. Their Entry basis is classified once against the same later Entry observation; an
+evaluable basis is projected against the same actual terminal market cut or official settlement as
+the selected structure. An unknown or not-evaluable alternative keeps its exact reason. Outcome
+construction cannot rerun search, select a new structure, or infer unavailable route economics.
+
+A whole-product Shadow exit freezes terminal economics and releases its exact reserve immediately.
+Until expiry, its hold-to-expiry counterfactual remains `UNKNOWN` with the official-settlement-
+pending reason. The matching official settlement may later perform exactly one append-only
+explanatory enrichment: it fills only that counterfactual, cannot rewrite exit economics or the
+primary exit reason, cannot reopen risk, and cannot append another market-path claim. Contract
+settlement terminality records the same counterfactual as known at its original terminal boundary.
+
+For a no-Position Outcome, a known Entry Policy/allocation/route rejection sets
+`shadow_entry_evaluable=false` with its exact reason. Terminal `ENTRY_EVIDENCE_UNKNOWN` preserves
+that eligibility as unknown and records a DataHealth gap; it cannot be counted as a known Policy
+rejection.
 
 `LivePositionOutcome` uses authenticated trades, actual fees, actual amounts, account
 reconciliation, settlement/account cashflows, and terminal state. Shadow and live economics never

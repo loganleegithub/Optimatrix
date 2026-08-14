@@ -14,6 +14,36 @@ class OptionType(StrEnum):
     PUT = "PUT"
 
 
+class OptionBookUnavailableReason(StrEnum):
+    BOOK_NOT_OPEN = "BOOK_NOT_OPEN"
+    BOOK_REQUEST_FAILED = "BOOK_REQUEST_FAILED"
+    BOOK_RESPONSE_INVALID = "BOOK_RESPONSE_INVALID"
+
+
+@dataclass(frozen=True)
+class UnavailableOptionBook:
+    """Known instrument metadata whose requested component book was not usable."""
+
+    instrument_name: str
+    product: ProductSpec
+    expiry: datetime
+    strike: Decimal
+    option_type: OptionType
+    reason: OptionBookUnavailableReason
+
+    def __post_init__(self) -> None:
+        if not self.instrument_name.startswith(self.product.instrument_prefix):
+            raise ValueError("unavailable instrument_name does not match product")
+        if self.expiry.tzinfo is None:
+            raise ValueError("unavailable book expiry must be timezone-aware")
+        if not self.strike.is_finite() or self.strike <= 0:
+            raise ValueError("unavailable book strike must be finite and positive")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("UnavailableOptionBookV1", self)
+
+
 class EventState(StrEnum):
     NONE = "NONE"
     PRE_EVENT = "PRE_EVENT"
@@ -117,6 +147,12 @@ class EventStateSource(StrEnum):
     B3_RUNTIME_FIXED_NONE_NO_LIVE_EVENT_SOURCE = "B3_RUNTIME_FIXED_NONE_NO_LIVE_EVENT_SOURCE"
 
 
+class MarketDataSource(StrEnum):
+    DETERMINISTIC_SCENARIO = "DETERMINISTIC_SCENARIO"
+    DERIBIT_PUBLIC_HTTP_BOUNDED_SNAPSHOT = "DERIBIT_PUBLIC_HTTP_BOUNDED_SNAPSHOT"
+    DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1 = "DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1"
+
+
 @dataclass(frozen=True)
 class MarketContextEvidence:
     """Transient proof that the numeric MarketContext has a causal public-data basis."""
@@ -124,6 +160,7 @@ class MarketContextEvidence:
     realized_variance_method: RealizedVarianceMethod | None
     implied_variance_method: ImpliedVarianceMethod | None
     event_state_source: EventStateSource | None
+    market_data_source: MarketDataSource | None
     required_history_start_ms: int | None
     history_coverage_start_ms: int | None
     history_coverage_end_ms: int | None
@@ -144,6 +181,7 @@ class MarketContextEvidence:
             realized_variance_method=None,
             implied_variance_method=None,
             event_state_source=None,
+            market_data_source=None,
             required_history_start_ms=None,
             history_coverage_start_ms=None,
             history_coverage_end_ms=None,
@@ -198,6 +236,7 @@ class MarketContextEvidence:
             (self.realized_variance_method, "REALIZED_VARIANCE_METHOD_UNKNOWN"),
             (self.implied_variance_method, "IMPLIED_VARIANCE_METHOD_UNKNOWN"),
             (self.event_state_source, "EVENT_STATE_SOURCE_UNKNOWN"),
+            (self.market_data_source, "MARKET_DATA_SOURCE_UNKNOWN"),
         )
         blockers.extend(code for value, code in required_text if value is None)
         required_boundary = (
@@ -230,8 +269,6 @@ class MarketContextEvidence:
             and known_at_ms - self.history_coverage_end_ms > self.history_cadence_ms * 2
         ):
             blockers.append("HISTORY_TAIL_STALE")
-        if set(self.requested_books) != set(self.usable_books):
-            blockers.append("SELECTION_UNIVERSE_INCOMPLETE")
         if self.history_coverage_end_ms is not None and self.history_coverage_end_ms > known_at_ms:
             blockers.append("HISTORY_COVERAGE_IN_FUTURE")
         for minimum, maximum, label in (

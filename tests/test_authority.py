@@ -3,6 +3,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from optimatrix.policy import DEFAULT_BTC_SHORT_VOL_POLICY_PATH, load_btc_short_vol_policy
+from optimatrix.runtime import AUTHORIZED_RUNTIME_POLICY_IDENTITY, AUTHORIZED_RUNTIME_ROOT
+
 ROOT = Path(__file__).parents[1]
 AUTHORITY = ROOT / "docs" / "authority"
 TASK_KINDS = {"NONE", "AUTHORITY_ONLY", "IMPLEMENTATION", "VALIDATION_ONLY"}
@@ -53,6 +56,24 @@ def test_current_stage_and_task_are_one_exact_closure() -> None:
         assert "**Live commands:** FORBIDDEN" in task_text
     elif task_kind == "VALIDATION_ONLY":
         assert "**Runtime implementation:** FORBIDDEN" in task_text
+
+
+def test_authorized_runtime_matches_active_b3_deployment() -> None:
+    expected_root = Path(
+        "/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2"
+    )
+    policy = load_btc_short_vol_policy(DEFAULT_BTC_SHORT_VOL_POLICY_PATH)
+    task = ROOT / "tasks" / "B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE.md"
+
+    assert AUTHORIZED_RUNTIME_ROOT == expected_root
+    assert AUTHORIZED_RUNTIME_POLICY_IDENTITY == policy.identity
+
+    for path in (AUTHORITY / "CURRENT_STAGE.md", task, ROOT / "README.md"):
+        text = path.read_text(encoding="utf-8")
+        assert str(expected_root) in text
+
+    assert policy.identity in (AUTHORITY / "CURRENT_STAGE.md").read_text(encoding="utf-8")
+    assert policy.identity in task.read_text(encoding="utf-8")
 
 
 def test_agent_route_resolves_to_current_owners() -> None:

@@ -25,6 +25,29 @@ measure transport and sleep durations but cannot appear in a Decision identity o
 boundaries, continuity identity, universe scope, values, method identities, and DataHealth. It may
 contain many instruments without becoming many opportunities.
 
+For production forward observation, the source identity is the unauthenticated public aggregated
+WebSocket path: BTC index notifications plus `100ms` option book and ticker channels. The first
+book notification is a full snapshot; later changes are accepted only when that instrument's
+`prev_change_id` equals its last accepted `change_id`. Instrument chains are ordered independently,
+so no notification timestamp is treated as a cross-instrument atomic market. One cut instead binds
+the minimum and maximum source boundaries, minimum and maximum receive boundaries, the connection
+continuity epoch, and the causal known-at boundary when the final required member was received. An
+initialized book remains the current depth state while its connection epoch and verified change
+chain remain intact; absence of a content-changing book notification is not itself staleness. Each
+instrument therefore contributes the later source and receive boundary of its retained book/ticker
+pair, while the BTC index contributes its own boundary. The cut still applies freshness and span
+bounds across those effective members. At a scheduled Window boundary the forward source waits,
+within the unchanged input grace, until the cut's source watermark is at or after that Window start;
+it never consumes a retained pre-Window state as that Window's one attempted observation.
+
+A disconnect, missing initial snapshot, sequence mismatch, stale effective index/instrument member,
+incomplete ticker/book pair, or source/receive span outside Policy invalidates the cut and yields
+`UNKNOWN` or a lifecycle Gap. REST may supply Session instrument metadata, the initial rolling
+index-history recovery seed, official settlement, and one bounded affected-book resynchronization.
+A REST resync seed is not itself proof that the incremental chain resumed: that instrument rejoins
+only after a matching later WebSocket change or a new full WebSocket snapshot. Authenticated `raw`
+channels, private facts, and cross-connection continuity are absent at B3.
+
 `DecisionWindowId` is the sole product and learning denominator:
 
 ```text
@@ -60,10 +83,12 @@ Position capacity or risk allocation may block a later Window without erasing it
 
 ## Environment and DataHealth
 
-Before scoring or structure selection, the Window must know:
+Before environment scoring or structure selection, the Window must know:
 
-- the bounded instrument universe and whether every requested fact was obtained;
+- the bounded instrument universe, every usable component book, and typed metadata and reason for
+  every requested component book that was not usable;
 - source, receive, freshness, continuity, and cross-input coherence boundaries;
+- the exact HTTP-bounded-snapshot, deterministic, or public-WebSocket market-source identity;
 - implied-variance and physical-path method identities with aligned horizon and coverage;
 - event-state value, source, and known-at boundary; and
 - exact missing, contradictory, or out-of-bound reasons.
@@ -71,6 +96,15 @@ Before scoring or structure selection, the Window must know:
 Incomplete DataHealth produces `Decision.UNKNOWN`. It does not become calm market, risk trigger,
 Candidate, or no-trade evidence. Known market facts may then produce `ABSTAIN`, `REVIEW`, or
 `CANDIDATE`.
+
+Component-book availability is Candidate-local after global causal DataHealth passes. Selection
+evaluates every Candidate supported by usable books under the unchanged Policy and ranker. A known
+unavailable book that cannot participate in any Policy-legal Candidate does not invalidate an
+unrelated Candidate. A Candidate that needs an unavailable book is not evaluable; when its known
+geometry and unresolved quote facts could still produce a Policy-eligible structure that outranks
+the observed Primary, the Primary rank is unresolved and the Window remains `UNKNOWN`. The system
+may not convert unresolved rank into `ABSTAIN`, silently promote an observed alternative, or weaken
+source, receive, freshness, continuity, cross-input, or required-metadata DataHealth.
 
 Current public measures must be named as proxies:
 
@@ -115,6 +149,26 @@ that USD payoff by the delivery price, this contract claims no unconditional max
 BTC. Risk evidence retains the USD cap, BTC premium and fees, and declared delivery-price stress
 scenarios separately.
 
+Public Shadow capacity uses one conservative USD reserve per Candidate:
+
+```text
+exit_cost_stress_usd = exit_cost_stress_native × Decision boundary index
+maximum_delivery_stress_usd = max(delivery-valued loss across declared scenarios)
+stress_reserve_usd = max(
+  maximum contractual payoff USD,
+  exit_cost_stress_usd,
+  maximum_delivery_stress_usd
+)
+```
+
+The Session budget metric is
+`MAX_OF_CONTRACTUAL_PAYOFF_EXIT_AND_DELIVERY_STRESS_USD_SUM`: admission sums exactly
+`stress_reserve_usd` across unresolved same-Session Cases. It may not aggregate nominal payoff while
+merely displaying a larger stress. Restart reconstruction reads the frozen reserve and its content
+identity; a missing, obsolete, malformed, or incoherent reserve fails closed instead of becoming
+zero. The reserve is released only when Entry terminalizes without a Position or the Position owns
+a terminal Outcome.
+
 Before the Decision may become `CANDIDATE`, Public Shadow freezes a `ShadowRiskAllocation`
 containing:
 
@@ -126,7 +180,8 @@ containing:
 - boundary-valued USD reference with index and timestamp;
 - declared delivery-price scenarios with BTC and USD stress loss;
 - entry slippage and exit-cost/liquidity stress;
-- same-Session Shadow budget used and remaining, plus concurrent-Position limit; and
+- selected conservative stress reserve, same-Session stress budget used and remaining, plus
+  concurrent-Position limit; and
 - allocation expiry and release condition.
 
 This is a research notional limit, not equity, margin, available funds, or a capital reservation. If
@@ -141,7 +196,9 @@ state. It belongs to private stages and cannot be inferred from Shadow allocatio
 
 The BTC contract owns each enrolled-Window `DecisionRecord`: it freezes DecisionWindow, Base Policy,
 known-at boundary, the complete immutable causal MarketObservation input, DataHealth, result,
-blockers, risk-allocation result, and selected structure or exact non-selection reason. The retained
+blockers, risk-allocation result, typed route evidence, and selected structure or exact
+non-selection reason. A Candidate's route evidence must be `EVALUABLE` and bind its exact selected
+four legs, ratios, full target amount, causal observation, and synthetic economics. The retained
 observation includes its context, method and source boundaries, and full bounded quote/depth input
 so the same Window can later be replayed against a Challenger without reconstructing or changing
 the Base fact. One Window produces exactly one Base result:
@@ -161,26 +218,79 @@ Position.
 ## Public Shadow Entry
 
 Public Shadow evaluates the selected four legs as one indivisible counterfactual product from one
-causal market cut. Its result is one of:
+causal market cut. Entry does not call the structure selector: a different or better structure in
+the later universe cannot replace the Candidate's exact frozen legs. Before a Position may exist,
+the later cut reruns the same frozen Policy dimensions used by the Decision:
+
+- current Session phase and environment proxies, including the phase-specific VRP threshold;
+- exact frozen-leg product, expiry, strike geometry, amount, short-leg Delta, whole-product net
+  Delta, and body distance;
+- full-amount whole-product component-book pricing and the same credit, payoff-cap, reference-loss,
+  and Combo-fee underwriting limits; and
+- the frozen Shadow allocation's `AVAILABLE` result, identity, Policy, Candidate, Channel, amount,
+  Session, known-at boundary, structure expiry, and coverage of the Entry deadline.
+
+Decision and Entry each freeze a separate content-addressed route-evidence record. Route truth kinds
+are disjoint:
 
 ```text
-SHADOW_ATOMIC_EVALUABLE       full-amount whole-product economics are known
-SHADOW_ATOMIC_NOT_EVALUABLE   complete facts show the declared estimate cannot be formed
-UNKNOWN                       required facts are missing or causally invalid
+COMPONENT_SYNTHETIC_ESTIMATE   stressed estimate from four public component books
+COMBO_BOOK_QUOTE              quote observed on one actual Combo instrument
+RFQ                           request-for-quote fact; never a quote or execution
+ACTUAL_FILL                   authenticated trade plus account reconciliation
 ```
 
-`SHADOW_ATOMIC_EVALUABLE` means the frozen four legs at the same ratios and full target amount can
-be priced by the declared Shadow model from one causal cut. It is not a Combo-executability or fill
-claim. It may open a `truth_layer=SHADOW_PROJECTION` Position for research.
+B3 Public Shadow constructors and codecs accept only `COMPONENT_SYNTHETIC_ESTIMATE`. A component
+record binds the Policy, frozen Candidate, causal observation boundaries, exact `+1/-1/-1/+1` leg
+ratios, full target amount, per-leg depth coverage, component-estimate model, projected standard
+Combo fee rule, and synthetic net economics. The fee projection is a cost-model fact; it does not
+turn component books into a Combo quote. The strict record shape has no Combo instrument, RFQ,
+order, trade, fill, account, executable-liquidity, or fill-probability field, and recovery rejects
+such additions or any non-component kind under B3.
+
+Route status is independent of the later business rejection dimension:
+
+```text
+EVALUABLE       one causal cut prices every exact ratio at the full target amount
+NOT_EVALUABLE   complete causal component facts cannot form that declared estimate
+UNKNOWN         a required causal or DataHealth fact is absent or invalid
+```
+
+`UNKNOWN` carries no invented depth or economics. `NOT_EVALUABLE` carries observed component depth
+but no invented whole-product price. Neither can create a Position. A route rejection does not
+claim that a future actual Combo is impossible; it describes only the named evidence kind.
+
+The typed reunderwriting result freezes the Decision and Entry route identities and Session phases;
+Decision-to-Entry VRP, short-leg Delta, net Delta, body-distance, credit/payoff, reference-loss,
+and fee-burden metrics; each dimension's blockers; the exact observation boundaries; and the Entry
+result. Its result is one of:
+
+```text
+SHADOW_ATOMIC_EVALUABLE          every reunderwriting dimension and route pass
+SHADOW_ATOMIC_NOT_EVALUABLE      complete facts show the declared estimate cannot be formed
+ENTRY_EVIDENCE_UNKNOWN           required facts are missing or causally invalid
+ENTRY_THESIS_EXPIRED             current phase or environment rejects new Entry
+ENTRY_STRUCTURE_LIMIT_BREACHED   the frozen four legs breach a current structure limit
+ENTRY_PRICE_DETERIORATED         current whole-product economics fail underwriting
+RISK_RESERVATION_INVALID         the frozen Shadow allocation no longer validates
+```
+
+`SHADOW_ATOMIC_EVALUABLE` means its Entry route evidence is `EVALUABLE` and the frozen four legs at
+the same ratios and full target amount still satisfy every Policy dimension above. It is not a
+Combo-executability or fill claim. It may open a
+`truth_layer=SHADOW_PROJECTION` Position for research.
 
 `SHADOW_ATOMIC_NOT_EVALUABLE` means complete facts prove that the declared Shadow model cannot
 price the whole target product; it does not prove a real Combo cannot trade. Missing, stale,
-discontinuous, or incoherent facts remain `UNKNOWN`. Public component-book failure, one evaluable
-side, or smaller-amount depth cannot create a partial acquisition, live short risk, leg remediation,
-or a Position.
+discontinuous, incoherent, or causally invalid facts remain provisional `ENTRY_EVIDENCE_UNKNOWN`
+until the Entry deadline and become terminal `ENTRY_EVIDENCE_UNKNOWN` at that deadline. A known
+Policy or allocation rejection is terminal immediately and is not relabelled as missing evidence.
+Public component-book failure, one evaluable side, or smaller-amount depth cannot create a partial
+acquisition, live short risk, leg remediation, or a Position.
 
-The estimate labels its pricing basis. A synthetic four-leg component-book estimate is distinct
-from an observed Combo book and neither reserves future liquidity.
+The content-addressed route record, rather than a free-standing pricing-basis label, owns this
+distinction. A synthetic four-leg component-book estimate is distinct from an observed Combo book
+and neither reserves future liquidity.
 
 ## Future real Entry via Deribit Combo
 

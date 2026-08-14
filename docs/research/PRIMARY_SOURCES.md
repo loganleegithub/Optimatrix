@@ -53,6 +53,18 @@ or profitability.
 - [Market-data collection best practices](https://docs.deribit.com/articles/market-data-collection-best-practices)
   — cross-instrument feeds are asynchronous; REST is for infrequent snapshots/resynchronization,
   while WebSocket aggregated subscriptions are preferred for continuously time-sensitive updates.
+- [Book subscription](https://docs.deribit.com/subscriptions/orderbook/bookinstrument_nameinterval)
+  — the initial full book, incremental `new`/`change`/`delete` actions, per-instrument `change_id`
+  and `prev_change_id`, and public `100ms` interval.
+- [Ticker subscription](https://docs.deribit.com/subscriptions/market-data/tickerinstrument_nameinterval)
+  — push-based option mark IV, Greeks, open interest, underlying, and index-related fields.
+- [Notifications and subscriptions](https://docs.deribit.com/articles/notifications)
+  — `public/subscribe`, asynchronous channels, initial book snapshots, and resubscription after a
+  connection loss.
+- [`public/set_heartbeat`](https://docs.deribit.com/api-reference/upcoming/session-management/public-set_heartbeat)
+  — WebSocket liveness interval and `test_request` response requirement.
+- [Connection-management best practices](https://docs.deribit.com/articles/connection-management-best-practices)
+  — persistent subscription preference and public unauthenticated connection capability.
 - [JSON-RPC overview](https://docs.deribit.com/articles/json-rpc-overview)
   — production endpoint, request envelope, response timing fields, and `testnet` environment fact.
 - [`public/get_time`](https://docs.deribit.com/api-reference/supporting/public-get_time)

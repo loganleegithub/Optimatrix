@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+
+import pytest
 
 from optimatrix.decision import DecisionResult, MarketObservation
 from optimatrix.deribit_snapshot import PublicSnapshotEvaluation, SnapshotMethodology
 from optimatrix.lifecycle import PositionState, TerminalMethod
-from optimatrix.market import EventState
+from optimatrix.market import EventState, PriceLevel
 from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.runtime import BtcPublicShadowRuntime
 from optimatrix.scenarios import base_chain, market_context
@@ -22,6 +26,7 @@ class FourLegRuntimeSource:
         self.session = session
         self.index_price = Decimal("100000")
         self.directional_persistence = Decimal("0.10")
+        self.short_ask: Decimal | None = None
         self.preflight_calls = 0
         self.snapshot_calls = 0
         self.sleeps: list[float] = []
@@ -39,6 +44,13 @@ class FourLegRuntimeSource:
     ) -> PublicSnapshotEvaluation:
         self.snapshot_calls += 1
         quotes = base_chain(expiry=self.session.end, observed_at=now)
+        if self.short_ask is not None:
+            quotes = tuple(
+                replace(quote, ask=(PriceLevel(self.short_ask, Decimal("1")),))
+                if quote.instrument_name.endswith(("95000-P", "105000-C"))
+                else quote
+                for quote in quotes
+            )
         assert len(quotes) == 4
         quote_names = tuple(sorted(quote.instrument_name for quote in quotes))
         assert set(required_instrument_names) <= set(quote_names)
@@ -149,7 +161,7 @@ def test_runtime_capacity_freeze_recovers_and_releases_after_one_strictly_later_
     tmp_path,
 ) -> None:
     assert policy.risk.maximum_concurrent_positions == 2
-    assert policy.risk.maximum_session_contractual_payoff_usd == Decimal("600")
+    assert policy.risk.maximum_session_stress_reserve_usd == Decimal("600")
     session = _session(policy)
     source = FourLegRuntimeSource(policy, session)
     root = tmp_path / "stable"
@@ -307,3 +319,104 @@ def test_runtime_capacity_freeze_recovers_and_releases_after_one_strictly_later_
         assert source.sleeps == []
     finally:
         recovered.close()
+
+
+def test_runtime_reconstructs_and_releases_the_exact_stress_reserve(
+    policy: BtcShortVolPolicy,
+    tmp_path,
+) -> None:
+    session = _session(policy)
+    source = FourLegRuntimeSource(policy, session)
+    source.short_ask = Decimal("0.020")
+    root = tmp_path / "stress-reserve"
+    runtime = BtcPublicShadowRuntime(
+        root=root,
+        policy=policy,
+        source=source,
+        event_state=EventState.NONE,
+        now=session.start - timedelta(minutes=10),
+        target_session=session,
+        sleep=source.sleeps.append,
+    )
+    clock = StrictRuntimeClock(runtime, after=session.start - timedelta(minutes=10))
+    try:
+        opened, record = _open_candidate(runtime, clock, source, 4)
+        allocation = _allocation(record)
+        reserve = _allocation_decimal(allocation, "stress_reserve_usd")
+        assert reserve == Decimal("402.00000")
+        entry_at = opened.decision_boundary + timedelta(
+            seconds=policy.lifecycle.monitoring_cadence_seconds + 1
+        )
+        clock.tick(entry_at)
+        assert runtime.cases[opened.identity].position_state is PositionState.MONITORING
+        assert runtime._capacity(runtime.windows[6], entry_at).stress_reserve_used_usd == reserve
+    finally:
+        runtime.close()
+
+    restart_at = entry_at + timedelta(seconds=1)
+    recovered = BtcPublicShadowRuntime(
+        root=root,
+        policy=policy,
+        source=source,
+        event_state=EventState.NONE,
+        now=restart_at,
+        target_session=session,
+        sleep=source.sleeps.append,
+    )
+    recovered_clock = StrictRuntimeClock(recovered, after=restart_at)
+    try:
+        assert (
+            recovered._capacity(recovered.windows[6], restart_at).stress_reserve_used_usd == reserve
+        )
+        trigger_at = entry_at + timedelta(seconds=policy.lifecycle.monitoring_cadence_seconds)
+        source.index_price = Decimal("104000")
+        recovered_clock.tick(trigger_at)
+        armed = recovered.cases[opened.identity]
+        assert armed.position_state is PositionState.EXIT_INTENT_FROZEN
+
+        exit_at = trigger_at + timedelta(seconds=policy.lifecycle.monitoring_cadence_seconds)
+        source.index_price = Decimal("100000")
+        recovered_clock.tick(exit_at)
+        terminal = recovered.cases[opened.identity]
+        assert terminal.position_state is PositionState.TERMINAL
+        assert terminal.outcome is not None
+        assert recovered._capacity(recovered.windows[6], exit_at).stress_reserve_used_usd == 0
+    finally:
+        recovered.close()
+
+
+def test_runtime_capacity_rejects_an_allocation_without_current_stress_truth(
+    policy: BtcShortVolPolicy,
+    tmp_path,
+) -> None:
+    session = _session(policy)
+    source = FourLegRuntimeSource(policy, session)
+    runtime = BtcPublicShadowRuntime(
+        root=tmp_path / "malformed-stress-reserve",
+        policy=policy,
+        source=source,
+        event_state=EventState.NONE,
+        now=session.start - timedelta(minutes=10),
+        target_session=session,
+        sleep=source.sleeps.append,
+    )
+    clock = StrictRuntimeClock(runtime, after=session.start - timedelta(minutes=10))
+    try:
+        opened, _record = _open_candidate(runtime, clock, source, 4)
+        allocation = dict(opened.risk_allocation)
+        allocation.pop("stress_reserve_usd")
+        runtime.cases[opened.identity] = replace(
+            opened,
+            risk_allocation_json=json.dumps(
+                allocation,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        )
+
+        with pytest.raises(ValueError, match="content identity"):
+            runtime._capacity(runtime.windows[6], opened.decision_boundary)
+    finally:
+        runtime.close()

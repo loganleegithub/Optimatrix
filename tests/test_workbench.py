@@ -43,6 +43,11 @@ def _snapshot() -> dict[str, object]:
         "requested_book_count": 12,
         "fetched_book_count": 12,
         "warnings": ["BOUNDED_OPTION_UNIVERSE"],
+        "candidate_data_readiness": {
+            "status": "COMPLETE",
+            "unavailable_books": [],
+            "primary_rank_unresolved_books": [],
+        },
         "window": {
             "decision_window_id": "sha256:window",
             "channel_id": "INVERSE_BTC_SHORT_VOL",
@@ -288,6 +293,8 @@ def test_document_projects_one_four_leg_strategy_without_recalculating_values() 
     assert {row["key"]: row["value"] for row in context}["jump_share"] == "0.04"
     assert {row["key"]: row["value"] for row in context}["knowledge"] == "KNOWN"
     context_by_key = {row["key"]: row for row in context}
+    assert context_by_key["candidate_data_readiness"]["value"] == "COMPLETE"
+    assert context_by_key["unavailable_books"]["value"] == "NONE"
     assert context_by_key["history_coverage_end_ms"]["kind"] == "timestamp"
     assert "kind" not in context_by_key["history_cadence_ms"]
     window = cast(Sequence[Mapping[str, object]], document["window"])
@@ -453,6 +460,12 @@ def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_cas
         allocation_values["maximum_contractual_payoff_usd"]
         == allocation["maximum_contractual_payoff_usd"]
     )
+    assert allocation_values["exit_cost_stress_usd"] == allocation["exit_cost_stress_usd"]
+    assert (
+        allocation_values["maximum_delivery_stress_usd"]
+        == allocation["maximum_delivery_stress_usd"]
+    )
+    assert allocation_values["stress_reserve_usd"] == allocation["stress_reserve_usd"]
     assert allocation_values["session_used_before_usd"] == allocation["session_used_before_usd"]
     assert (
         allocation_values["session_remaining_after_usd"]
@@ -479,13 +492,54 @@ def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_cas
     assert entry_by_key["decision_boundary"]["kind"] == "timestamp"
     assert entry_by_key["entry_observed_at"]["kind"] == "timestamp"
     assert "kind" not in entry_by_key["entry_observation_id"]
-    assert entry_values["entry_pricing_basis"] == trade_case.entry_pricing_basis
+    assert entry_values["decision_route_evidence_id"] == trade_case.decision_route_evidence_id
+    assert trade_case.entry_reunderwriting is not None
+    assert (
+        entry_values["entry_route_evidence_id"]
+        == trade_case.entry_reunderwriting.route_evidence.identity
+    )
+    decision_route = cast(Mapping[str, object], case_view["decision_route_evidence"])
+    entry_route = cast(Mapping[str, object], case_view["entry_route_evidence"])
+    assert decision_route["available"] is True
+    assert entry_route["available"] is True
+    decision_route_values = {
+        row["key"]: row["value"]
+        for row in cast(Sequence[Mapping[str, str]], decision_route["summary"])
+    }
+    entry_route_values = {
+        row["key"]: row["value"]
+        for row in cast(Sequence[Mapping[str, str]], entry_route["summary"])
+    }
+    assert decision_route_values["kind"] == "COMPONENT_SYNTHETIC_ESTIMATE"
+    assert decision_route_values["status"] == "EVALUABLE"
+    assert entry_route_values["kind"] == "COMPONENT_SYNTHETIC_ESTIMATE"
+    assert entry_route_values["status"] == "EVALUABLE"
     economics_rows = cast(Sequence[Mapping[str, str]], case_view["entry_economics"])
     economics_values = {row["key"]: row["value"] for row in economics_rows}
     entry_pricing = trade_case.entry_pricing
     assert entry_pricing is not None
     assert economics_values["native_net_credit"] == entry_pricing["native_net_credit"]
     assert economics_values["entry_native_net_credit"] == str(trade_case.entry_native_net_credit)
+    reunderwriting = cast(Mapping[str, object], case_view["entry_reunderwriting"])
+    assert reunderwriting["available"] is True
+    summary_rows = cast(Sequence[Mapping[str, str]], reunderwriting["summary"])
+    summary_values = {row["key"]: row["value"] for row in summary_rows}
+    assert summary_values["entry_reunderwriting_id"] == trade_case.entry_reunderwriting.identity
+    assert summary_values["status"] == "SHADOW_ATOMIC_EVALUABLE"
+    decision_metric_rows = cast(
+        Sequence[Mapping[str, str]],
+        reunderwriting["decision_metrics"],
+    )
+    entry_metric_rows = cast(
+        Sequence[Mapping[str, str]],
+        reunderwriting["entry_metrics"],
+    )
+    decision_metrics = {row["key"]: row["value"] for row in decision_metric_rows}
+    entry_metrics = {row["key"]: row["value"] for row in entry_metric_rows}
+    assert decision_metrics["vrp_proxy_ratio"] == "1.5"
+    assert entry_metrics["vrp_proxy_ratio"] == "1.5"
+    assert reunderwriting["blockers"] == []
+    assert "VRP 1.5 → 1.5" in str(reunderwriting["comparison"])
 
     assert trade_case.exit_intent is not None
     exit_rows = cast(Sequence[Mapping[str, str]], case_view["exit_intent"])
@@ -514,6 +568,22 @@ def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_cas
     assert outcome_values["boundary_reference_result_usd"] == str(
         trade_case.outcome.boundary_reference_result_usd
     )
+    explanation = cast(Mapping[str, object], case_view["outcome_explanation"])
+    assert explanation["available"] is True
+    assert explanation["complete"] is False
+    explanation_rows = cast(Sequence[Mapping[str, str]], explanation["summary"])
+    explanation_values = {row["key"]: row["value"] for row in explanation_rows}
+    assert explanation_values["path_id"] == trade_case.explanation_path.identity
+    assert explanation_values["entry_reunderwriting_id"] == (
+        trade_case.entry_reunderwriting.identity
+    )
+    assert explanation_values["primary_exit_reason"] == trade_case.exit_intent.reason
+    assert len(cast(Sequence[object], explanation["path"])) == 4
+    assert explanation["gaps"] == []
+    assert len(cast(Sequence[object], explanation["counterfactuals"])) == 2
+    assert len(cast(Sequence[object], explanation["alternative_outcomes"])) == len(
+        trade_case.explanation_path.alternative_entry_bases
+    )
 
     exported = write_workbench(
         snapshot,
@@ -524,6 +594,8 @@ def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_cas
     data_script = exported.data_path.read_text(encoding="utf-8")
     assert "四腿" in app_script
     assert "入场结果" in app_script
+    assert "Decision → Entry → Outcome" in exported.index_path.read_text(encoding="utf-8")
+    assert "等待官方交割补全" in app_script
     assert trade_case.selected_structure_id in data_script
     assert trade_case.entry_observation_id in data_script
     assert trade_case.outcome.terminal_evidence_id in data_script
