@@ -256,6 +256,11 @@ command must emit `B3_NATURAL_FORWARD_CHAIN_ACCEPTED`; absence remains unverifie
   load this correction. Its next `12:45–13:00` cut happened naturally to fall inside the Window at
   `2026-08-14T12:45:00.389000Z`; this confirms the old behavior is a boundary race, not that the
   `12:30` falsification was harmless.
+- At `2026-08-14T13:01:01.087798Z`, launch `3/3` had durably recorded `5` natural Windows:
+  `3 ABSTAIN`, `2 UNKNOWN`, and `0 Cases`. The valid `12:45–13:00` Window was `ABSTAIN`; the next
+  running-process cut again exposed the old race with `observed_at=2026-08-14T12:59:59.315000Z`
+  for a `13:00` Window. The process remains live on its original loaded commit and this is not
+  evidence that the committed lower-bound correction ran in production.
 
 Close only after directly observing the declared delta. Replace Stage with the post-task snapshot
 and remove this file; do not append completion history.
