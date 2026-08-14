@@ -20,6 +20,7 @@ from optimatrix.pricing import (
 )
 from optimatrix.products import BTC, ProductId
 from optimatrix.radar import btc_environment_blockers
+from optimatrix.risk import SHADOW_STRESS_BUDGET_METRIC, stress_reserve_from_allocation_record
 from optimatrix.session import SessionPhase, current_deribit_session
 from optimatrix.structure import Btc0DteCondorUnderwriting, underwrite_btc_0dte_condor
 
@@ -1529,10 +1530,15 @@ def _entry_allocation_blockers(
             blockers.append("ALLOCATION_EXPIRED_AT_ENTRY")
         if case.entry_deadline >= expires_at:
             blockers.append("ALLOCATION_DOES_NOT_COVER_ENTRY_DEADLINE")
-    identity_payload = dict(allocation)
-    identity_payload.pop("allocation_id", None)
-    if canonical_identity("ShadowRiskAllocationV1", identity_payload) != case.risk_allocation_id:
-        blockers.append("ALLOCATION_IDENTITY_MISMATCH")
+    try:
+        stress_reserve_from_allocation_record(
+            allocation,
+            allocation_id=case.risk_allocation_id,
+        )
+    except ValueError:
+        blockers.append("ALLOCATION_STRESS_RESERVE_INVALID")
+    if allocation.get("budget_metric") != SHADOW_STRESS_BUDGET_METRIC:
+        blockers.append("ALLOCATION_BUDGET_METRIC_MISMATCH")
     return tuple(dict.fromkeys(blockers))
 
 

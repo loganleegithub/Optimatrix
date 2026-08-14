@@ -415,6 +415,7 @@
       metricItem('入场净权利金', economics.native_net_credit ? `${economics.native_net_credit} BTC` : '未知', 'positive'),
       metricItem('标准 Combo 手续费', economics.combo_standard_fee_native ? `${economics.combo_standard_fee_native} BTC` : allocation.combo_fee_native ? `${allocation.combo_fee_native} BTC` : '未知'),
       metricItem('契约赔付上限', allocation.maximum_contractual_payoff_usd ? `${allocation.maximum_contractual_payoff_usd} USD` : '未知'),
+      metricItem('压力预算占用', allocation.stress_reserve_usd ? `${allocation.stress_reserve_usd} USD` : '未知'),
       metricItem('研究预算结果', translate(display.allocation_result), display.allocation_result === 'AVAILABLE' ? 'positive' : 'warning'),
       metricItem('到期', formatTimestamp(display.expiry))
     );

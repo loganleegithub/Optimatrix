@@ -57,6 +57,10 @@ class ScenarioResult:
 def run_all_scenarios(policy: BtcShortVolPolicy, *, root: Path) -> tuple[ScenarioResult, ...]:
     return (
         whole_product_candidate(policy, root / "candidate"),
+        stress_reserve_blocks_nominally_fitting_candidate(
+            policy,
+            root / "stress-reserve",
+        ),
         missing_window_is_unknown(policy, root / "missing"),
         shallow_close_depth_is_diagnostic(policy),
         known_path_risk_abstains(policy, root / "path-risk"),
@@ -109,6 +113,62 @@ def whole_product_candidate(policy: BtcShortVolPolicy, root: Path) -> ScenarioRe
             "allocation": (
                 assessment.allocation.result.value if assessment.allocation is not None else None
             ),
+        },
+    )
+
+
+def stress_reserve_blocks_nominally_fitting_candidate(
+    policy: BtcShortVolPolicy,
+    root: Path,
+) -> ScenarioResult:
+    at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    engine = Btc0DteShortVolEngine(policy=policy)
+    window = _window_at(engine, at)
+    quotes = tuple(
+        replace(quote, ask=(PriceLevel(Decimal("0.020"), Decimal("1")),))
+        if quote.instrument_name.endswith(("95000-P", "105000-C"))
+        else quote
+        for quote in base_chain(expiry=current_expiry(at), observed_at=at)
+    )
+    observation = engine.capture_observation(quotes=quotes, context=market_context(at))
+    assessment = engine.assess_window(
+        ledger=ObservationLedger(root),
+        window=window,
+        observation=observation,
+        capacity=ShadowCapacity(
+            channel_id=policy.channel_id,
+            market_session_id=window.market_session_id,
+            stress_reserve_used_usd=Decimal("300"),
+            open_position_count=0,
+            known_at=window.input_deadline,
+        ),
+        known_at=window.input_deadline,
+    )
+    allocation = assessment.allocation
+    passed = (
+        assessment.record.result is DecisionResult.ABSTAIN
+        and allocation is not None
+        and allocation.result is AllocationResult.UNAVAILABLE
+        and allocation.maximum_contractual_payoff_usd == Decimal("200.0")
+        and allocation.stress_reserve_usd == Decimal("402.00000")
+        and allocation.reason == "SESSION_SHADOW_STRESS_BUDGET_EXCEEDED"
+    )
+    return ScenarioResult(
+        "stress_reserve_blocks_nominally_fitting_candidate",
+        passed,
+        {
+            "decision": assessment.record.result.value,
+            "nominal_payoff_usd": (
+                str(allocation.maximum_contractual_payoff_usd) if allocation is not None else None
+            ),
+            "stress_reserve_usd": (
+                str(allocation.stress_reserve_usd) if allocation is not None else None
+            ),
+            "session_used_before_usd": (
+                str(allocation.session_used_before_usd) if allocation is not None else None
+            ),
+            "allocation": allocation.result.value if allocation is not None else None,
+            "reason": allocation.reason if allocation is not None else None,
         },
     )
 

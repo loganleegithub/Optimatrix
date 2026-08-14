@@ -115,6 +115,26 @@ that USD payoff by the delivery price, this contract claims no unconditional max
 BTC. Risk evidence retains the USD cap, BTC premium and fees, and declared delivery-price stress
 scenarios separately.
 
+Public Shadow capacity uses one conservative USD reserve per Candidate:
+
+```text
+exit_cost_stress_usd = exit_cost_stress_native × Decision boundary index
+maximum_delivery_stress_usd = max(delivery-valued loss across declared scenarios)
+stress_reserve_usd = max(
+  maximum contractual payoff USD,
+  exit_cost_stress_usd,
+  maximum_delivery_stress_usd
+)
+```
+
+The Session budget metric is
+`MAX_OF_CONTRACTUAL_PAYOFF_EXIT_AND_DELIVERY_STRESS_USD_SUM`: admission sums exactly
+`stress_reserve_usd` across unresolved same-Session Cases. It may not aggregate nominal payoff while
+merely displaying a larger stress. Restart reconstruction reads the frozen reserve and its content
+identity; a missing, obsolete, malformed, or incoherent reserve fails closed instead of becoming
+zero. The reserve is released only when Entry terminalizes without a Position or the Position owns
+a terminal Outcome.
+
 Before the Decision may become `CANDIDATE`, Public Shadow freezes a `ShadowRiskAllocation`
 containing:
 
@@ -126,7 +146,8 @@ containing:
 - boundary-valued USD reference with index and timestamp;
 - declared delivery-price scenarios with BTC and USD stress loss;
 - entry slippage and exit-cost/liquidity stress;
-- same-Session Shadow budget used and remaining, plus concurrent-Position limit; and
+- selected conservative stress reserve, same-Session stress budget used and remaining, plus
+  concurrent-Position limit; and
 - allocation expiry and release condition.
 
 This is a research notional limit, not equity, margin, available funds, or a capital reservation. If

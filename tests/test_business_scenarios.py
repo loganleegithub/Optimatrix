@@ -10,6 +10,7 @@ def test_all_declared_business_scenarios_pass(policy, tmp_path) -> None:
     names = {result.name for result in results}
     assert names == {
         "whole_product_candidate",
+        "stress_reserve_blocks_nominally_fitting_candidate",
         "missing_window_is_unknown",
         "shallow_close_depth_is_diagnostic",
         "known_path_risk_abstains",

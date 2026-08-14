@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from optimatrix.decision import DecisionRecord, DecisionResult
 from optimatrix.engine import Btc0DteShortVolEngine
-from optimatrix.market import MarketContextEvidence
+from optimatrix.market import MarketContextEvidence, PriceLevel
 from optimatrix.observation_ledger import ObservationLedger
-from optimatrix.risk import AllocationResult, ShadowCapacity
+from optimatrix.risk import (
+    SHADOW_STRESS_BUDGET_METRIC,
+    AllocationResult,
+    ShadowCapacity,
+    stress_reserve_from_allocation_record,
+)
 from optimatrix.scenarios import (
     all_joint_adversarial_chain,
     base_chain,
@@ -114,6 +120,57 @@ def test_delivery_stress_uses_actual_inverse_condor_payoff(policy, tmp_path) -> 
     assert center.contractual_payoff_usd == 0
     assert low.contractual_payoff_usd == high.contractual_payoff_usd == Decimal("200")
     assert low.contractual_payoff_native != high.contractual_payoff_native
+    assert assessment.allocation.exit_cost_stress_usd == Decimal("52.00000")
+    assert assessment.allocation.maximum_delivery_stress_usd == Decimal("186.000000")
+    assert assessment.allocation.stress_reserve_usd == Decimal("200.0")
+    assert assessment.allocation.budget_metric == SHADOW_STRESS_BUDGET_METRIC
+    record = assessment.record.risk_allocation
+    assert record is not None
+    assert stress_reserve_from_allocation_record(
+        record,
+        allocation_id=assessment.allocation.identity,
+    ) == Decimal("200.0")
+
+
+def test_exit_stress_that_exceeds_remaining_budget_is_unavailable(policy, tmp_path) -> None:
+    at = datetime(2026, 8, 12, 18, 7, tzinfo=UTC)
+    engine = Btc0DteShortVolEngine(policy=policy)
+    window = next(
+        item for item in engine.decision_windows(at=at) if item.starts_at <= at < item.ends_at
+    )
+    quotes = tuple(
+        replace(quote, ask=(PriceLevel(Decimal("0.020"), Decimal("1")),))
+        if quote.instrument_name.endswith(("95000-P", "105000-C"))
+        else quote
+        for quote in base_chain(expiry=current_expiry(at), observed_at=at)
+    )
+    observation = engine.capture_observation(quotes=quotes, context=market_context(at))
+    capacity = ShadowCapacity(
+        channel_id=policy.channel_id,
+        market_session_id=window.market_session_id,
+        stress_reserve_used_usd=Decimal("300"),
+        open_position_count=0,
+        known_at=window.input_deadline,
+    )
+
+    assessment = engine.assess_window(
+        ledger=ObservationLedger(tmp_path),
+        window=window,
+        observation=observation,
+        capacity=capacity,
+        known_at=window.input_deadline,
+    )
+
+    assert assessment.allocation is not None
+    assert assessment.allocation.maximum_contractual_payoff_usd == Decimal("200.0")
+    assert assessment.allocation.exit_cost_stress_usd == Decimal("402.00000")
+    assert assessment.allocation.stress_reserve_usd == Decimal("402.00000")
+    assert assessment.allocation.result is AllocationResult.UNAVAILABLE
+    assert assessment.allocation.reason == "SESSION_SHADOW_STRESS_BUDGET_EXCEEDED"
+    assert assessment.record.result is DecisionResult.ABSTAIN
+    assert assessment.record.blockers == ("SESSION_SHADOW_STRESS_BUDGET_EXCEEDED",)
+    assert assessment.allocation.session_used_before_usd == Decimal("300")
+    assert assessment.allocation.session_remaining_after_usd == 0
 
 
 def test_rerun_time_does_not_change_window_record_identity(policy, tmp_path) -> None:
@@ -230,7 +287,7 @@ def test_exhausted_shadow_capacity_is_known_abstain(policy, tmp_path) -> None:
     capacity = ShadowCapacity(
         channel_id=policy.channel_id,
         market_session_id=window.market_session_id,
-        contractual_payoff_used_usd=policy.risk.maximum_session_contractual_payoff_usd,
+        stress_reserve_used_usd=policy.risk.maximum_session_stress_reserve_usd,
         open_position_count=0,
         known_at=window.input_deadline,
     )
@@ -242,6 +299,6 @@ def test_exhausted_shadow_capacity_is_known_abstain(policy, tmp_path) -> None:
         known_at=window.input_deadline,
     )
     assert assessment.record.result is DecisionResult.ABSTAIN
-    assert assessment.record.blockers == ("SESSION_SHADOW_BUDGET_EXCEEDED",)
+    assert assessment.record.blockers == ("SESSION_SHADOW_STRESS_BUDGET_EXCEEDED",)
     assert assessment.allocation is not None
     assert assessment.allocation.session_remaining_after_usd == 0

@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 ENTRY REUNDERWRITING — CLOSED
+**Status:** B3 STRESS RISK RESERVATION — CLOSED
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -27,8 +27,7 @@ Stage is the permission ceiling; a future active task may only narrow it.
 **Stable CaseJournal root:** `NONE_AUTHORIZED`
 
 **Frozen prior evidence:** `/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1`
-is retained without migration or mutation. Its records use the retired Policy identity and are not
-eligible for current Base Policy evaluation or AI training.
+is retained without migration or mutation and remains ineligible for the current Policy.
 
 **Continuous runtime:** `NONE`
 
@@ -40,29 +39,28 @@ eligible for current Base Policy evaluation or AI training.
 
 ## Current implementation truth
 
-- B1 Window observation, B2 whole-four-leg selection, all-Window Ledger records, atomic Public
-  Shadow lifecycle, strictly later exit valuation, settlement fallback, and cross-Session runtime
-  mechanics exist and pass deterministic repository evidence.
-- Production-public v1 operation produced real Decision records but no naturally occurring
-  Candidate-to-terminal chain. That runtime is stopped and its stable root remains frozen.
-- Policy schema 6 gives new Decisions and Cases an identity distinct from the frozen v1 evidence.
-- Decision and Entry call the same environment and exact-four-leg underwriting calculations.
-  Entry evaluates only the Candidate's frozen legs; it cannot reselect a better later structure.
-- Entry now freezes one typed reunderwriting result containing Decision-to-Entry phase, VRP,
-  short-Delta, net-Delta, body-distance, credit/payoff, reference-loss, fee-burden, allocation, and
-  route evidence. `CaseJournal` recovers it exactly and the Workbench exposes it.
-- A Position is created only when later evidence is causal and healthy, phase and environment still
-  admit new Entry, frozen structure limits still pass, full-amount pricing exists, current economics
-  pass, and the frozen allocation remains valid. Known failures terminalize without a Position;
-  missing evidence stays provisional until the Entry deadline.
-- Shadow allocation still computes exit and inverse-delivery stresses while admission and capacity
-  use only nominal contractual-payoff sum. Therefore the recorded budget can say `AVAILABLE` even
-  when its own declared stressed loss exhausts the Session limit.
-- The complete repository gate passes: `190` tests and `7` deterministic business scenarios. This
-  is offline implementation evidence, not current market or profitability evidence.
+- Entry reunderwriting requires later environment, exact frozen structure, economics, allocation,
+  and route evidence to pass before a Shadow Position exists, and its complete Decision-to-Entry
+  result remains recoverable.
+- Policy schema 7 gives new Decisions, allocations, and Cases identities distinct from schema-6 and
+  frozen v1 evidence.
+- `ShadowRiskAllocation` records nominal contractual payoff, boundary-valued exit-cost stress,
+  every inverse-delivery stress, their maximum delivery loss, and one conservative stress reserve.
+  The reserve is exactly the maximum of nominal payoff, exit stress, and maximum delivery stress.
+- The same reserve and metric own Decision admission, Session aggregation, the frozen allocation
+  record, Case validation, restart reconstruction, and terminal release. Missing, malformed,
+  identity-incoherent, or retired-metric allocation records fail closed rather than contributing an
+  invented zero.
+- The adversarial deterministic Candidate has `200 USD` nominal payoff and `402 USD` exit stress.
+  With `300 USD` already reserved against the unchanged `600 USD` Session budget, it is rejected;
+  the former nominal-only permissive branch is therefore absent.
+- The complete repository gate passes: `193` tests and `8` deterministic business scenarios. This
+  is offline implementation evidence, not current market, execution, or profitability evidence.
+- Live runtime, stable-root writes, market calls, private facts, orders, and capital remain disabled.
 
-**Primary blocker:** `STRESS_RISK_NOT_RESERVED` — `ShadowRiskAllocation` records stress but does not
-use one conservative stress amount for admission, aggregation, recovery, and release.
+**Primary blocker:** `ROUTE_EVIDENCE_NOT_TYPED` — Public Shadow Entry still represents its route as
+a pricing-basis label plus blocker strings instead of one identity-bearing evidence record with an
+explicit route kind, full-ratio amount, causal source cut, and evaluability result.
 
 ## Maturity ladder
 
@@ -76,7 +74,7 @@ use one conservative stress amount for admission, aggregation, recovery, and rel
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Next closure:** a bounded `B3_STRESS_RISK_RESERVATION` task must replace nominal-only admission
-with one explicit conservative stress metric used consistently by Decision, allocation record,
-capacity reconstruction, recovery, and release. It may not change market thresholds, Entry
-reunderwriting, runtime permissions, private facts, orders, capital, or Policy qualification.
+**Next closure:** a bounded `B3_ROUTE_EVIDENCE` task must replace the loose route label and blockers
+with one typed, identity-bearing Shadow route-evidence record for the exact frozen four-leg ratios
+and full target amount. It may not claim Combo executability or fills, change Entry underwriting or
+risk numerics, enable live calls, or authorize private facts, orders, capital, or Policy promotion.

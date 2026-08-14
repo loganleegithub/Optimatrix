@@ -429,6 +429,10 @@ def test_raw_four_leg_tape_runs_candidate_to_strictly_later_whole_product_exit(
         assert allocation["candidate_id"] == structure["candidate_id"]
         assert allocation["option_amount"] == "0.1"
         assert allocation["maximum_contractual_payoff_usd"] == "200.0"
+        assert allocation["stress_reserve_usd"] == "200.0"
+        assert allocation["budget_metric"] == (
+            "MAX_OF_CONTRACTUAL_PAYOFF_EXIT_AND_DELIVERY_STRESS_USD_SUM"
+        )
         assert allocation["session_budget_usd"] == "600"
         assert allocation["session_used_before_usd"] == "0"
         assert allocation["session_remaining_after_usd"] == "400.0"

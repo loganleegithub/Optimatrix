@@ -35,6 +35,11 @@ structure, amount, and Decision boundary.
 It does not record every tick and does not validate the all-Window denominator. Exact codec and
 event shape are implementation facts, not a second business specification.
 
+An unresolved same-Session Shadow Case retains its frozen `stress_reserve_usd` whether Entry is
+pending or a Position exists. Recovery verifies the allocation identity and conservative component
+maximum before reconstructing capacity. A terminal no-Position Entry or terminal Position Outcome
+releases that exact reserve; restart, Gap, ExitIntent, or a merely attempted exit does not.
+
 ## Position truth
 
 A Public Shadow Position exists only after `SHADOW_ATOMIC_EVALUABLE` establishes complete

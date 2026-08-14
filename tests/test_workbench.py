@@ -453,6 +453,12 @@ def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_cas
         allocation_values["maximum_contractual_payoff_usd"]
         == allocation["maximum_contractual_payoff_usd"]
     )
+    assert allocation_values["exit_cost_stress_usd"] == allocation["exit_cost_stress_usd"]
+    assert (
+        allocation_values["maximum_delivery_stress_usd"]
+        == allocation["maximum_delivery_stress_usd"]
+    )
+    assert allocation_values["stress_reserve_usd"] == allocation["stress_reserve_usd"]
     assert allocation_values["session_used_before_usd"] == allocation["session_used_before_usd"]
     assert (
         allocation_values["session_remaining_after_usd"]

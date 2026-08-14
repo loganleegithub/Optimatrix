@@ -407,7 +407,7 @@ def test_entry_reunderwriting_rejects_allocation_mismatch_or_expiry(
 
     assert result.status is ShadowEntryStatus.RISK_RESERVATION_INVALID
     assert expected_blocker in result.allocation_blockers
-    assert "ALLOCATION_IDENTITY_MISMATCH" in result.allocation_blockers
+    assert "ALLOCATION_STRESS_RESERVE_INVALID" in result.allocation_blockers
     assert rejected.position_id is None
 
 

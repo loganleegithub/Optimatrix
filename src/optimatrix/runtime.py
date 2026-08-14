@@ -46,7 +46,7 @@ from optimatrix.market import EventState, ExpirySettlementFact, SettlementEviden
 from optimatrix.observation_ledger import ObservationLedger
 from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.products import BTC
-from optimatrix.risk import ShadowCapacity
+from optimatrix.risk import ShadowCapacity, stress_reserve_from_allocation_record
 from optimatrix.session import DeribitSession, current_deribit_session
 from optimatrix.workbench import write_workbench
 
@@ -1339,13 +1339,16 @@ class BtcPublicShadowRuntime:
             allocation = case.risk_allocation
             if allocation.get("market_session_id") != window.market_session_id:
                 continue
-            used += Decimal(str(allocation["maximum_contractual_payoff_usd"]))
+            used += stress_reserve_from_allocation_record(
+                allocation,
+                allocation_id=case.risk_allocation_id,
+            )
             if case.position_id is not None and case.position_state is not PositionState.TERMINAL:
                 open_positions += 1
         return ShadowCapacity(
             channel_id=self.policy.channel_id,
             market_session_id=window.market_session_id,
-            contractual_payoff_used_usd=used,
+            stress_reserve_used_usd=used,
             open_position_count=open_positions,
             known_at=known_at,
         )

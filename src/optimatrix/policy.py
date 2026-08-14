@@ -86,7 +86,7 @@ class UnderwritingPolicy:
 
 @dataclass(frozen=True)
 class ShadowRiskPolicy:
-    maximum_session_contractual_payoff_usd: Decimal
+    maximum_session_stress_reserve_usd: Decimal
     maximum_concurrent_positions: int
     delivery_price_stress_factors: tuple[Decimal, ...]
     exit_cost_stress_fraction: Decimal
@@ -123,7 +123,7 @@ class BtcShortVolPolicy:
     @property
     def identity(self) -> str:
         return canonical_identity(
-            "BtcTwoSidedShortVolPolicyV6",
+            "BtcTwoSidedShortVolPolicyV7",
             self.schema_version,
             self.policy_name,
             self.channel_id,
@@ -240,9 +240,7 @@ def load_btc_short_vol_policy(path: Path) -> BtcShortVolPolicy:
             ),
         ),
         risk=ShadowRiskPolicy(
-            maximum_session_contractual_payoff_usd=_decimal(
-                risk, "maximum_session_contractual_payoff_usd"
-            ),
+            maximum_session_stress_reserve_usd=_decimal(risk, "maximum_session_stress_reserve_usd"),
             maximum_concurrent_positions=_positive_int(risk, "maximum_concurrent_positions"),
             delivery_price_stress_factors=_decimal_tuple(risk, "delivery_price_stress_factors"),
             exit_cost_stress_fraction=_decimal(risk, "exit_cost_stress_fraction"),
@@ -266,7 +264,7 @@ def load_btc_short_vol_policy(path: Path) -> BtcShortVolPolicy:
 
 
 def _validate(policy: BtcShortVolPolicy) -> None:
-    if policy.schema_version != 6:
+    if policy.schema_version != 7:
         raise ValueError("unsupported policy schema")
     if policy.status != "PUBLIC_SHADOW_UNQUALIFIED":
         raise ValueError("policy status must be PUBLIC_SHADOW_UNQUALIFIED")
@@ -310,8 +308,8 @@ def _validate(policy: BtcShortVolPolicy) -> None:
         raise ValueError("maximum boundary reference loss must be positive")
 
     risk = policy.risk
-    if risk.maximum_session_contractual_payoff_usd <= 0:
-        raise ValueError("maximum session contractual payoff must be positive")
+    if risk.maximum_session_stress_reserve_usd <= 0:
+        raise ValueError("maximum Session stress reserve must be positive")
     if not risk.delivery_price_stress_factors or any(
         factor <= 0 for factor in risk.delivery_price_stress_factors
     ):
