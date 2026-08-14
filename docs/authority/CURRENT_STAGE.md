@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 POLICY REACHABILITY AND FILTER AUDIT — ACTIVE
+**Status:** B3 FORWARD WINDOW OUTCOME EVIDENCE — ACTIVE
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -10,15 +10,16 @@
 
 **Current task kind:** `VALIDATION_ONLY`
 
-**Sole authorized closure:** [`B3_POLICY_REACHABILITY_AND_FILTER_AUDIT`](../../tasks/B3_POLICY_REACHABILITY_AND_FILTER_AUDIT.md)
+**Sole authorized closure:** [`B3_FORWARD_WINDOW_OUTCOME_EVIDENCE`](../../tasks/B3_FORWARD_WINDOW_OUTCOME_EVIDENCE.md)
 
 ## Current permissions
 
 Stage is the permission ceiling; a future active task may only narrow it.
 
-**Offline checks and simulation:** one bounded read-only reachability/responsibility audit of an
-immutable DecisionRecord snapshot is authorized; any temporary output must remain in a
-caller-supplied ignored root, and synthetic future paths or simulated Outcomes are forbidden
+**Offline checks and simulation:** one bounded read-only join of the frozen reachability snapshot
+to its actual WindowOutcomes is authorized after the owning Session ends; any temporary output must
+remain in a caller-supplied ignored root, and synthetic future paths or simulated Outcomes are
+forbidden
 
 **Public market calls:** only unauthenticated production `wss://www.deribit.com/ws/api/v2` public
 heartbeat, subscribe, unsubscribe, test, BTC index, and aggregated `100ms` BTC option book/ticker
@@ -59,8 +60,19 @@ capital, and private access remain `NONE`
   stable-root recovery, and a healthy loopback surface without manufacturing a Candidate.
 - `natural_chain=NOT_YET_OBSERVED`: v2 contains no causally complete natural
   Candidate-to-Outcome chain. This remains stronger evidence to collect, not a capability failure.
-- `policy_reachability=UNVERIFIED`: current no-trade observations locate near-term blockers but do
-  not yet establish each gate's responsibility across phases or forward value.
+- `policy_reachability=LOCAL_RESPONSIBILITY_MEASURED`: snapshot
+  `sha256:984cb26a2112979ac34453ad00265f6b7e2ed3506a976b0edceab76ba01d25fc` freezes `21`
+  DecisionRecords through `2026-08-14T17:01:00Z`: `12` are DataHealth-healthy, `9` pass environment,
+  and those `9` contain `755` price-evaluable structures. Base admits `0`; removing only the `7%`
+  credit/payoff gate admits `5` structures in exactly one Window, while changing no Policy fact.
+- `credit_to_payoff_distribution=MEASURED_LOCAL_SAMPLE`: among those `755` structures, `2` pass
+  `7%`, median is `1.155678540625%`, p95 is `3.145764%`, p99 is `4.96479909375%`, and maximum is
+  `9.851412375%`. Both structures above `7%` fail only the separate `$10` credit gate; the five
+  structures exposed by removing `7%` have only `3.5183615625%–3.7268570625%` and are not
+  near-threshold cases.
+- `filter_forward_value=NOT_YET_MEASURED`: the frozen root had `0` WindowOutcomes at the audit
+  boundary, so the local responsibility result neither supports changing `7%` nor validates its
+  forward risk value.
 - `policy_qualification=NONE` and `edge_claim=NONE`: deterministic scenarios, a local ablation,
   Candidate frequency, one Session, and natural-chain occurrence cannot qualify the Policy.
 
@@ -150,18 +162,18 @@ capital, and private access remain `NONE`
 - HTTP remains limited to clock preflight/re-anchor, Session instrument metadata, initial index-path
   recovery seed, official settlement, and explicit affected-book recovery fallback. The feed adds
   no durable store, database, bus, replay framework, private method, or authenticated `raw` channel.
-- The complete repository gate passes: `225` tests and `8` deterministic business scenarios. This
+- The complete repository gate passes: `226` tests and `8` deterministic business scenarios. This
   is offline implementation evidence, not current market, execution, or profitability evidence.
 - Outside the exact active-task command, live runtime, stable-root writes, and market calls remain
   disabled. Private facts, orders, capital, and any other local or remote deployment remain
   unconditionally disabled.
 
-**Primary blocker:** `POLICY_GATE_RESPONSIBILITY_AND_FORWARD_VALUE_UNVERIFIED` — current public
-evidence can already measure which frozen gates prevent local reachability, but it cannot establish
-their forward risk value without aligned actual paths. The active task must report exact snapshot
-denominators, raw gate values and margins, one-variable responsibility, ranker reachability, size
-and component-stress sensitivity, and honest `NOT_YET_MEASURED` outcome dimensions. It may not
-change Policy, runtime behavior, durable schema, or truth.
+**Primary blocker:** `FILTER_FORWARD_VALUE_NOT_YET_MEASURED` — the `7%`-only Window marginal and
+ratio distribution are complete for the frozen snapshot, but it has no actual WindowOutcome yet.
+The active task is bounded to the owning `15AUG26` Session's ordinary post-expiry outcome
+finalization and closes with recorded facts or an exact `UNVERIFIED` reason. It does not wait for a
+Candidate and may not change `7%`, `$10`, sizing, Policy identity, runtime behavior, durable schema,
+or truth.
 
 ## Maturity ladder
 
@@ -175,9 +187,10 @@ change Policy, runtime behavior, durable schema, or truth.
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Active closure boundary:** keep the exact deployed launchd job and Policy unchanged while one
-read-only snapshot audit measures current gate reachability and responsibility. The task may inspect
-the v2 root and loopback Workbench but may not operate, replace, or reconfigure the runtime. Natural
-opportunities may continue to append independently. Private facts, orders, v1 reuse, threshold or
-sizing changes, simulated future paths, Policy qualification, Edge claims, remote deployment, and
-B4 remain forbidden.
+**Active closure boundary:** keep the exact deployed launchd job and Policy unchanged through the
+owning Session's existing official-settlement and future-index-path finalization. Then join only the
+frozen audit Windows to actual WindowOutcomes and close whether evidence is known or explicitly
+unavailable; a Candidate is neither required nor awaited. The task may inspect the v2 root and
+loopback Workbench but may not operate, replace, or reconfigure the runtime. Private facts, orders,
+v1 reuse, threshold or sizing changes, simulated future paths, Policy qualification, Edge claims,
+remote deployment, and B4 remain forbidden.

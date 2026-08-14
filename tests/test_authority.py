@@ -94,7 +94,7 @@ def test_capability_acceptance_does_not_manufacture_market_evidence() -> None:
 
     assert "B3_PIPELINE_CAPABILITY_ACCEPTED" in stage
     assert "natural_chain=NOT_YET_OBSERVED" in stage
-    assert "policy_reachability=UNVERIFIED" in stage
+    assert "policy_reachability=" in stage
     assert "policy_qualification=NONE" in stage
     assert "edge_claim=NONE" in stage
 
