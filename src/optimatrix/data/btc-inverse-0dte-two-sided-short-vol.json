@@ -10,8 +10,8 @@
   },
   "observation": {
     "maximum_source_span_ms": 6000,
-    "maximum_receive_span_ms": 4000,
-    "maximum_age_ms": 5000
+    "maximum_receive_span_ms": 8000,
+    "maximum_age_ms": 8000
   },
   "session": {
     "roll_reprice_minutes": 60,

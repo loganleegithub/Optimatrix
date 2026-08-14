@@ -175,7 +175,7 @@ def test_incomplete_book_response_still_advances_complete_cut_known_at(policy) -
             )
             if is_closed:
                 result = {"state": "closed", "instrument_name": "BTC-X-99000-P"}
-            round_trip_ms = 4_500 if is_closed else 20
+            round_trip_ms = 8_500 if is_closed else 20
             return PublicRpcResponse(
                 jsonrpc="2.0",
                 request_id=1,
@@ -197,9 +197,9 @@ def test_incomplete_book_response_still_advances_complete_cut_known_at(policy) -
         depth=20,
     )
 
-    assert evaluation.observation.known_at == now + timedelta(milliseconds=4_500)
+    assert evaluation.observation.known_at == now + timedelta(milliseconds=8_500)
     assert evaluation.context.evidence.market_received_min_ms == boundary_ms + 20
-    assert evaluation.context.evidence.market_received_max_ms == boundary_ms + 4_500
+    assert evaluation.context.evidence.market_received_max_ms == boundary_ms + 8_500
     assert "SELECTION_UNIVERSE_INCOMPLETE" in evaluation.observation.data_health_blockers
     assert "MARKET_RECEIVE_SPAN_EXCEEDED" in evaluation.observation.data_health_blockers
 

@@ -50,6 +50,9 @@ or profitability.
 
 ## Public market-data API
 
+- [Market-data collection best practices](https://docs.deribit.com/articles/market-data-collection-best-practices)
+  — cross-instrument feeds are asynchronous; REST is for infrequent snapshots/resynchronization,
+  while WebSocket aggregated subscriptions are preferred for continuously time-sensitive updates.
 - [JSON-RPC overview](https://docs.deribit.com/articles/json-rpc-overview)
   — production endpoint, request envelope, response timing fields, and `testnet` environment fact.
 - [`public/get_time`](https://docs.deribit.com/api-reference/supporting/public-get_time)

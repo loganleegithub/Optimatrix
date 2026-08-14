@@ -35,6 +35,18 @@ incoherence or unsafe boundary. The change must state the rejected assumption, p
 Policy identity on prior records, compare the same tape before and after, and must not optimize for a
 desired Candidate count, Outcome, hit rate, PnL, or promotion claim.
 
+**DataHealth correction in this task:** reject the original assumption that a complete public REST
+snapshot spanning more than `4s`, or containing an input older than `5s`, is necessarily unusable.
+The first 33 persisted observations separated into a normal receive-span cluster ending at `7.634s`
+and one clear `14.558s` outlier; ten otherwise complete observations were `UNKNOWN` under the old
+boundary. Re-capturing the exact immutable observations with `8s` receive-span and age bounds turned
+nine of those records into the same market's `ABSTAIN` result, kept the outlier `UNKNOWN`, and
+created zero Candidates. Freeze the corrected values at `8s`/`8s`, preserve the old Policy identity
+and Ledger in its recoverable root, and do not relax the `6s` market-source-span limit or the `10s`
+per-request timeout. Deribit's primary guidance treats infrequent REST snapshots as valid but
+recommends WebSocket subscriptions for time-sensitive loops; this correction does not claim an
+exchange SLA and does not add a WebSocket abstraction or dependency.
+
 **Event-state evidence boundary:** the authorized production command pins `event_state=NONE` and
 has no live calendar or human update source. Jump, realized-variance, and directional public-market
 proxies remain active, but event blockers must not be reported as an operating live control during

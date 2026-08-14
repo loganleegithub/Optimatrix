@@ -458,7 +458,7 @@ def market_context(
         market_received_min_ms=now_ms,
         market_received_max_ms=now_ms,
         event_state_known_at_ms=now_ms,
-        maximum_market_age_ms=5_000,
+        maximum_market_age_ms=8_000,
         requested_books=ordered_book_names,
         usable_books=ordered_book_names,
     )
