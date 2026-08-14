@@ -1317,7 +1317,14 @@ def _instrument_metadata(value: object, *, session_end_ms: int) -> tuple[dict[st
         output.append(
             {
                 "instrument_name": instrument_name,
+                "kind": "option",
+                "is_active": True,
                 "expiration_timestamp": session_end_ms,
+                "base_currency": BTC.base_currency,
+                "settlement_currency": BTC.settlement_currency,
+                "price_index": BTC.price_index,
+                "contract_size": contract_size,
+                "min_trade_amount": minimum,
                 "strike": _positive_decimal(item.get("strike"), "strike"),
                 "option_type": option_type,
                 "tick_size": _positive_decimal(item.get("tick_size"), "tick_size"),

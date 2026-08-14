@@ -31,15 +31,20 @@ book notification is a full snapshot; later changes are accepted only when that 
 `prev_change_id` equals its last accepted `change_id`. Instrument chains are ordered independently,
 so no notification timestamp is treated as a cross-instrument atomic market. One cut instead binds
 the minimum and maximum source boundaries, minimum and maximum receive boundaries, the connection
-continuity epoch, and the causal known-at boundary when the final required member was received.
+continuity epoch, and the causal known-at boundary when the final required member was received. An
+initialized book remains the current depth state while its connection epoch and verified change
+chain remain intact; absence of a content-changing book notification is not itself staleness. Each
+instrument therefore contributes the later source and receive boundary of its retained book/ticker
+pair, while the BTC index contributes its own boundary. The cut still applies freshness and span
+bounds across those effective members.
 
-A disconnect, missing initial snapshot, sequence mismatch, stale member, incomplete ticker/book
-pair, or source/receive span outside Policy invalidates the cut and yields `UNKNOWN` or a lifecycle
-Gap. REST may supply Session instrument metadata, the initial rolling index-history recovery seed,
-official settlement, and one bounded affected-book resynchronization. A REST resync seed is not
-itself proof that the incremental chain resumed: that instrument rejoins only after a matching later
-WebSocket change or a new full WebSocket snapshot. Authenticated `raw` channels, private facts, and
-cross-connection continuity are absent at B3.
+A disconnect, missing initial snapshot, sequence mismatch, stale effective index/instrument member,
+incomplete ticker/book pair, or source/receive span outside Policy invalidates the cut and yields
+`UNKNOWN` or a lifecycle Gap. REST may supply Session instrument metadata, the initial rolling
+index-history recovery seed, official settlement, and one bounded affected-book resynchronization.
+A REST resync seed is not itself proof that the incremental chain resumed: that instrument rejoins
+only after a matching later WebSocket change or a new full WebSocket snapshot. Authenticated `raw`
+channels, private facts, and cross-connection continuity are absent at B3.
 
 `DecisionWindowId` is the sole product and learning denominator:
 

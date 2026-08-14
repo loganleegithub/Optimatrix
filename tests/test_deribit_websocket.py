@@ -10,7 +10,7 @@ from typing import cast
 import pytest
 
 from optimatrix.decision import MarketObservation, schedule_decision_windows
-from optimatrix.deribit_snapshot import evaluate_live_btc_snapshot
+from optimatrix.deribit_snapshot import _instrument_metadata, evaluate_live_btc_snapshot
 from optimatrix.deribit_websocket import (
     DEFAULT_DERIBIT_WEBSOCKET_API,
     BtcWebSocketCache,
@@ -89,6 +89,53 @@ def test_initial_snapshots_and_increment_publish_one_immutable_watermark(policy)
     )
     recovered = MarketObservation.from_object(evaluation.observation.as_object())
     assert recovered.identity == evaluation.observation.identity
+
+
+def test_ticker_timestamp_is_provenance_not_a_sequence_identity() -> None:
+    cache, metadata, boundary_ms = _ready_cache()
+    repeated_timestamp_ms = boundary_ms + 220
+
+    cache.accept_subscription(
+        channel=f"ticker.{NAMES[0]}.100ms",
+        data={
+            **_ticker_payload(NAMES[0], source_timestamp_ms=repeated_timestamp_ms),
+            "mark_iv": "56",
+        },
+        received_timestamp_ms=boundary_ms + 600,
+    )
+
+    cut = _cut(cache, boundary_ms + 1_000)
+    response = cut.client(instrument_metadata=metadata, depth=20).call(
+        "public/get_order_book",
+        {"instrument_name": NAMES[0], "depth": 20},
+    )
+    result = cast(Mapping[str, object], response.result)  # type: ignore[union-attr]
+    assert result["mark_iv"] == "56"
+
+
+def test_validated_metadata_remains_idempotent_for_the_stream_cut(policy) -> None:
+    cache, raw_metadata, boundary_ms = _ready_cache()
+    expiry_ms = int(current_deribit_session(NOW).end.timestamp() * 1_000)
+    validated_metadata = _instrument_metadata(
+        list(raw_metadata),
+        session_end_ms=expiry_ms,
+    )
+
+    evaluation = evaluate_live_btc_snapshot(
+        client=_cut(cache, boundary_ms + 1_000).client(
+            instrument_metadata=validated_metadata,
+            depth=20,
+        ),
+        policy=policy,
+        now=NOW,
+        event_state=EventState.NONE,
+        maximum_books=32,
+        depth=20,
+        market_data_source=MarketDataSource.DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1,
+    )
+
+    assert sum(quote.option_type.value == "PUT" for quote in evaluation.quotes) == 2
+    assert sum(quote.option_type.value == "CALL" for quote in evaluation.quotes) == 2
 
 
 def test_sequence_gap_requires_one_rest_seed_and_later_websocket_continuation() -> None:
@@ -227,6 +274,40 @@ def test_incomplete_and_stale_stream_cuts_fail_closed() -> None:
         )
     with pytest.raises(ForwardObservationGap, match="WEBSOCKET_CUT_SOURCE_STALE"):
         _cut(cache, boundary_ms + 20_000)
+
+
+def test_unchanged_book_remains_current_under_its_verified_change_chain() -> None:
+    cache, metadata, boundary_ms = _ready_cache()
+    cache.accept_subscription(
+        channel="deribit_price_index.btc_usd",
+        data={
+            "index_name": "btc_usd",
+            "price": "100010",
+            "timestamp": boundary_ms + 19_000,
+        },
+        received_timestamp_ms=boundary_ms + 19_050,
+    )
+    for index, name in enumerate(NAMES):
+        source_ms = boundary_ms + 19_100 + index * 50
+        cache.accept_subscription(
+            channel=f"ticker.{name}.100ms",
+            data=_ticker_payload(name, source_timestamp_ms=source_ms),
+            received_timestamp_ms=source_ms + 50,
+        )
+
+    cut = _cut(cache, boundary_ms + 20_000)
+    response = cut.client(instrument_metadata=metadata, depth=20).call(
+        "public/get_order_book",
+        {"instrument_name": NAMES[0], "depth": 20},
+    )
+    result = cast(Mapping[str, object], response.result)  # type: ignore[union-attr]
+
+    assert cut.source_floor_ms == boundary_ms + 19_000
+    assert cut.source_watermark_ms == boundary_ms + 19_250
+    assert response.source_timestamp_min_ms == boundary_ms + 19_100  # type: ignore[union-attr]
+    assert response.source_timestamp_max_ms == boundary_ms + 19_100  # type: ignore[union-attr]
+    assert result["change_id"] == 1_000
+    assert result["bids"] == [["0.0010", "1"]]
 
 
 def test_transport_subscribes_only_public_aggregated_btc_channels() -> None:

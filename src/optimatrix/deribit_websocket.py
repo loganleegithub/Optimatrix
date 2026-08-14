@@ -457,12 +457,6 @@ class BtcWebSocketCache:
         price = _positive_decimal(payload.get("price"), "index price")
         if not self._history:
             raise ForwardObservationGap("WEBSOCKET_INDEX_HISTORY_NOT_BOOTSTRAPPED")
-        if (
-            self._index_epoch == self._epoch
-            and self._index_source_timestamp_ms is not None
-            and source_timestamp_ms <= self._index_source_timestamp_ms
-        ):
-            raise ForwardObservationGap("WEBSOCKET_INDEX_TIMESTAMP_NOT_ADVANCING")
         self._index_price = price
         self._index_source_timestamp_ms = source_timestamp_ms
         self._index_received_timestamp_ms = received_timestamp_ms
@@ -539,14 +533,6 @@ class BtcWebSocketCache:
         state = self._instrument_state(instrument_name, payload)
         source_timestamp_ms = _integer(payload.get("timestamp"), "ticker timestamp")
         _source_before_receipt(source_timestamp_ms, received_timestamp_ms)
-        if (
-            state.ticker.epoch == self._epoch
-            and state.ticker.source_timestamp_ms is not None
-            and source_timestamp_ms <= state.ticker.source_timestamp_ms
-        ):
-            raise ForwardObservationGap(
-                f"WEBSOCKET_TICKER_TIMESTAMP_NOT_ADVANCING:{instrument_name}"
-            )
         if payload.get("state", "open") == "open":
             _positive_decimal(payload.get("underlying_price"), "ticker underlying_price")
             _positive_decimal(payload.get("mark_iv"), "ticker mark_iv")
@@ -626,13 +612,15 @@ class BtcWebSocketCache:
                 raise _CutNotReady(f"WEBSOCKET_TICKER_SNAPSHOT_PENDING:{name}")
             local_sources = (book.source_timestamp_ms, ticker.source_timestamp_ms)
             local_receipts = (book.received_timestamp_ms, ticker.received_timestamp_ms)
-            source_boundaries.extend(local_sources)
-            received_boundaries.extend(local_receipts)
+            effective_source_timestamp_ms = max(local_sources)
+            effective_received_timestamp_ms = max(local_receipts)
+            source_boundaries.append(effective_source_timestamp_ms)
+            received_boundaries.append(effective_received_timestamp_ms)
             result = {
                 **ticker.data,
                 "instrument_name": name,
                 "state": ticker.data.get("state", "open"),
-                "timestamp": max(local_sources),
+                "timestamp": effective_source_timestamp_ms,
                 "change_id": book.change_id,
                 "bids": [
                     [str(price), str(quantity)]
@@ -647,10 +635,10 @@ class BtcWebSocketCache:
                     name,
                     PublicStreamResponse(
                         result=result,
-                        source_timestamp_min_ms=min(local_sources),
-                        source_timestamp_max_ms=max(local_sources),
-                        received_timestamp_min_ms=min(local_receipts),
-                        received_timestamp_max_ms=max(local_receipts),
+                        source_timestamp_min_ms=effective_source_timestamp_ms,
+                        source_timestamp_max_ms=effective_source_timestamp_ms,
+                        received_timestamp_min_ms=effective_received_timestamp_ms,
+                        received_timestamp_max_ms=effective_received_timestamp_ms,
                         continuity_epoch=self._epoch,
                     ),
                 )

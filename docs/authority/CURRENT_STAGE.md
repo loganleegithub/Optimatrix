@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 WEBSOCKET FORWARD OBSERVATION — CLOSED
+**Status:** B3 NATURAL FORWARD CHAIN ACCEPTANCE — ACTIVE
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -8,9 +8,9 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** [`B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE`](../../tasks/B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE.md)
 
 ## Current permissions
 
@@ -18,18 +18,24 @@ Stage is the permission ceiling; a future active task may only narrow it.
 
 **Offline checks and simulation:** authorized only in caller-supplied ignored roots
 
-**Public market calls:** `NONE_AUTHORIZED`
+**Public market calls:** only unauthenticated production `wss://www.deribit.com/ws/api/v2` public
+heartbeat, subscribe, unsubscribe, test, BTC index, and aggregated `100ms` BTC option book/ticker
+channels, plus `https://www.deribit.com/api/v2` public clock, instrument metadata, initial index-path
+recovery seed, affected-book resync, and official settlement calls made by the exact active command
 
-**Stable ObservationLedger root:** `NONE_AUTHORIZED`
+**Stable ObservationLedger root:** only
+`/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2`
 
 **Disposable offline ObservationLedger:** authorized only under caller-supplied ignored roots
 
-**Stable CaseJournal root:** `NONE_AUTHORIZED`
+**Stable CaseJournal root:** only
+`/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2`
 
 **Frozen prior evidence:** `/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1`
 is retained without migration or mutation and remains ineligible for the current Policy.
 
-**Continuous runtime:** `NONE`
+**Continuous runtime:** only the exact active-task command, current Policy identity, maximum three
+launches on the same root, and `604800` monotonic seconds per launch
 
 **Private read-only account permission:** `NONE`
 
@@ -105,20 +111,27 @@ is retained without migration or mutation and remains ineligible for the current
 - Each option book validates its own `change_id` / `prev_change_id` chain. A cut is available only
   when every requested book/ticker pair and the index share one connection epoch and satisfy the
   unchanged source, receive, freshness, and cross-input bounds.
+- An initialized book retains its depth through notification silence while its connection epoch and
+  verified change chain remain intact. Each option contributes the later book/ticker source and
+  receive boundary to cross-instrument freshness and span checks; a last content-change timestamp is
+  not itself a continuity failure.
 - Disconnect, incomplete initialization, staleness, and sequence loss fail through the exact
   Runtime Gap path. One affected-book REST snapshot may seed resynchronization, but that instrument
   rejoins only after a matching WebSocket continuation or a new full WebSocket snapshot.
 - HTTP remains limited to clock preflight/re-anchor, Session instrument metadata, initial index-path
   recovery seed, official settlement, and explicit affected-book recovery fallback. The feed adds
   no durable store, database, bus, replay framework, private method, or authenticated `raw` channel.
-- The complete repository gate passes: `221` tests and `8` deterministic business scenarios. This
+- The complete repository gate passes: `224` tests and `8` deterministic business scenarios. This
   is offline implementation evidence, not current market, execution, or profitability evidence.
-- Live runtime, stable-root writes, market calls, private facts, orders, and capital remain disabled.
+- Outside the exact active-task command, live runtime, stable-root writes, and market calls remain
+  disabled. Private facts, orders, capital, and deployment remain unconditionally disabled.
 
-**Primary blocker:** `NATURAL_FORWARD_CHAIN_UNVERIFIED` — the WebSocket path is deterministic and
-offline-verified but has not yet been observed on a new isolated root across a naturally occurring
-Candidate, later reunderwriting, Position, repeated monitoring, trigger, strictly later exit or
-official settlement, and explanatory Outcome.
+**Primary blocker:** `NATURAL_FORWARD_CHAIN_UNVERIFIED` — launch `2/3` on the preserved v2 root
+recorded one natural `ABSTAIN` and directly falsified the old content-change freshness assumption.
+The effective-member correction now passes `224` tests and all `8` business scenarios. The sole
+remaining launch must resume that exact root and still naturally prove Candidate, later Entry,
+Position, repeated monitoring, trigger, strictly later terminality, and explanatory Outcome. Policy,
+ranking, lifecycle, route, risk, and Outcome semantics remain unchanged.
 
 ## Maturity ladder
 
@@ -132,6 +145,6 @@ official settlement, and explanatory Outcome.
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Next closure:** a bounded `B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE` task may authorize one new isolated
-root and natural public observation. It must not lower thresholds to manufacture a Candidate,
-reuse the frozen prior root, add private facts or orders, claim Edge, or expand into B4.
+**Active closure boundary:** repair only the live-falsified public feed semantics, pass the repository
+gate, then resume `B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE` on the same root. Private facts, orders,
+old-root reuse, threshold changes, Edge claims, and B4 remain forbidden.

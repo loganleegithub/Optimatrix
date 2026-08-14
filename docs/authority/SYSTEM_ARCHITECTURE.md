@@ -78,12 +78,16 @@ fact. Only the owning contract may define how a known risk fact changes a Decisi
 The production forward-observation owner is one BTC-specific in-memory public WebSocket cache.
 Each option book verifies its own ordered change chain; cross-instrument notifications remain
 asynchronous and become one immutable cut only when the BTC index and every requested book/ticker
-pair share the current connection epoch and satisfy the Policy's source and receive watermarks.
-Disconnect or sequence loss is an exact Gap. A bounded REST book snapshot may seed recovery, but
-the instrument cannot rejoin the incremental cut until a later matching WebSocket continuation or
-new full snapshot proves continuity. HTTP remains the clock, Session metadata, initial index-history
-recovery seed, official settlement, and explicit resynchronization path; it is not the continuous
-Runtime market-cut path. The cache is transient and creates no new durable record owner.
+pair share the current connection epoch and satisfy the Policy's source and receive watermarks. A
+book snapshot remains the current depth state through silence while that verified chain and epoch
+remain intact. The effective member watermark is the later boundary of the retained book/ticker
+pair, so content-change time is not confused with continuity time; cross-instrument freshness and
+span checks still apply to the index and every effective instrument member. Disconnect or sequence
+loss is an exact Gap. A bounded REST book snapshot may seed recovery, but the instrument cannot
+rejoin the incremental cut until a later matching WebSocket continuation or new full snapshot
+proves continuity. HTTP remains the clock, Session metadata, initial index-history recovery seed,
+official settlement, and explicit resynchronization path; it is not the continuous Runtime
+market-cut path. The cache is transient and creates no new durable record owner.
 
 ## Record boundaries
 
