@@ -75,3 +75,26 @@ Policies, chronological or walk-forward evaluation, and actual future paths exis
 the denominator, rewrite a frozen Policy after Outcomes, promote itself, or receive account,
 capital, order, or execution permission. Promotion is a human decision under a separately
 authorized task.
+
+## Capability acceptance and exogenous opportunity
+
+A maturity gate must separate controllable system capability from the exogenous occurrence of an
+eligible market opportunity. Pipeline capability may be accepted only when production-shaped
+deterministic evidence covers the complete declared path and live public evidence proves the
+causal input, `UNKNOWN`, and truthful no-trade boundaries that deterministic fixtures cannot.
+Neither evidence class may substitute for the other.
+
+`PIPELINE_CAPABILITY_ACCEPTED` means the declared system can preserve and process the product path
+without manufacturing market facts. `NATURAL_CHAIN_OBSERVED` is strictly stronger evidence that a
+causally complete eligible chain actually occurred under the frozen Policy. A natural chain that
+has not occurred remains `NOT_YET_OBSERVED`; it does not invalidate accepted capability, prove that
+the Policy is unreachable, or authorize threshold, sizing, ranking, route, or truth-layer changes.
+A stage may never make progress depend on weakening the Policy merely to create an acceptance
+example.
+
+Pipeline capability, natural-chain observation, Policy reachability, Policy qualification, and
+Edge are five distinct evidence states. Reachability may be audited from causal market inputs by
+reporting raw values, threshold margins, and bounded counterfactual gate responsibility. Policy
+qualification and Edge require aligned actual forward Outcomes under frozen Policies and cost
+models. No implementation test, deterministic tape, Candidate count, no-trade count, single
+Session, or natural chain alone proves either.

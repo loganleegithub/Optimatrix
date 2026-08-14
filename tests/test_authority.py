@@ -63,7 +63,9 @@ def test_authorized_runtime_matches_active_b3_deployment() -> None:
         "/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2"
     )
     policy = load_btc_short_vol_policy(DEFAULT_BTC_SHORT_VOL_POLICY_PATH)
-    task = ROOT / "tasks" / "B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE.md"
+    tasks = sorted(path for path in (ROOT / "tasks").glob("*.md") if path.name != "TEMPLATE.md")
+    assert len(tasks) == 1
+    task = tasks[0]
 
     assert AUTHORIZED_RUNTIME_ROOT == expected_root
     assert AUTHORIZED_RUNTIME_POLICY_IDENTITY == policy.identity
@@ -74,6 +76,27 @@ def test_authorized_runtime_matches_active_b3_deployment() -> None:
 
     assert policy.identity in (AUTHORITY / "CURRENT_STAGE.md").read_text(encoding="utf-8")
     assert policy.identity in task.read_text(encoding="utf-8")
+
+
+def test_capability_acceptance_does_not_manufacture_market_evidence() -> None:
+    constitution = (AUTHORITY / "PRODUCT_CONSTITUTION.md").read_text(encoding="utf-8")
+    stage = (AUTHORITY / "CURRENT_STAGE.md").read_text(encoding="utf-8")
+
+    for fact in (
+        "PIPELINE_CAPABILITY_ACCEPTED",
+        "NATURAL_CHAIN_OBSERVED",
+        "NOT_YET_OBSERVED",
+        "Policy reachability",
+        "Policy qualification",
+        "Edge",
+    ):
+        assert fact in constitution
+
+    assert "B3_PIPELINE_CAPABILITY_ACCEPTED" in stage
+    assert "natural_chain=NOT_YET_OBSERVED" in stage
+    assert "policy_reachability=UNVERIFIED" in stage
+    assert "policy_qualification=NONE" in stage
+    assert "edge_claim=NONE" in stage
 
 
 def test_agent_route_resolves_to_current_owners() -> None:

@@ -17,9 +17,10 @@ make check
 `make check` is offline evidence only. A network command requires exact authorization in the active
 task and Stage; CLI help and source own its syntax.
 
-## Active B3 public runtime
+## Deployed B3 public runtime
 
-While `B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE` remains the sole active task, launchd label
+Current permission and the sole active task come only from `CURRENT_STAGE`. When that Stage
+authorizes the existing deployment, launchd label
 `com.optimatrix.b3-public-shadow` executes the merged `main` console script with exactly:
 
 ```bash
@@ -36,7 +37,9 @@ Window; earlier Windows remain absent and are never backfilled. While the comman
 the same stable root and Workbench roll to each new Session at `08:00 UTC`; unresolved older Cases
 continue to later valuation or official settlement, and both Ledger and Journal append across
 Sessions. A complete 24-hour sample or `96/96` live population is not a startup gate. The active
-task remains open until the exact natural Candidate-to-Outcome chain is directly observed.
+validation task may read an immutable DecisionRecord snapshot without operating the runtime or
+writing the root. A natural Candidate-to-Outcome chain remains stronger evidence to collect; its
+absence does not invalidate accepted pipeline capability or qualify the Policy.
 
 The runtime establishes Deribit UTC before it creates or mutates the stable root. Deribit time owns
 Session, Window, lifecycle, expiry, and settlement boundaries; the host wall clock is not a business

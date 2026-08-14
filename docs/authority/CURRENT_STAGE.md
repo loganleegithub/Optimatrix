@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 CAPABILITY ACCEPTANCE SEMANTICS — ACTIVE
+**Status:** B3 POLICY REACHABILITY AND FILTER AUDIT — ACTIVE
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -8,15 +8,17 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `AUTHORITY_ONLY`
+**Current task kind:** `VALIDATION_ONLY`
 
-**Sole authorized closure:** [`B3_CAPABILITY_ACCEPTANCE_SEMANTICS`](../../tasks/B3_CAPABILITY_ACCEPTANCE_SEMANTICS.md)
+**Sole authorized closure:** [`B3_POLICY_REACHABILITY_AND_FILTER_AUDIT`](../../tasks/B3_POLICY_REACHABILITY_AND_FILTER_AUDIT.md)
 
 ## Current permissions
 
 Stage is the permission ceiling; a future active task may only narrow it.
 
-**Offline checks and simulation:** authorized only in caller-supplied ignored roots
+**Offline checks and simulation:** one bounded read-only reachability/responsibility audit of an
+immutable DecisionRecord snapshot is authorized; any temporary output must remain in a
+caller-supplied ignored root, and synthetic future paths or simulated Outcomes are forbidden
 
 **Public market calls:** only unauthenticated production `wss://www.deribit.com/ws/api/v2` public
 heartbeat, subscribe, unsubscribe, test, BTC index, and aggregated `100ms` BTC option book/ticker
@@ -47,6 +49,20 @@ deployed and may remain under `KeepAlive`. Any other local or remote deployment,
 capital, and private access remain `NONE`
 
 **Policy qualification / Edge claim:** `NONE`
+
+## Current evidence state
+
+- `B3_PIPELINE_CAPABILITY_ACCEPTED`: production-shaped deterministic scenarios cover Candidate,
+  later Entry reunderwriting, Shadow Position, repeated monitoring, trigger, strictly later exit or
+  settlement, explanatory Outcome, restart recovery, Ledger/Journal ownership, and Workbench;
+  live public v2 evidence separately proves healthy cuts, causal `UNKNOWN`, truthful `ABSTAIN`,
+  stable-root recovery, and a healthy loopback surface without manufacturing a Candidate.
+- `natural_chain=NOT_YET_OBSERVED`: v2 contains no causally complete natural
+  Candidate-to-Outcome chain. This remains stronger evidence to collect, not a capability failure.
+- `policy_reachability=UNVERIFIED`: current no-trade observations locate near-term blockers but do
+  not yet establish each gate's responsibility across phases or forward value.
+- `policy_qualification=NONE` and `edge_claim=NONE`: deterministic scenarios, a local ablation,
+  Candidate frequency, one Session, and natural-chain occurrence cannot qualify the Policy.
 
 ## Current implementation truth
 
@@ -140,12 +156,12 @@ capital, and private access remain `NONE`
   disabled. Private facts, orders, capital, and any other local or remote deployment remain
   unconditionally disabled.
 
-**Primary blocker:** `B3_CAPABILITY_AND_OPPORTUNITY_CONFLATED` — the implementation evidence and
-live public no-trade evidence establish different facts, but the superseded closure made one
-exogenous natural Candidate the sole exit for a controllable system-capability stage. The natural
-Candidate → Entry → Shadow Position → monitoring → terminal Outcome chain remains
-`NOT_YET_OBSERVED`; Policy reachability and Edge remain `UNVERIFIED`. This task may correct only
-that evidence boundary and may not change Policy, runtime behavior, or market facts.
+**Primary blocker:** `POLICY_GATE_RESPONSIBILITY_AND_FORWARD_VALUE_UNVERIFIED` — current public
+evidence can already measure which frozen gates prevent local reachability, but it cannot establish
+their forward risk value without aligned actual paths. The active task must report exact snapshot
+denominators, raw gate values and margins, one-variable responsibility, ranker reachability, size
+and component-stress sensitivity, and honest `NOT_YET_MEASURED` outcome dimensions. It may not
+change Policy, runtime behavior, durable schema, or truth.
 
 ## Maturity ladder
 
@@ -159,8 +175,9 @@ that evidence boundary and may not change Policy, runtime behavior, or market fa
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Active closure boundary:** separate B3 pipeline-capability acceptance from natural-opportunity
-observation without treating deterministic fixtures as market evidence or treating truthful
-`ABSTAIN` as failure. The already deployed launchd job may remain unchanged under `KeepAlive`, but
-this Authority-only task may issue no live command. Private facts, orders, v1 reuse, threshold
-changes, Policy qualification, Edge claims, remote deployment, and B4 remain forbidden.
+**Active closure boundary:** keep the exact deployed launchd job and Policy unchanged while one
+read-only snapshot audit measures current gate reachability and responsibility. The task may inspect
+the v2 root and loopback Workbench but may not operate, replace, or reconfigure the runtime. Natural
+opportunities may continue to append independently. Private facts, orders, v1 reuse, threshold or
+sizing changes, simulated future paths, Policy qualification, Edge claims, remote deployment, and
+B4 remain forbidden.
