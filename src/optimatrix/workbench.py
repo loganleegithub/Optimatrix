@@ -10,7 +10,7 @@ from optimatrix.channels import CHANNELS, ChannelId
 from optimatrix.lifecycle import TradeCase
 from optimatrix.route import ShadowRouteEvidence
 
-WORKBENCH_SCHEMA_VERSION = 5
+WORKBENCH_SCHEMA_VERSION = 6
 _ASSET_ROOT = Path(__file__).with_name("workbench_static")
 _STATIC_ASSETS = ("index.html", "styles.css", "app.js")
 
@@ -84,6 +84,9 @@ _CONTEXT_LABELS = {
     "market_received_min_ms": "Oldest required market receipt (ms)",
     "market_received_max_ms": "Latest required market receipt (ms)",
     "event_state_known_at_ms": "Event state known at (ms)",
+    "candidate_data_readiness": "Candidate-local book readiness",
+    "unavailable_books": "Unavailable requested books",
+    "primary_rank_unresolved_books": "Primary-rank unresolved books",
 }
 _RUNTIME_LABELS = {
     "status": "Runtime status",
@@ -350,6 +353,10 @@ def build_workbench_document(
     known_at = _required_text(root.get("known_at"), "snapshot.known_at")
     window = _mapping(root.get("window"), "snapshot.window")
     context = _mapping(root.get("context"), "snapshot.context")
+    candidate_data_readiness = _mapping(
+        root.get("candidate_data_readiness"),
+        "snapshot.candidate_data_readiness",
+    )
     projection = _mapping(root.get("projection"), "snapshot.projection")
     state = _required_text(projection.get("state"), "snapshot.projection.state")
     phase = _required_text(projection.get("phase"), "snapshot.projection.phase")
@@ -424,7 +431,24 @@ def build_workbench_document(
         },
         "structure": structure,
         "structure_population": structure_population,
-        "context": _display_rows(context, _CONTEXT_LABELS),
+        "context": _display_rows(
+            {
+                **context,
+                "candidate_data_readiness": _required_text(
+                    candidate_data_readiness.get("status"),
+                    "snapshot.candidate_data_readiness.status",
+                ),
+                "unavailable_books": _display_text_sequence(
+                    candidate_data_readiness.get("unavailable_books"),
+                    "snapshot.candidate_data_readiness.unavailable_books",
+                ),
+                "primary_rank_unresolved_books": _display_text_sequence(
+                    candidate_data_readiness.get("primary_rank_unresolved_books"),
+                    "snapshot.candidate_data_readiness.primary_rank_unresolved_books",
+                ),
+            },
+            _CONTEXT_LABELS,
+        ),
         "methodology": _optional_display_rows(root.get("methodology"), {}),
         "case": build_case_projection(trade_case),
         "cases": case_views,
@@ -1731,6 +1755,11 @@ def _text_sequence(value: object, field: str) -> tuple[str, ...]:
     for index, member in enumerate(value):
         output.append(_required_text(member, f"{field}[{index}]"))
     return tuple(output)
+
+
+def _display_text_sequence(value: object, field: str) -> str:
+    values = _text_sequence(value, field)
+    return ", ".join(values) if values else "NONE"
 
 
 def _write_text(path: Path, value: str) -> None:

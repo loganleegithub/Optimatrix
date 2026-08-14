@@ -2195,6 +2195,11 @@ def _waiting_snapshot(session: DeribitSession, now: datetime) -> dict[str, objec
         "requested_book_count": 0,
         "fetched_book_count": 0,
         "warnings": ["AWAITING_FIRST_CURRENT_MARKET_CUT"],
+        "candidate_data_readiness": {
+            "status": "NOT_EVALUATED_GLOBAL_DATA_HEALTH",
+            "unavailable_books": [],
+            "primary_rank_unresolved_books": [],
+        },
         "window": {
             "decision_window_id": canonical_identity("PendingDecisionWindow", session.session_id),
             "channel_id": "INVERSE_BTC_SHORT_VOL",
@@ -2232,6 +2237,11 @@ def _gap_snapshot(
         "requested_book_count": 0,
         "fetched_book_count": 0,
         "warnings": ["PUBLIC_MARKET_GAP"],
+        "candidate_data_readiness": {
+            "status": "NOT_EVALUATED_GLOBAL_DATA_HEALTH",
+            "unavailable_books": [],
+            "primary_rank_unresolved_books": [],
+        },
         "window": {
             "decision_window_id": window.identity,
             "channel_id": window.channel_id.value,

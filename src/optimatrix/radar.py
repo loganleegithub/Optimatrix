@@ -128,6 +128,16 @@ def evaluate_btc_short_vol_window(
         return BtcWindowAssessment(record, None, None, observed_session.phase, vrp_ratio)
 
     selection = select_btc_0dte_condor(observation=observation, policy=policy)
+    if not selection.primary_rank_resolved:
+        record = _record(
+            window=window,
+            observation=observation,
+            policy=policy,
+            result=DecisionResult.UNKNOWN,
+            blockers=selection.blockers,
+            known_at=decision_boundary,
+        )
+        return BtcWindowAssessment(record, selection, None, observed_session.phase, vrp_ratio)
     if selection.selected is None:
         record = _record(
             window=window,

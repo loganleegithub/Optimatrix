@@ -60,9 +60,10 @@ Position capacity or risk allocation may block a later Window without erasing it
 
 ## Environment and DataHealth
 
-Before scoring or structure selection, the Window must know:
+Before environment scoring or structure selection, the Window must know:
 
-- the bounded instrument universe and whether every requested fact was obtained;
+- the bounded instrument universe, every usable component book, and typed metadata and reason for
+  every requested component book that was not usable;
 - source, receive, freshness, continuity, and cross-input coherence boundaries;
 - implied-variance and physical-path method identities with aligned horizon and coverage;
 - event-state value, source, and known-at boundary; and
@@ -71,6 +72,15 @@ Before scoring or structure selection, the Window must know:
 Incomplete DataHealth produces `Decision.UNKNOWN`. It does not become calm market, risk trigger,
 Candidate, or no-trade evidence. Known market facts may then produce `ABSTAIN`, `REVIEW`, or
 `CANDIDATE`.
+
+Component-book availability is Candidate-local after global causal DataHealth passes. Selection
+evaluates every Candidate supported by usable books under the unchanged Policy and ranker. A known
+unavailable book that cannot participate in any Policy-legal Candidate does not invalidate an
+unrelated Candidate. A Candidate that needs an unavailable book is not evaluable; when its known
+geometry and unresolved quote facts could still produce a Policy-eligible structure that outranks
+the observed Primary, the Primary rank is unresolved and the Window remains `UNKNOWN`. The system
+may not convert unresolved rank into `ABSTAIN`, silently promote an observed alternative, or weaken
+source, receive, freshness, continuity, cross-input, or required-metadata DataHealth.
 
 Current public measures must be named as proxies:
 

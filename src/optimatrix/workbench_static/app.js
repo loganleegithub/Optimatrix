@@ -2,7 +2,7 @@
   'use strict';
 
   const workbench = window.OPTIMATRIX_WORKBENCH;
-  if (!workbench || workbench.schema_version !== 5) {
+  if (!workbench || workbench.schema_version !== 6) {
     document.body.textContent = 'Workbench 数据缺失或版本不受支持。';
     return;
   }
@@ -84,6 +84,7 @@
     STOPPED_FOR_RESTART: '等待重启',
     SNAPSHOT_ONLY: '单次快照',
     COMPLETE: '已完成',
+    PRIMARY_RANK_UNRESOLVED: 'Primary 排名未决',
     COMPLETE_PENDING_TRADER_ACCEPTANCE: '完成 · 待交易员验收',
     UNKNOWN: '未知',
     KNOWN: '已知',
@@ -95,6 +96,7 @@
     NO_LEGAL_FOUR_LEG_STRUCTURE: '当前到期与行权价组合未形成合法完整四腿',
     NO_PRICE_EVALUABLE_FOUR_LEG_STRUCTURE: '已有合法结构，但完整四腿无法估价',
     NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE: '已有合法且可估价结构，但没有符合当前 Policy 的候选',
+    PRIMARY_RANK_UNRESOLVED_BY_MISSING_BOOKS: '缺失盘口仍可能改变 Primary 排名',
     PUBLIC_MARKET_GAP: '公开行情切面不完整，本窗口无法判断',
     RESTART_INTERRUPTED_CAUSAL_CUT: '重启中断因果切面，本窗口不重抓',
     BOUNDARY_NET_CREDIT_TOO_SMALL: '净权利金不足',

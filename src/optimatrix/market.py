@@ -14,6 +14,36 @@ class OptionType(StrEnum):
     PUT = "PUT"
 
 
+class OptionBookUnavailableReason(StrEnum):
+    BOOK_NOT_OPEN = "BOOK_NOT_OPEN"
+    BOOK_REQUEST_FAILED = "BOOK_REQUEST_FAILED"
+    BOOK_RESPONSE_INVALID = "BOOK_RESPONSE_INVALID"
+
+
+@dataclass(frozen=True)
+class UnavailableOptionBook:
+    """Known instrument metadata whose requested component book was not usable."""
+
+    instrument_name: str
+    product: ProductSpec
+    expiry: datetime
+    strike: Decimal
+    option_type: OptionType
+    reason: OptionBookUnavailableReason
+
+    def __post_init__(self) -> None:
+        if not self.instrument_name.startswith(self.product.instrument_prefix):
+            raise ValueError("unavailable instrument_name does not match product")
+        if self.expiry.tzinfo is None:
+            raise ValueError("unavailable book expiry must be timezone-aware")
+        if not self.strike.is_finite() or self.strike <= 0:
+            raise ValueError("unavailable book strike must be finite and positive")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("UnavailableOptionBookV1", self)
+
+
 class EventState(StrEnum):
     NONE = "NONE"
     PRE_EVENT = "PRE_EVENT"
@@ -230,8 +260,6 @@ class MarketContextEvidence:
             and known_at_ms - self.history_coverage_end_ms > self.history_cadence_ms * 2
         ):
             blockers.append("HISTORY_TAIL_STALE")
-        if set(self.requested_books) != set(self.usable_books):
-            blockers.append("SELECTION_UNIVERSE_INCOMPLETE")
         if self.history_coverage_end_ms is not None and self.history_coverage_end_ms > known_at_ms:
             blockers.append("HISTORY_COVERAGE_IN_FUTURE")
         for minimum, maximum, label in (

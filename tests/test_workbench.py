@@ -43,6 +43,11 @@ def _snapshot() -> dict[str, object]:
         "requested_book_count": 12,
         "fetched_book_count": 12,
         "warnings": ["BOUNDED_OPTION_UNIVERSE"],
+        "candidate_data_readiness": {
+            "status": "COMPLETE",
+            "unavailable_books": [],
+            "primary_rank_unresolved_books": [],
+        },
         "window": {
             "decision_window_id": "sha256:window",
             "channel_id": "INVERSE_BTC_SHORT_VOL",
@@ -288,6 +293,8 @@ def test_document_projects_one_four_leg_strategy_without_recalculating_values() 
     assert {row["key"]: row["value"] for row in context}["jump_share"] == "0.04"
     assert {row["key"]: row["value"] for row in context}["knowledge"] == "KNOWN"
     context_by_key = {row["key"]: row for row in context}
+    assert context_by_key["candidate_data_readiness"]["value"] == "COMPLETE"
+    assert context_by_key["unavailable_books"]["value"] == "NONE"
     assert context_by_key["history_coverage_end_ms"]["kind"] == "timestamp"
     assert "kind" not in context_by_key["history_cadence_ms"]
     window = cast(Sequence[Mapping[str, object]], document["window"])

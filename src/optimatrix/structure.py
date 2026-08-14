@@ -3,10 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 
 from optimatrix.decision import MarketObservation
 from optimatrix.identity import canonical_identity
-from optimatrix.market import OptionQuote, OptionType
+from optimatrix.market import OptionQuote, OptionType, UnavailableOptionBook
 from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.pricing import Btc0DteCondorPricing, price_btc_0dte_condor
 from optimatrix.products import BTC
@@ -70,6 +71,45 @@ class Btc0DteCondorSelection:
     price_evaluable_count: int
     policy_eligible_count: int
     blockers: tuple[str, ...]
+    data_readiness: CandidateDataReadiness
+    unavailable_book_names: tuple[str, ...]
+    primary_rank_unresolved_book_names: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in (
+                self.legal_structure_count,
+                self.price_evaluable_count,
+                self.policy_eligible_count,
+            )
+        ):
+            raise ValueError("selection counts must be non-negative integers")
+        if len(set(self.unavailable_book_names)) != len(self.unavailable_book_names):
+            raise ValueError("selection unavailable books must be unique")
+        unresolved = set(self.primary_rank_unresolved_book_names)
+        if len(unresolved) != len(
+            self.primary_rank_unresolved_book_names
+        ) or not unresolved.issubset(self.unavailable_book_names):
+            raise ValueError("unresolved books must be a unique subset of unavailable books")
+        if self.data_readiness is CandidateDataReadiness.PRIMARY_RANK_UNRESOLVED:
+            if (
+                self.selected is not None
+                or not unresolved
+                or self.blockers != ("PRIMARY_RANK_UNRESOLVED_BY_MISSING_BOOKS",)
+            ):
+                raise ValueError("unresolved Primary rank must fail closed with exact evidence")
+        elif unresolved:
+            raise ValueError("complete Candidate data cannot retain unresolved books")
+
+    @property
+    def primary_rank_resolved(self) -> bool:
+        return self.data_readiness is CandidateDataReadiness.COMPLETE
+
+
+class CandidateDataReadiness(StrEnum):
+    COMPLETE = "COMPLETE"
+    PRIMARY_RANK_UNRESOLVED = "PRIMARY_RANK_UNRESOLVED"
 
 
 @dataclass(frozen=True)
@@ -321,6 +361,14 @@ def select_btc_0dte_condor(
         observation.observed_at,
         phase_policy=policy.session,
     ).end
+    unavailable_book_names = tuple(
+        sorted(book.instrument_name for book in observation.unavailable_books)
+    )
+    primary_rank_unresolved_book_names = _primary_rank_unresolved_books(
+        observation=observation,
+        policy=policy,
+        expected_expiry=expected_expiry,
+    )
     legal_count = 0
     evaluable_count = 0
     eligible: list[Btc0DteCondorCandidate] = []
@@ -393,25 +441,53 @@ def select_btc_0dte_condor(
                     else:
                         eligible.append(candidate)
 
+    if primary_rank_unresolved_book_names:
+        return Btc0DteCondorSelection(
+            selected=None,
+            retained_alternatives=(),
+            legal_structure_count=legal_count,
+            price_evaluable_count=evaluable_count,
+            policy_eligible_count=len(eligible),
+            blockers=("PRIMARY_RANK_UNRESOLVED_BY_MISSING_BOOKS",),
+            data_readiness=CandidateDataReadiness.PRIMARY_RANK_UNRESOLVED,
+            unavailable_book_names=unavailable_book_names,
+            primary_rank_unresolved_book_names=primary_rank_unresolved_book_names,
+        )
     if legal_count == 0:
-        return Btc0DteCondorSelection(None, (), 0, 0, 0, ("NO_LEGAL_FOUR_LEG_STRUCTURE",))
+        return Btc0DteCondorSelection(
+            selected=None,
+            retained_alternatives=(),
+            legal_structure_count=0,
+            price_evaluable_count=0,
+            policy_eligible_count=0,
+            blockers=("NO_LEGAL_FOUR_LEG_STRUCTURE",),
+            data_readiness=CandidateDataReadiness.COMPLETE,
+            unavailable_book_names=unavailable_book_names,
+            primary_rank_unresolved_book_names=(),
+        )
     if evaluable_count == 0:
         return Btc0DteCondorSelection(
-            None,
-            (),
-            legal_count,
-            0,
-            0,
-            ("NO_PRICE_EVALUABLE_FOUR_LEG_STRUCTURE",),
+            selected=None,
+            retained_alternatives=(),
+            legal_structure_count=legal_count,
+            price_evaluable_count=0,
+            policy_eligible_count=0,
+            blockers=("NO_PRICE_EVALUABLE_FOUR_LEG_STRUCTURE",),
+            data_readiness=CandidateDataReadiness.COMPLETE,
+            unavailable_book_names=unavailable_book_names,
+            primary_rank_unresolved_book_names=(),
         )
     if not eligible:
         return Btc0DteCondorSelection(
-            None,
-            (),
-            legal_count,
-            evaluable_count,
-            0,
-            ("NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE", *tuple(dict.fromkeys(rejected))),
+            selected=None,
+            retained_alternatives=(),
+            legal_structure_count=legal_count,
+            price_evaluable_count=evaluable_count,
+            policy_eligible_count=0,
+            blockers=("NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE", *tuple(dict.fromkeys(rejected))),
+            data_readiness=CandidateDataReadiness.COMPLETE,
+            unavailable_book_names=unavailable_book_names,
+            primary_rank_unresolved_book_names=(),
         )
     ordered = tuple(sorted(eligible, key=_rank_key))
     selected = ordered[0]
@@ -423,7 +499,134 @@ def select_btc_0dte_condor(
         price_evaluable_count=evaluable_count,
         policy_eligible_count=len(eligible),
         blockers=(),
+        data_readiness=CandidateDataReadiness.COMPLETE,
+        unavailable_book_names=unavailable_book_names,
+        primary_rank_unresolved_book_names=(),
     )
+
+
+def _primary_rank_unresolved_books(
+    *,
+    observation: MarketObservation,
+    policy: BtcShortVolPolicy,
+    expected_expiry: datetime,
+) -> tuple[str, ...]:
+    if not observation.unavailable_books:
+        return ()
+    books: tuple[OptionQuote | UnavailableOptionBook, ...] = (
+        *observation.quotes,
+        *observation.unavailable_books,
+    )
+    puts = tuple(book for book in books if book.option_type is OptionType.PUT)
+    calls = tuple(book for book in books if book.option_type is OptionType.CALL)
+    physical_sigma = observation.context.trailing_realized_variance_proxy.sqrt()
+    put_pairs = tuple(
+        (long_put, short_put)
+        for long_put in puts
+        for short_put in puts
+        if _potential_put_pair(
+            long_put=long_put,
+            short_put=short_put,
+            forward_price=observation.context.forward_price,
+            physical_sigma=physical_sigma,
+            expected_expiry=expected_expiry,
+            policy=policy,
+        )
+    )
+    call_pairs = tuple(
+        (short_call, long_call)
+        for short_call in calls
+        for long_call in calls
+        if _potential_call_pair(
+            short_call=short_call,
+            long_call=long_call,
+            forward_price=observation.context.forward_price,
+            physical_sigma=physical_sigma,
+            expected_expiry=expected_expiry,
+            policy=policy,
+        )
+    )
+    if not put_pairs or not call_pairs:
+        return ()
+    unavailable_names = {book.instrument_name for book in observation.unavailable_books}
+    unresolved: set[str] = set()
+    for put_pair in put_pairs:
+        for call_pair in call_pairs:
+            candidate_names = {book.instrument_name for book in (*put_pair, *call_pair)}
+            unresolved.update(candidate_names & unavailable_names)
+    return tuple(sorted(unresolved))
+
+
+def _potential_put_pair(
+    *,
+    long_put: OptionQuote | UnavailableOptionBook,
+    short_put: OptionQuote | UnavailableOptionBook,
+    forward_price: Decimal,
+    physical_sigma: Decimal,
+    expected_expiry: datetime,
+    policy: BtcShortVolPolicy,
+) -> bool:
+    width = short_put.strike - long_put.strike
+    return (
+        long_put.instrument_name != short_put.instrument_name
+        and _potential_book_scope(long_put, expected_expiry=expected_expiry)
+        and _potential_book_scope(short_put, expected_expiry=expected_expiry)
+        and long_put.strike < short_put.strike < forward_price
+        and policy.structure.minimum_wing_width_usd
+        <= width
+        <= policy.structure.maximum_wing_width_usd
+        and _potential_short_delta(short_put, policy=policy)
+        and _log_distance_sigma(
+            strike=short_put.strike,
+            forward=forward_price,
+            physical_sigma=physical_sigma,
+        )
+        >= policy.structure.minimum_body_distance_sigma
+    )
+
+
+def _potential_call_pair(
+    *,
+    short_call: OptionQuote | UnavailableOptionBook,
+    long_call: OptionQuote | UnavailableOptionBook,
+    forward_price: Decimal,
+    physical_sigma: Decimal,
+    expected_expiry: datetime,
+    policy: BtcShortVolPolicy,
+) -> bool:
+    width = long_call.strike - short_call.strike
+    return (
+        short_call.instrument_name != long_call.instrument_name
+        and _potential_book_scope(short_call, expected_expiry=expected_expiry)
+        and _potential_book_scope(long_call, expected_expiry=expected_expiry)
+        and forward_price < short_call.strike < long_call.strike
+        and policy.structure.minimum_wing_width_usd
+        <= width
+        <= policy.structure.maximum_wing_width_usd
+        and _potential_short_delta(short_call, policy=policy)
+        and _log_distance_sigma(
+            strike=short_call.strike,
+            forward=forward_price,
+            physical_sigma=physical_sigma,
+        )
+        >= policy.structure.minimum_body_distance_sigma
+    )
+
+
+def _potential_book_scope(
+    book: OptionQuote | UnavailableOptionBook,
+    *,
+    expected_expiry: datetime,
+) -> bool:
+    return book.product == BTC and book.expiry == expected_expiry
+
+
+def _potential_short_delta(
+    book: OptionQuote | UnavailableOptionBook,
+    *,
+    policy: BtcShortVolPolicy,
+) -> bool:
+    return isinstance(book, UnavailableOptionBook) or _short_delta_eligible(book, policy)
 
 
 def _short_delta_eligible(quote: OptionQuote, policy: BtcShortVolPolicy) -> bool:

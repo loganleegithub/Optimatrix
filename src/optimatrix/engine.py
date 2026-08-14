@@ -20,7 +20,12 @@ from optimatrix.lifecycle import (
     open_trade_case,
     settle_shadow_position,
 )
-from optimatrix.market import ExpirySettlementFact, MarketContext, OptionQuote
+from optimatrix.market import (
+    ExpirySettlementFact,
+    MarketContext,
+    OptionQuote,
+    UnavailableOptionBook,
+)
 from optimatrix.observation_ledger import ObservationLedger
 from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.radar import BtcWindowAssessment, evaluate_btc_short_vol_window
@@ -47,12 +52,14 @@ class Btc0DteShortVolEngine:
         *,
         quotes: tuple[OptionQuote, ...],
         context: MarketContext,
+        unavailable_books: tuple[UnavailableOptionBook, ...] = (),
     ) -> MarketObservation:
         return MarketObservation.capture(
             channel_id=self.policy.channel_id,
             policy=self.policy.observation,
             context=context,
             quotes=quotes,
+            unavailable_books=unavailable_books,
         )
 
     def assess_window(

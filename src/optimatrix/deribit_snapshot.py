@@ -29,6 +29,7 @@ from optimatrix.market import (
     ImpliedVarianceMethod,
     MarketContext,
     MarketContextEvidence,
+    OptionBookUnavailableReason,
     OptionQuote,
     OptionType,
     PriceLevel,
@@ -36,6 +37,7 @@ from optimatrix.market import (
     SettlementEvidenceKind,
     TickSchedule,
     TickStep,
+    UnavailableOptionBook,
 )
 from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.products import BTC
@@ -66,6 +68,10 @@ DERIBIT_INDEX_PATH_METHOD_ID = (
 
 class DeribitSourceError(RuntimeError):
     """A bounded public Deribit snapshot could not be interpreted truthfully."""
+
+
+class BookCausalError(DeribitSourceError):
+    """One component-book response contradicts its validated request or time envelope."""
 
 
 def _continuous_monotonic_ns() -> int:
@@ -314,9 +320,12 @@ class PublicSnapshotEvaluation:
 
     def as_object(self) -> dict[str, object]:
         structure = self.selection.selected if self.selection is not None else None
+        primary_rank_unresolved = (
+            self.selection is not None and not self.selection.primary_rank_resolved
+        )
         projection_state = (
             "UNKNOWN"
-            if self.observation.data_health_blockers
+            if self.observation.data_health_blockers or primary_rank_unresolved
             else "STRUCTURE_FOUND"
             if structure is not None
             else "NO_STRUCTURE"
@@ -324,6 +333,8 @@ class PublicSnapshotEvaluation:
         blockers = (
             self.observation.data_health_blockers
             if self.observation.data_health_blockers
+            else self.selection.blockers
+            if primary_rank_unresolved and self.selection is not None
             else ("BOUNDED_SNAPSHOT_IS_NOT_A_DECISION_RECORD",)
             if structure is not None
             else self.selection.blockers
@@ -356,6 +367,23 @@ class PublicSnapshotEvaluation:
                 **self.methodology.as_object(),
             },
             "warnings": list(self.warnings),
+            "candidate_data_readiness": {
+                "status": (
+                    self.selection.data_readiness.value
+                    if self.selection is not None
+                    else "NOT_EVALUATED_GLOBAL_DATA_HEALTH"
+                ),
+                "unavailable_books": (
+                    list(self.selection.unavailable_book_names)
+                    if self.selection is not None
+                    else [book.instrument_name for book in self.observation.unavailable_books]
+                ),
+                "primary_rank_unresolved_books": (
+                    list(self.selection.primary_rank_unresolved_book_names)
+                    if self.selection is not None
+                    else []
+                ),
+            },
             "window": {
                 **self.decision_window.as_object(),
                 "observation_id": self.observation.identity,
@@ -831,6 +859,7 @@ def evaluate_live_btc_snapshot(
         quotes,
         forwards,
         fetch_warnings,
+        unavailable_books,
         book_source_boundaries_ms,
         book_response_boundaries_ms,
     ) = _fetch_books(
@@ -843,8 +872,6 @@ def evaluate_live_btc_snapshot(
     warnings.extend(
         f"REQUIRED_INSTRUMENT_METADATA_MISSING:{name}" for name in missing_required_names
     )
-    if len(quotes) < 4:
-        raise DeribitSourceError("fewer than four current-session option books were usable")
     horizon_minutes = max(
         5,
         session.minutes_to_expiry - policy.lifecycle.latest_exit_minutes_to_expiry,
@@ -960,6 +987,7 @@ def evaluate_live_btc_snapshot(
         policy=policy.observation,
         context=context,
         quotes=tuple(quotes),
+        unavailable_books=tuple(unavailable_books),
         known_at=known_at,
     )
     selection = (
@@ -993,14 +1021,17 @@ def _fetch_books(
     list[OptionQuote],
     list[Decimal],
     tuple[str, ...],
+    tuple[UnavailableOptionBook, ...],
     tuple[int, ...],
     tuple[int, ...],
 ]:
     quotes: list[OptionQuote] = []
     forwards: list[Decimal] = []
     warnings: list[str] = []
+    unavailable_books: list[UnavailableOptionBook] = []
     source_boundaries_ms: list[int] = []
     response_boundaries_ms: list[int] = []
+    unbounded_request_failures: list[str] = []
 
     def fetch_one(
         item: dict[str, object],
@@ -1032,50 +1063,115 @@ def _fetch_books(
                     received_timestamp_ms,
                     server_sent_at_us,
                 ) = future.result()
-                response_boundaries_ms.append(received_timestamp_ms)
+            except (DeribitSourceError, OSError, ValueError) as exc:
+                warning = f"BOOK_REQUEST_FAILED:{instrument_name}:{type(exc).__name__}"
+                warnings.append(warning)
+                failure_known_at_ms = _client_clock_known_at_ms(client)
+                if failure_known_at_ms is None:
+                    unbounded_request_failures.append(warning)
+                    continue
+                response_boundaries_ms.append(failure_known_at_ms)
+                unavailable_books.append(
+                    _unavailable_option_book(
+                        item,
+                        reason=OptionBookUnavailableReason.BOOK_REQUEST_FAILED,
+                    )
+                )
+                continue
+            response_boundaries_ms.append(received_timestamp_ms)
+            try:
                 result = _mapping(raw_result, "order book result")
                 source_boundary_ms = _book_source_upper_bound_ms(
                     result,
                     fallback_ms=fallback_received_at_ms,
                     server_sent_at_us=server_sent_at_us,
                 )
-                source_boundaries_ms.append(source_boundary_ms)
                 quote, forward, quote_warnings = _quote_from_public_book(
                     metadata=returned_metadata,
                     result=result,
                     received_timestamp_ms=received_timestamp_ms,
                     server_sent_at_us=server_sent_at_us,
                 )
-            except (DeribitSourceError, OSError, ValueError) as exc:
-                warnings.append(
-                    f"BOOK_REQUEST_OR_PARSE_FAILED:{instrument_name}:{type(exc).__name__}"
+            except BookCausalError:
+                raise
+            except (DeribitSourceError, ValueError) as exc:
+                warnings.append(f"BOOK_RESPONSE_INVALID:{instrument_name}:{type(exc).__name__}")
+                source_boundaries_ms.append(
+                    _book_response_source_upper_bound_ms(
+                        fallback_ms=fallback_received_at_ms,
+                        server_sent_at_us=server_sent_at_us,
+                    )
+                )
+                unavailable_books.append(
+                    _unavailable_option_book(
+                        item,
+                        reason=OptionBookUnavailableReason.BOOK_RESPONSE_INVALID,
+                    )
                 )
                 continue
+            source_boundaries_ms.append(source_boundary_ms)
             warnings.extend(f"{instrument_name}:{warning}" for warning in quote_warnings)
             if quote is not None:
                 quotes.append(quote)
+            elif "BOOK_NOT_OPEN" in quote_warnings:
+                unavailable_books.append(
+                    _unavailable_option_book(
+                        item,
+                        reason=OptionBookUnavailableReason.BOOK_NOT_OPEN,
+                    )
+                )
             if forward is not None:
                 forwards.append(forward)
-    failed_requests = tuple(
-        warning for warning in warnings if warning.startswith("BOOK_REQUEST_OR_PARSE_FAILED:")
-    )
-    if failed_requests:
+    if unbounded_request_failures:
         raise DeribitSourceError(
-            f"{len(failed_requests)} of {len(metadata)} requested option books failed: "
-            + ",".join(sorted(failed_requests))
+            f"{len(unbounded_request_failures)} of {len(metadata)} requested option books failed "
+            "without a validated causal completion boundary: "
+            + ",".join(sorted(unbounded_request_failures))
         )
     quotes.sort(key=lambda quote: (quote.strike, quote.option_type.value, quote.instrument_name))
+    unavailable_books.sort(key=lambda book: book.instrument_name)
     if len(response_boundaries_ms) != len(metadata):
         raise DeribitSourceError("requested option book response boundaries are incomplete")
-    if len(source_boundaries_ms) != len(metadata):
-        raise DeribitSourceError("requested option book source boundaries are incomplete")
     return (
         quotes,
         forwards,
         tuple(warnings),
+        tuple(unavailable_books),
         tuple(source_boundaries_ms),
         tuple(response_boundaries_ms),
     )
+
+
+def _unavailable_option_book(
+    metadata: Mapping[str, object],
+    *,
+    reason: OptionBookUnavailableReason,
+) -> UnavailableOptionBook:
+    return UnavailableOptionBook(
+        instrument_name=_text(metadata.get("instrument_name"), "instrument_name"),
+        product=BTC,
+        expiry=_datetime_from_epoch_ms(
+            _integer(metadata.get("expiration_timestamp"), "expiration_timestamp")
+        ),
+        strike=_positive_decimal(metadata.get("strike"), "strike"),
+        option_type=(OptionType.CALL if metadata.get("option_type") == "call" else OptionType.PUT),
+        reason=reason,
+    )
+
+
+def _client_clock_known_at_ms(client: PublicRpcClient) -> int | None:
+    clock = getattr(client, "clock", None)
+    if not isinstance(clock, DeribitClock) or not clock.initialized:
+        return None
+    return _datetime_to_ceil_ms(clock.read().latest_at)
+
+
+def _book_response_source_upper_bound_ms(
+    *,
+    fallback_ms: int,
+    server_sent_at_us: int | None,
+) -> int:
+    return _ceil_div(server_sent_at_us, 1_000) if server_sent_at_us is not None else fallback_ms
 
 
 def _instrument_metadata(value: object, *, session_end_ms: int) -> tuple[dict[str, object], ...]:
@@ -1180,11 +1276,11 @@ def _quote_from_public_book(
     server_sent_at_us: int | None = None,
 ) -> tuple[OptionQuote | None, Decimal | None, tuple[str, ...]]:
     warnings: list[str] = []
-    if result.get("state") != "open":
-        return None, None, ("BOOK_NOT_OPEN",)
     instrument_name = _text(result.get("instrument_name"), "book.instrument_name")
     if instrument_name != metadata["instrument_name"]:
-        raise DeribitSourceError("order book instrument identity mismatch")
+        raise BookCausalError("order book instrument identity mismatch")
+    if result.get("state") != "open":
+        return None, None, ("BOOK_NOT_OPEN",)
     greeks = _mapping(result.get("greeks"), "greeks")
     signed_delta = _decimal(greeks.get("delta"), "greeks.delta")
     gamma = max(Decimal(0), _decimal(greeks.get("gamma"), "greeks.gamma"))
@@ -1199,7 +1295,7 @@ def _quote_from_public_book(
         warnings.append(f"UNRECOGNIZED_SETTLEMENT_PERIOD:{settlement_period}")
     source_timestamp_ms = _integer(result.get("timestamp"), "timestamp")
     if server_sent_at_us is not None and source_timestamp_ms * 1_000 > server_sent_at_us:
-        raise DeribitSourceError("order book source timestamp follows its response envelope")
+        raise BookCausalError("order book source timestamp follows its response envelope")
     quote = OptionQuote(
         instrument_name=instrument_name,
         product=BTC,
@@ -1538,7 +1634,7 @@ def _book_source_upper_bound_ms(
         return _ceil_div(server_sent_at_us, 1_000) if server_sent_at_us is not None else fallback_ms
     source_ms = _integer(raw_timestamp, "timestamp")
     if server_sent_at_us is not None and source_ms * 1_000 > server_sent_at_us:
-        raise DeribitSourceError("order book source timestamp follows its response envelope")
+        raise BookCausalError("order book source timestamp follows its response envelope")
     return source_ms
 
 

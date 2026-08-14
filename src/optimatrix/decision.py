@@ -15,12 +15,14 @@ from optimatrix.market import (
     ImpliedVarianceMethod,
     MarketContext,
     MarketContextEvidence,
+    OptionBookUnavailableReason,
     OptionQuote,
     OptionType,
     PriceLevel,
     RealizedVarianceMethod,
     TickSchedule,
     TickStep,
+    UnavailableOptionBook,
 )
 from optimatrix.policy import ObservationPolicy, WindowSchedulePolicy
 from optimatrix.pricing import Action
@@ -141,6 +143,7 @@ class MarketObservation:
     context: MarketContext
     quotes: tuple[OptionQuote, ...]
     data_health_blockers: tuple[str, ...]
+    unavailable_books: tuple[UnavailableOptionBook, ...] = ()
 
     def __post_init__(self) -> None:
         require_identity(self.data_health_policy_id, "data_health_policy_id")
@@ -155,6 +158,17 @@ class MarketObservation:
             raise ValueError("MarketObservation DataHealth does not match MarketContext")
         if len({quote.instrument_name for quote in self.quotes}) != len(self.quotes):
             raise ValueError("MarketObservation quotes must have unique instruments")
+        quote_names = {quote.instrument_name for quote in self.quotes}
+        unavailable_names = tuple(book.instrument_name for book in self.unavailable_books)
+        if len(set(unavailable_names)) != len(unavailable_names):
+            raise ValueError("MarketObservation unavailable books must have unique instruments")
+        readiness_mismatch = set(unavailable_names) != set(
+            self.context.evidence.requested_books
+        ) - set(self.context.evidence.usable_books) or bool(set(unavailable_names) & quote_names)
+        if readiness_mismatch != (
+            "OPTION_BOOK_READINESS_EVIDENCE_MISMATCH" in self.data_health_blockers
+        ):
+            raise ValueError("MarketObservation option-book readiness evidence is incoherent")
         if len(set(self.data_health_blockers)) != len(self.data_health_blockers) or any(
             not blocker for blocker in self.data_health_blockers
         ):
@@ -163,7 +177,7 @@ class MarketObservation:
     @property
     def identity(self) -> str:
         return canonical_identity(
-            "MarketObservationV1",
+            "MarketObservationV2",
             self.channel_id,
             self.data_health_policy_id,
             self.observed_at,
@@ -171,6 +185,7 @@ class MarketObservation:
             self.context,
             tuple(sorted(self.quotes, key=lambda quote: quote.instrument_name)),
             self.data_health_blockers,
+            tuple(sorted(self.unavailable_books, key=lambda book: book.instrument_name)),
         )
 
     @classmethod
@@ -181,6 +196,7 @@ class MarketObservation:
         policy: ObservationPolicy,
         context: MarketContext,
         quotes: tuple[OptionQuote, ...],
+        unavailable_books: tuple[UnavailableOptionBook, ...] = (),
         known_at: datetime | None = None,
     ) -> Self:
         causal_known_at = context.now if known_at is None else _utc(known_at, "known_at")
@@ -190,6 +206,12 @@ class MarketObservation:
         quote_names = {quote.instrument_name for quote in quotes}
         if quote_names != set(context.evidence.usable_books):
             blockers.append("OBSERVATION_UNIVERSE_MISMATCH")
+        unavailable_names = {book.instrument_name for book in unavailable_books}
+        expected_unavailable_names = set(context.evidence.requested_books) - set(
+            context.evidence.usable_books
+        )
+        if unavailable_names != expected_unavailable_names or unavailable_names & quote_names:
+            blockers.append("OPTION_BOOK_READINESS_EVIDENCE_MISMATCH")
         if context.evidence.maximum_market_age_ms != policy.maximum_age_ms:
             blockers.append("DATA_HEALTH_POLICY_AGE_MISMATCH")
         if not quotes:
@@ -242,6 +264,7 @@ class MarketObservation:
             context=context,
             quotes=quotes,
             data_health_blockers=tuple(dict.fromkeys(blockers)),
+            unavailable_books=unavailable_books,
         )
 
     def as_object(self) -> dict[str, object]:
@@ -253,6 +276,9 @@ class MarketObservation:
             "known_at": _iso(self.known_at),
             "context": _market_context_object(self.context),
             "quotes": [_option_quote_object(quote) for quote in self.quotes],
+            "unavailable_books": [
+                _unavailable_option_book_object(book) for book in self.unavailable_books
+            ],
             "data_health_blockers": list(self.data_health_blockers),
         }
 
@@ -269,6 +295,7 @@ class MarketObservation:
                 "known_at",
                 "context",
                 "quotes",
+                "unavailable_books",
                 "data_health_blockers",
             },
             "market_observation",
@@ -281,6 +308,10 @@ class MarketObservation:
             context=_market_context_from_object(item.get("context")),
             quotes=tuple(_option_quote_from_object(member) for member in _array(item, "quotes")),
             data_health_blockers=_string_tuple(item, "data_health_blockers"),
+            unavailable_books=tuple(
+                _unavailable_option_book_from_object(member)
+                for member in _array(item, "unavailable_books")
+            ),
         )
         if _text(item, "market_observation_id") != observation.identity:
             raise ValueError("MarketObservation identity mismatch")
@@ -739,6 +770,55 @@ def _option_quote_object(quote: OptionQuote) -> dict[str, object]:
         "open_interest": str(quote.open_interest),
         "gamma": str(quote.gamma),
     }
+
+
+def _unavailable_option_book_object(book: UnavailableOptionBook) -> dict[str, object]:
+    return {
+        "unavailable_book_id": book.identity,
+        "instrument_name": book.instrument_name,
+        "product_id": book.product.product_id.value,
+        "product_spec_id": book.product.identity,
+        "expiry": _iso(book.expiry),
+        "strike": str(book.strike),
+        "option_type": book.option_type.value,
+        "reason": book.reason.value,
+    }
+
+
+def _unavailable_option_book_from_object(value: object) -> UnavailableOptionBook:
+    item = _mapping(value, "market_observation.unavailable_book")
+    _require_fields(
+        item,
+        {
+            "unavailable_book_id",
+            "instrument_name",
+            "product_id",
+            "product_spec_id",
+            "expiry",
+            "strike",
+            "option_type",
+            "reason",
+        },
+        "market_observation.unavailable_book",
+    )
+    product_id = ProductId(_text(item, "product_id"))
+    try:
+        product = PRODUCTS[product_id]
+    except KeyError as exc:
+        raise ValueError("market_observation.unavailable_book product is unsupported") from exc
+    if _text(item, "product_spec_id") != product.identity:
+        raise ValueError("UnavailableOptionBook product specification identity mismatch")
+    book = UnavailableOptionBook(
+        instrument_name=_text(item, "instrument_name"),
+        product=product,
+        expiry=_datetime(item, "expiry"),
+        strike=_decimal(item, "strike"),
+        option_type=OptionType(_text(item, "option_type")),
+        reason=OptionBookUnavailableReason(_text(item, "reason")),
+    )
+    if _text(item, "unavailable_book_id") != book.identity:
+        raise ValueError("UnavailableOptionBook identity mismatch")
+    return book
 
 
 def _option_quote_from_object(value: object) -> OptionQuote:

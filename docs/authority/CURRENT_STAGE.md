@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 ROUTE EVIDENCE SCHEMA — CLOSED
+**Status:** B3 CANDIDATE-LOCAL DATA READINESS — CLOSED
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -42,8 +42,9 @@ is retained without migration or mutation and remains ineligible for the current
 - Entry reunderwriting requires later environment, exact frozen structure, economics, allocation,
   and route evidence to pass before a Shadow Position exists, and its complete Decision-to-Entry
   result remains recoverable.
-- Policy schema 8 gives new Decisions, route evidence, allocations, and Cases identities distinct
-  from schema-7 and frozen v1 evidence.
+- Policy schema 9 gives new MarketObservations, Decisions, route evidence, allocations, and Cases
+  identities distinct from schema-8 and frozen v1 evidence without changing any Policy threshold or
+  ranking rule.
 - `ShadowRiskAllocation` records nominal contractual payoff, boundary-valued exit-cost stress,
   every inverse-delivery stress, their maximum delivery loss, and one conservative stress reserve.
   The reserve is exactly the maximum of nominal payoff, exit stress, and maximum delivery stress.
@@ -64,14 +65,26 @@ is retained without migration or mutation and remains ineligible for the current
 - B3 route constructors and strict codecs reject `COMBO_BOOK_QUOTE`, `RFQ`, and `ACTUAL_FILL`, plus
   every injected Combo-instrument, RFQ, order, trade, fill, account, executable-liquidity, and
   fill-probability field. A standard Combo fee projection remains only a cost-model fact.
-- The complete repository gate passes: `207` tests and `8` deterministic business scenarios. This
+- Every requested-but-unusable option book is retained as typed, content-addressed metadata with
+  its instrument, product, expiry, strike, option type, and reason. A request failure is localizable
+  only when the validated Deribit clock supplies its causal completion boundary; otherwise the
+  bounded snapshot fails.
+- Structure search evaluates every usable-book Candidate under the unchanged Policy. Missing books
+  that cannot participate in any Policy-legal four-leg geometry do not block the observed Primary;
+  if an unresolved Candidate could still change the rank, the Window is `UNKNOWN` with the exact
+  missing book identities and cannot allocate risk.
+- Source/receive span, freshness, continuity, required metadata, response timing, and instrument
+  identity remain global causal DataHealth. The slow-unavailable-book fixture still fails globally
+  on its original receive-span and stale boundaries.
+- Workbench schema 6 exposes Candidate-local readiness, unavailable books, and unresolved Primary
+  rank without inventing a structure.
+- The complete repository gate passes: `212` tests and `8` deterministic business scenarios. This
   is offline implementation evidence, not current market, execution, or profitability evidence.
 - Live runtime, stable-root writes, market calls, private facts, orders, and capital remain disabled.
 
-**Primary blocker:** `DATA_HEALTH_NOT_CANDIDATE_LOCAL` — one failed or absent option book can still
-mark the whole bounded universe unhealthy before structure search, even when that book is unrelated
-to the winning Candidate; conversely, a missing book that could change the Primary rank must not be
-silently ignored.
+**Primary blocker:** `OUTCOME_EXPLANATORY_PATH_THIN` — current terminal economics do not yet retain
+the complete Decision-to-Entry change, MFE/MAE, maximum Delta, short-strike distance, IV/RV path,
+data gaps, bounded alternatives, and exit counterfactuals required by the audit sequence.
 
 ## Maturity ladder
 
@@ -85,7 +98,5 @@ silently ignored.
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Next closure:** a bounded `B3_CANDIDATE_LOCAL_DATA_READINESS` task must isolate book failures to
-the Candidates that depend on them and keep the Window `UNKNOWN` whenever an unresolved Candidate
-could still change the Primary rank. It may not weaken causal DataHealth, change ranking or Policy
-thresholds, enable live calls, or authorize execution truth.
+**Next closure:** a bounded `B3_OUTCOME_EXPLANATORY_PATH` task must add the declared explanatory
+path without changing Policy thresholds, ranking, execution truth, live permissions, or B4 scope.
