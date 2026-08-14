@@ -1,184 +1,251 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark light">
+  <meta name="color-scheme" content="dark">
   <meta name="referrer" content="no-referrer">
-  <meta http-equiv="refresh" content="10">
-  <title>Optimatrix 0DTE Workbench</title>
+  <title>Optimatrix · 交易—学习双循环</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <a class="skip-link" href="#main-content">Skip to snapshot</a>
-  <header class="app-header">
-    <div class="brand">
-      <span class="eyebrow">Optimatrix / BTC 0DTE</span>
-      <h1 id="product-title">Two-Sided Short Vol Workbench</h1>
-      <p id="strategy-name">Same-session asymmetric Iron Condor</p>
+  <a class="skip-link" href="#main-content">跳到工作区</a>
+
+  <header class="topbar">
+    <div class="brand-block">
+      <strong>Optimatrix</strong>
+      <span>交易—学习双循环</span>
     </div>
-    <div class="header-actions">
-      <span id="boundary-label" class="boundary-badge">PUBLIC SHADOW - READ ONLY</span>
-      <div class="theme-switch" role="group" aria-label="Color theme">
-        <button type="button" data-theme="dark" aria-pressed="true">Dark</button>
-        <button type="button" data-theme="light" aria-pressed="false">Light</button>
-      </div>
+    <nav class="primary-nav" aria-label="主导航">
+      <button type="button" class="nav-button is-active" data-route="ledger">产品账</button>
+      <button type="button" class="nav-button" data-route="review">复盘与进化</button>
+    </nav>
+    <div id="channel-switcher" class="channel-switcher" aria-label="标的与策略通道"></div>
+    <div class="session-block">
+      <strong id="session-label">Deribit Session</strong>
+      <span id="session-mode">公开行情模拟 · 非真实成交/持仓</span>
     </div>
   </header>
 
-  <main id="main-content" class="workspace" tabindex="-1">
-    <section class="boundary-panel" aria-labelledby="boundary-heading">
-      <div>
-        <span class="section-kicker">Evidence boundary</span>
-        <h2 id="boundary-heading">Public observation, not execution</h2>
-      </div>
-      <ul id="boundary-statements"></ul>
-    </section>
-
-    <section class="runtime-panel" aria-labelledby="runtime-heading">
-      <div class="section-heading compact">
+  <main id="main-content" tabindex="-1">
+    <section id="screen-ledger" class="screen ledger-screen" data-screen="ledger">
+      <header class="screen-heading">
         <div>
-          <span class="section-kicker">Single-process public shadow</span>
-          <h2 id="runtime-heading">Runtime and recovery</h2>
-          <p>Continuously rewritten from accepted runtime facts; this page is read only.</p>
-        </div>
-        <span id="runtime-status" class="state-badge">SNAPSHOT_ONLY</span>
-      </div>
-      <dl id="runtime-values" class="key-values runtime-values"></dl>
-    </section>
-
-    <section class="snapshot-strip" aria-label="Runtime and snapshot identity">
-      <div><span>Target Deribit Session</span><strong id="target-session-id">—</strong></div>
-      <div><span>Snapshot Session</span><strong id="session-id">—</strong></div>
-      <div><span>Observed at</span><strong id="observed-at">—</strong></div>
-      <div><span>Last runtime update</span><strong id="runtime-updated-at">—</strong></div>
-    </section>
-
-    <section id="warning-panel" class="warning-panel" aria-labelledby="warning-heading">
-      <div class="section-heading compact">
-        <div>
-          <span class="section-kicker">Source and methodology</span>
-          <h2 id="warning-heading">Warnings</h2>
-        </div>
-        <span id="warning-count" class="count-badge">0</span>
-      </div>
-      <ul id="warning-list" class="chip-list"></ul>
-    </section>
-
-    <div class="primary-grid">
-      <section class="panel projection-panel" aria-labelledby="projection-heading">
-        <div class="section-heading">
-          <div>
-            <span class="section-kicker">Bounded snapshot only</span>
-            <h2 id="projection-heading">Structure projection</h2>
+          <div class="title-row">
+            <h1>产品账</h1>
+            <span class="truth-chip">目标标志数据</span>
           </div>
-          <span id="projection-state" class="state-badge">UNKNOWN</span>
+          <p>每一宗结构从发现到 Outcome 的实时经营记录</p>
         </div>
-        <dl class="key-values two-column">
-          <div><dt>Session phase</dt><dd id="projection-phase">—</dd></div>
-        </dl>
-        <h3>Blockers</h3>
-        <ul id="blocker-list" class="chip-list"></ul>
+        <div id="ledger-summary" class="heading-metrics" aria-label="产品账汇总"></div>
+      </header>
+
+      <div class="ledger-layout">
+        <section class="ledger-board panel" aria-labelledby="ledger-board-title">
+          <h2 id="ledger-board-title" class="sr-only">产品完整生命周期</h2>
+          <div id="ledger-grid" class="ledger-grid"></div>
+        </section>
+
+        <aside class="attention-rail" aria-labelledby="attention-title">
+          <div class="rail-heading">
+            <div>
+              <h2 id="attention-title">现在处理</h2>
+              <p id="attention-count">0 件未解决责任</p>
+            </div>
+            <span class="pulse-dot" aria-hidden="true"></span>
+          </div>
+          <div id="attention-list" class="attention-list"></div>
+          <button id="open-urgent" type="button" class="primary-action" disabled>
+            打开最紧急产品
+          </button>
+        </aside>
+      </div>
+
+      <section id="market-strip" class="market-strip" aria-label="市场与运行时摘要"></section>
+    </section>
+
+    <section id="screen-product" class="screen product-screen" data-screen="product" hidden>
+      <header class="product-heading">
+        <div>
+          <button type="button" class="back-link" data-route="ledger">返回产品账</button>
+          <p id="product-breadcrumb" class="breadcrumb">产品账 / BTC 卖波动率</p>
+          <h1 id="product-case-title">Case 详情</h1>
+          <p id="product-case-subtitle" class="product-subtitle">公开行情模拟 · 完整四腿</p>
+        </div>
+        <div class="product-status-block">
+          <span id="product-stage-label" class="status-label">—</span>
+          <strong id="product-responsibility">—</strong>
+          <button id="product-evidence-button" type="button" class="secondary-action">
+            查看原始市场证据
+          </button>
+        </div>
+      </header>
+
+      <ol id="product-lifecycle" class="lifecycle-rail" aria-label="产品生命周期"></ol>
+
+      <div class="product-main-grid">
+        <section class="structure-workbench panel" aria-labelledby="structure-title">
+          <header class="panel-heading">
+            <div>
+              <span>冻结产品结构</span>
+              <h2 id="structure-title">完整四腿与收益边界</h2>
+            </div>
+            <span class="truth-chip">组合订单（Combo）研究估价</span>
+          </header>
+          <div id="structure-summary" class="metric-ribbon"></div>
+          <div id="payoff-chart" class="payoff-chart" role="img" aria-label="四腿行权价与收益边界"></div>
+          <div id="case-leg-table" class="leg-table"></div>
+          <div id="causal-story" class="causal-story"></div>
+        </section>
+
+        <section class="management-workbench panel" aria-labelledby="management-title">
+          <header class="panel-heading">
+            <div>
+              <span>持续责任</span>
+              <h2 id="management-title">管理记录与因果切面</h2>
+            </div>
+            <span id="position-state-badge" class="state-badge">—</span>
+          </header>
+          <div id="management-summary" class="metric-ribbon"></div>
+          <div id="management-timeline" class="management-timeline"></div>
+          <div id="evidence-quality" class="evidence-quality"></div>
+        </section>
+
+        <aside id="responsibility-panel" class="responsibility-panel panel" aria-labelledby="responsibility-title">
+          <span>现在必须处理</span>
+          <h2 id="responsibility-title">—</h2>
+          <p id="responsibility-copy">—</p>
+          <dl id="responsibility-facts" class="responsibility-facts"></dl>
+          <button id="responsibility-action" type="button" class="danger-action">
+            查看证据
+          </button>
+        </aside>
+      </div>
+
+      <section class="afterlife" aria-labelledby="afterlife-title">
+        <div>
+          <h2 id="afterlife-title">结局之后</h2>
+          <p>连接到后续两条去向</p>
+        </div>
+        <button type="button" class="afterlife-card case-outcome-card" data-route="review">
+          <strong>Case Outcome</strong>
+          <span>这宗产品的模拟经济结果</span>
+        </button>
+        <button type="button" class="afterlife-card window-outcome-card" data-route="review">
+          <strong>Window Outcome</strong>
+          <span>所属市场窗口的未来路径</span>
+        </button>
+        <button type="button" class="afterlife-card" data-route="review">
+          <strong>进入复盘与进化</strong>
+          <span>总结本次 Case，沉淀模型与策略迭代</span>
+        </button>
       </section>
-
-      <section class="panel window-panel" aria-labelledby="window-heading">
-        <div class="section-heading">
-          <div>
-            <span class="section-kicker">Current runtime window</span>
-            <h2 id="window-heading">Decision Window record</h2>
-          </div>
-        </div>
-        <dl id="window-values" class="key-values"></dl>
-      </section>
-    </div>
-
-    <section class="panel population-panel" aria-labelledby="population-heading">
-      <div class="section-heading">
-        <div>
-          <span class="section-kicker">Runtime enrollment coverage</span>
-          <h2 id="population-heading">Encountered market coverage</h2>
-          <p>
-            Coverage begins when this runtime enrolls. Earlier unattempted windows are not
-            system omissions and are not a trader-acceptance failure.
-          </p>
-        </div>
-        <div class="calendar-reference">
-          <span>Session calendar reference</span>
-          <strong id="session-calendar-reference">UNKNOWN scheduled windows</strong>
-        </div>
-      </div>
-      <div class="population-grid">
-        <article class="population-card">
-          <div class="population-heading">
-            <h3 id="decision-population-label">DecisionRecords</h3>
-            <span id="decision-population-count" class="count-badge">
-              UNKNOWN / UNKNOWN recorded / attempted
-            </span>
-          </div>
-          <dl id="decision-population-values" class="key-values"></dl>
-          <div id="decision-population-breakdowns" class="population-breakdowns"></div>
-        </article>
-        <article class="population-card">
-          <div class="population-heading">
-            <h3 id="outcome-population-label">WindowOutcomes</h3>
-            <span id="outcome-population-count" class="count-badge">
-              UNKNOWN / UNKNOWN recorded / attempted
-            </span>
-          </div>
-          <dl id="outcome-population-values" class="key-values"></dl>
-          <div id="outcome-population-breakdowns" class="population-breakdowns"></div>
-        </article>
-      </div>
     </section>
 
-    <section class="panel structure-panel" aria-labelledby="structure-heading">
-      <div class="section-heading">
+    <section id="screen-review" class="screen review-screen" data-screen="review" hidden>
+      <header class="screen-heading review-heading">
         <div>
-          <span class="section-kicker">Canonical strategy object</span>
-          <h2 id="structure-heading">Four-leg defined-risk structure</h2>
-          <p id="structure-message">Waiting for the exported snapshot.</p>
-        </div>
-        <span id="structure-kind" class="state-badge tone-neutral">UNKNOWN</span>
-      </div>
-      <div id="structure-empty" class="empty-state" hidden></div>
-      <div id="leg-grid" class="leg-grid" aria-label="Iron Condor legs"></div>
-      <dl id="structure-metrics" class="metric-grid"></dl>
-    </section>
-
-    <div class="evidence-grid">
-      <section class="panel" aria-labelledby="context-heading">
-        <div class="section-heading">
-          <div>
-            <span class="section-kicker">Observed risk context</span>
-            <h2 id="context-heading">Market context</h2>
+          <div class="title-row">
+            <h1>交易—学习双循环</h1>
+            <span class="truth-chip">目标标志数据</span>
           </div>
+          <p>左侧看完整业务人口，右侧看冻结对照实验与人工决策门</p>
         </div>
-        <dl id="context-values" class="key-values"></dl>
-      </section>
-    </div>
+        <span id="review-freeze-time" class="freeze-time">同一窗口集合上的离线复盘</span>
+      </header>
 
-    <details class="panel methodology-panel">
-      <summary>Snapshot methodology</summary>
-      <dl id="methodology-values" class="key-values"></dl>
-    </details>
+      <div class="review-layout">
+        <section class="review-population panel" aria-labelledby="population-review-title">
+          <header class="panel-heading">
+            <div>
+              <span>全窗口业务人口</span>
+              <h2 id="population-review-title">今天产品闭环</h2>
+            </div>
+            <span id="review-window-count" class="state-badge">—</span>
+          </header>
+          <div id="review-flow" class="review-flow"></div>
+          <div id="case-traces" class="case-traces"></div>
 
-    <section class="panel case-panel" aria-labelledby="case-heading">
-      <div class="section-heading">
-        <div>
-          <span class="section-kicker">Whole-product lifecycle</span>
-          <h2 id="case-heading">All Shadow Cases / Positions / Outcomes</h2>
-          <p>Every recovered accepted Case prefix for the target Session.</p>
-        </div>
-        <span id="case-count" class="count-badge">0</span>
+          <div class="outcome-pair">
+            <section class="outcome-card case-outcome-card">
+              <span>Case Outcome</span>
+              <h3>每宗产品的模拟经济结果</h3>
+              <dl id="case-outcome-summary"></dl>
+            </section>
+            <section class="outcome-card window-outcome-card">
+              <span>Window Outcome</span>
+              <h3>每个市场窗口的未来路径</h3>
+              <dl id="window-outcome-summary"></dl>
+            </section>
+          </div>
+
+          <section class="eligibility-panel" aria-labelledby="eligibility-title">
+            <div>
+              <h3 id="eligibility-title">学习资格不是一个绿灯</h3>
+              <p>八个事实必须逐项保留 YES / NO / UNKNOWN 与原因</p>
+            </div>
+            <div id="eligibility-grid" class="eligibility-grid"></div>
+          </section>
+        </section>
+
+        <section class="challenger-panel panel" aria-labelledby="challenger-title">
+          <header class="panel-heading">
+            <div>
+              <span>在相同窗口集合上对照评估</span>
+              <h2 id="challenger-title">Challenger 对照实验</h2>
+            </div>
+            <span id="challenger-status" class="state-badge">—</span>
+          </header>
+          <div id="challenger-arms" class="challenger-arms"></div>
+          <div id="challenger-empty-chart" class="challenger-empty-chart">
+            <strong>D1 尚未授权</strong>
+            <span>没有冻结 Challenger Policy 与合格前向样本，不绘制虚假收益分布</span>
+          </div>
+          <div id="challenger-table" class="comparison-table"></div>
+          <article class="challenger-conclusion">
+            <span>本轮对照结论</span>
+            <h3>NOT_YET_MEASURED</h3>
+            <p id="challenger-reason">—</p>
+          </article>
+          <section class="human-gate" aria-labelledby="human-gate-title">
+            <div>
+              <span>人工决策门</span>
+              <h3 id="human-gate-title">AI 不具备任何交易或晋升权限</h3>
+              <p id="human-gate-copy">—</p>
+            </div>
+            <button type="button" disabled>提交人工评审（尚未授权）</button>
+          </section>
+        </section>
       </div>
-      <div id="case-list" class="case-list"></div>
     </section>
   </main>
 
-  <footer>
+  <aside id="evidence-drawer" class="evidence-drawer" aria-labelledby="evidence-drawer-title" hidden>
+    <div class="drawer-backdrop" data-close-drawer></div>
+    <section class="drawer-panel" role="dialog" aria-modal="true">
+      <header>
+        <div>
+          <span>PUBLIC SHADOW · READ ONLY</span>
+          <h2 id="evidence-drawer-title">原始市场与因果证据</h2>
+        </div>
+        <button type="button" class="drawer-close" data-close-drawer aria-label="关闭证据抽屉">关闭</button>
+      </header>
+      <div class="drawer-content">
+        <section><h3>运行与恢复</h3><dl id="evidence-runtime"></dl></section>
+        <section><h3>当前市场窗口</h3><dl id="evidence-window"></dl></section>
+        <section><h3>市场上下文</h3><dl id="evidence-context"></dl></section>
+        <section><h3>方法与警告</h3><div id="evidence-warnings"></div><dl id="evidence-methodology"></dl></section>
+      </div>
+    </section>
+  </aside>
+
+  <footer class="truth-footer">
     <strong>PUBLIC SHADOW - READ ONLY</strong>
-    <span>No order · No fill · No account · No margin · No capital · No actual position · No real PnL</span>
+    <span>公开行情模拟，不是订单、成交、账户持仓、保证金、资本占用或真实盈亏。</span>
+    <button id="footer-evidence-button" type="button">查看证据边界</button>
   </footer>
+
+  <div id="channel-notice" class="channel-notice" role="status" aria-live="polite" hidden></div>
 
   <script src="workbench-data.js"></script>
   <script src="app.js"></script>

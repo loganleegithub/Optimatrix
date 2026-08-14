@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -36,6 +37,7 @@ def _snapshot() -> dict[str, object]:
     )
     return {
         "observed_at": "2026-08-12T18:00:00+00:00",
+        "known_at": "2026-08-12T18:00:00.250000+00:00",
         "session_id": "2026-08-13T08:00:00Z",
         "instrument_count": 40,
         "requested_book_count": 12,
@@ -229,6 +231,35 @@ def test_document_projects_one_four_leg_strategy_without_recalculating_values() 
     snapshot_view = cast(Mapping[str, object], document["snapshot"])
     projection_view = cast(Mapping[str, object], document["projection"])
     assert snapshot_view["session_id"] == "2026-08-13T08:00:00Z"
+    assert snapshot_view["observed_at"] == "2026-08-12T18:00:00+00:00"
+    assert snapshot_view["known_at"] == "2026-08-12T18:00:00.250000+00:00"
+    channels = cast(Sequence[Mapping[str, object]], document["channels"])
+    assert [channel["channel_id"] for channel in channels] == [
+        "INVERSE_BTC_SHORT_VOL",
+        "INVERSE_BTC_LONG_GAMMA",
+        "INVERSE_ETH_SHORT_VOL",
+        "INVERSE_ETH_LONG_GAMMA",
+    ]
+    assert [channel["implemented"] for channel in channels] == [True, False, False, False]
+    assert [channel["status_label"] for channel in channels[1:]] == [
+        "尚未授权 · 尚未定义",
+        "尚未授权 · 尚未定义",
+        "尚未授权 · 尚未定义",
+    ]
+    ledger = cast(Mapping[str, object], document["ledger"])
+    stages = cast(Sequence[Mapping[str, object]], ledger["stages"])
+    assert [stage["key"] for stage in stages] == [
+        "DISCOVERY",
+        "CONSTRUCTION",
+        "ENTRY",
+        "MONITORING",
+        "EXIT",
+        "SETTLEMENT",
+        "OUTCOME",
+    ]
+    review = cast(Mapping[str, object], document["review"])
+    challenger = cast(Mapping[str, object], review["challenger"])
+    assert challenger["status"] == "NOT_YET_MEASURED"
     assert projection_view["state"] == "STRUCTURE_FOUND"
     assert projection_view["blockers"] == []
     structure = cast(Mapping[str, object], document["structure"])
@@ -256,10 +287,18 @@ def test_document_projects_one_four_leg_strategy_without_recalculating_values() 
     context = cast(Sequence[Mapping[str, object]], document["context"])
     assert {row["key"]: row["value"] for row in context}["jump_share"] == "0.04"
     assert {row["key"]: row["value"] for row in context}["knowledge"] == "KNOWN"
+    context_by_key = {row["key"]: row for row in context}
+    assert context_by_key["history_coverage_end_ms"]["kind"] == "timestamp"
+    assert "kind" not in context_by_key["history_cadence_ms"]
     window = cast(Sequence[Mapping[str, object]], document["window"])
     assert {row["key"]: row["value"] for row in window}[
         "ledger_state"
     ] == "NOT_RECORDED_BY_BOUNDED_SNAPSHOT"
+    window_by_key = {row["key"]: row for row in window}
+    assert window_by_key["starts_at"]["kind"] == "timestamp"
+    assert window_by_key["input_deadline"]["kind"] == "timestamp"
+    assert "kind" not in window_by_key["market_session_id"]
+    assert "kind" not in window_by_key["decision_window_id"]
     assert document["runtime"] == {
         "available": False,
         "status": "SNAPSHOT_ONLY",
@@ -287,27 +326,66 @@ def test_static_export_is_network_free_and_browser_receives_only_presentation_da
     script = exported.script_path.read_text(encoding="utf-8")
     data_script = exported.data_path.read_text(encoding="utf-8")
     assert "PUBLIC SHADOW - READ ONLY" in html
-    assert "No order · No fill · No account" in html
+    assert "公开行情模拟" in html
+    assert "账户持仓" in html
     assert '<script src="workbench-data.js"></script>' in html
-    assert '<meta http-equiv="refresh" content="10">' in html
-    assert "Runtime and recovery" in html
-    assert "Encountered market coverage" in html
-    assert "Session calendar reference" in html
-    assert "not a trader-acceptance failure" in html
-    assert "recorded / attempted" in html
-    assert "All Shadow Cases" in html
-    assert ".runtime-values { grid-template-columns: 1fr; }" in stylesheet
-    assert ".runtime-values > div { grid-template-columns:" in stylesheet
+    assert '<meta http-equiv="refresh"' not in html
+    assert "产品账" in html
+    assert "复盘与进化" in html
+    assert "现在处理" in html
+    assert "完整四腿与收益边界" in html
+    assert "Case Outcome" in html
+    assert "Window Outcome" in html
+    assert "Challenger 对照实验" in html
+    assert "D1 尚未授权" in html
+    assert ".ledger-grid" in stylesheet
+    assert ".product-main-grid" in stylesheet
+    assert ".review-layout" in stylesheet
+    assert "@media (max-width: 1360px)" in stylesheet
+    assert "gradient(" not in stylesheet
     assert "fetch(" not in script
     assert "XMLHttpRequest" not in script
     assert "WebSocket" not in script
     assert "final_score" not in script
     assert "boundary_net_credit_usd" not in script
+    assert "new Intl.DateTimeFormat" in script
+    assert "row.kind === 'timestamp'" in script
+    assert "formatTimestamp(workbench.runtime.updated_at)" in script
+    assert "workbench.runtime.session_id" in script
+    assert "workbench.ledger" in script
+    assert "workbench.review" in script
+    assert "NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE" in script
+    assert "NO_LEGAL_FOUR_LEG_STRUCTURE" in script
+    assert "translateComposite(item.subtitle)" in script
+    assert "RESTART_INTERRUPTED_CAUSAL_CUT" in script
+    assert "RECOVERY_GAP: '恢复中断形成数据缺口'" in script
+    assert "MARKET_SOURCE_BOUNDARY_STALE" in script
+    assert "item.facts.policy_eligible" in script
+    assert "documentSignature(window.OPTIMATRIX_WORKBENCH)" in script
+    assert "window.setInterval(refreshDocumentWhenCurrent, 10000)" in script
+    html_ids = set(re.findall(r'\bid="([^"]+)"', html))
+    app_targets = set(re.findall(r"\bbyId\('([^']+)'", script))
+    assert app_targets <= html_ids
     prefix = "window.OPTIMATRIX_WORKBENCH = Object.freeze("
     assert data_script.startswith(prefix)
     document = json.loads(data_script.removeprefix(prefix).removesuffix(");\n"))
     assert document["structure"]["legs"][1]["label"] == "Short Put body"
     assert document["warnings"][0]["code"] == "BOUNDED_OPTION_UNIVERSE"
+    assert document["structure_population"] == {
+        "legal": "UNKNOWN",
+        "price_evaluable": "UNKNOWN",
+        "policy_eligible": "UNKNOWN",
+        "known": False,
+    }
+    assert document["snapshot"]["known_at"] == "2026-08-12T18:00:00.250000+00:00"
+
+
+def test_snapshot_known_at_is_required_instead_of_falling_back_to_observed_at() -> None:
+    snapshot = _snapshot()
+    del snapshot["known_at"]
+
+    with pytest.raises(ValueError, match=r"snapshot\.known_at"):
+        build_workbench_document(snapshot)
 
 
 def test_legacy_single_trade_case_is_also_the_only_case_in_the_runtime_collection() -> None:
@@ -368,6 +446,7 @@ def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_cas
     allocation = trade_case.risk_allocation
     allocation_rows = cast(Sequence[Mapping[str, str]], case_view["risk_allocation"])
     allocation_values = {row["key"]: row["value"] for row in allocation_rows}
+    allocation_by_key = {row["key"]: row for row in allocation_rows}
     assert allocation_values["allocation_id"] == trade_case.risk_allocation_id
     assert allocation_values["budget_metric"] == allocation["budget_metric"]
     assert (
@@ -383,10 +462,13 @@ def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_cas
         allocation["concurrent_position_limit"]
     )
     assert allocation_values["expires_at"] == allocation["expires_at"]
+    assert allocation_by_key["expires_at"]["kind"] == "timestamp"
+    assert "kind" not in allocation_by_key["market_session_id"]
     assert allocation_values["release_condition"] == allocation["release_condition"]
 
     entry_rows = cast(Sequence[Mapping[str, str]], case_view["entry_evidence"])
     entry_values = {row["key"]: row["value"] for row in entry_rows}
+    entry_by_key = {row["key"]: row for row in entry_rows}
     assert trade_case.entry_observation_id is not None
     assert trade_case.entry_observed_at is not None
     assert trade_case.entry_known_at is not None
@@ -394,6 +476,9 @@ def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_cas
     assert entry_values["entry_observation_id"] == trade_case.entry_observation_id
     assert entry_values["entry_observed_at"] == trade_case.entry_observed_at.isoformat()
     assert entry_values["entry_known_at"] == trade_case.entry_known_at.isoformat()
+    assert entry_by_key["decision_boundary"]["kind"] == "timestamp"
+    assert entry_by_key["entry_observed_at"]["kind"] == "timestamp"
+    assert "kind" not in entry_by_key["entry_observation_id"]
     assert entry_values["entry_pricing_basis"] == trade_case.entry_pricing_basis
     economics_rows = cast(Sequence[Mapping[str, str]], case_view["entry_economics"])
     economics_values = {row["key"]: row["value"] for row in economics_rows}
@@ -405,20 +490,26 @@ def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_cas
     assert trade_case.exit_intent is not None
     exit_rows = cast(Sequence[Mapping[str, str]], case_view["exit_intent"])
     exit_values = {row["key"]: row["value"] for row in exit_rows}
+    exit_by_key = {row["key"]: row for row in exit_rows}
     assert exit_values["exit_intent_id"] == trade_case.exit_intent.identity
     assert exit_values["observation_id"] == trade_case.exit_intent.observation_id
     assert exit_values["known_at"] == trade_case.exit_intent.known_at.isoformat()
     assert exit_values["source"] == trade_case.exit_intent.source
     assert exit_values["policy_id"] == trade_case.exit_intent.policy_id
     assert exit_values["scope"] == "WHOLE_PRODUCT"
+    assert exit_by_key["observed_at"]["kind"] == "timestamp"
+    assert exit_by_key["known_at"]["kind"] == "timestamp"
 
     assert trade_case.outcome is not None
     assert trade_case.outcome.terminal_evidence_id is not None
     outcome_rows = cast(Sequence[Mapping[str, str]], case_view["outcome"])
     outcome_values = {row["key"]: row["value"] for row in outcome_rows}
+    outcome_by_key = {row["key"]: row for row in outcome_rows}
     assert outcome_values["terminal_evidence_id"] == trade_case.outcome.terminal_evidence_id
     assert outcome_values["terminal_source"] == trade_case.outcome.terminal_source
     assert outcome_values["terminal_at"] == trade_case.outcome.terminal_at.isoformat()
+    assert outcome_by_key["terminal_at"]["kind"] == "timestamp"
+    assert "kind" not in outcome_by_key["terminal_evidence_id"]
     assert outcome_values["native_result_btc"] == str(trade_case.outcome.native_result_btc)
     assert outcome_values["boundary_reference_result_usd"] == str(
         trade_case.outcome.boundary_reference_result_usd
@@ -431,9 +522,8 @@ def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_cas
     )
     app_script = exported.script_path.read_text(encoding="utf-8")
     data_script = exported.data_path.read_text(encoding="utf-8")
-    assert "Frozen selected structure" in app_script
-    assert "Frozen Shadow Risk Allocation" in app_script
-    assert "Entry causal evidence" in app_script
+    assert "四腿" in app_script
+    assert "入场结果" in app_script
     assert trade_case.selected_structure_id in data_script
     assert trade_case.entry_observation_id in data_script
     assert trade_case.outcome.terminal_evidence_id in data_script
@@ -534,6 +624,11 @@ def test_runtime_population_and_every_recovered_case_are_rendered_as_supplied(
     assert runtime["updated_at"] == "2026-08-13T12:30:03Z"
     runtime_rows = cast(Sequence[Mapping[str, str]], runtime["facts"])
     assert {row["key"]: row["value"] for row in runtime_rows}["last_error"] == "NONE"
+    runtime_by_key = {row["key"]: row for row in runtime_rows}
+    assert runtime_by_key["started_at"]["kind"] == "timestamp"
+    assert runtime_by_key["updated_at"]["kind"] == "timestamp"
+    assert "kind" not in runtime_by_key["session_id"]
+    assert "kind" not in runtime_by_key["current_window_id"]
     population = cast(Mapping[str, object], document["population"])
     decisions = cast(Mapping[str, object], population["decisions"])
     outcomes = cast(Mapping[str, object], population["outcomes"])
@@ -600,6 +695,29 @@ def test_no_structure_and_blockers_remain_truthful() -> None:
         "RV_ACCELERATION_TOO_HIGH",
         "EVENT_OR_SHOCK_IN_PROGRESS",
     ]
+
+
+def test_no_policy_eligible_window_is_explained_without_inventing_population_counts() -> None:
+    snapshot = _snapshot()
+    projection = dict(cast(Mapping[str, object], snapshot["projection"]))
+    projection["state"] = "NO_STRUCTURE"
+    projection["blockers"] = ["NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE"]
+    projection["structure"] = None
+    snapshot["projection"] = projection
+
+    document = build_workbench_document(snapshot)
+
+    assert document["structure_population"] == {
+        "legal": "UNKNOWN",
+        "price_evaluable": "UNKNOWN",
+        "policy_eligible": "0",
+        "known": False,
+    }
+    ledger = cast(Mapping[str, object], document["ledger"])
+    rows = cast(Sequence[Mapping[str, object]], ledger["rows"])
+    items = cast(Sequence[Mapping[str, object]], rows[0]["items"])
+    assert items[0]["stage"] == "DISCOVERY"
+    assert items[0]["facts"] == document["structure_population"]
 
 
 def test_unknown_market_context_is_visible_without_a_structure() -> None:

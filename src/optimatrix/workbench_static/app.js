@@ -1,258 +1,726 @@
 (() => {
   'use strict';
 
-  const documentValue = window.OPTIMATRIX_WORKBENCH;
-  if (!documentValue || documentValue.schema_version !== 3) {
-    document.body.textContent = 'Unsupported or missing Workbench export.';
+  const workbench = window.OPTIMATRIX_WORKBENCH;
+  if (!workbench || workbench.schema_version !== 3) {
+    document.body.textContent = 'Workbench 数据缺失或版本不受支持。';
     return;
   }
 
+  const documentSignature = document => JSON.stringify({
+    schemaVersion: document.schema_version,
+    snapshotKnownAt: document.snapshot?.known_at,
+    runtimeUpdatedAt: document.runtime?.updated_at,
+    runtimeState: document.runtime?.state,
+    ledgerCounts: document.ledger?.counts,
+    cases: (document.cases || []).map(item => ({
+      tradeCaseId: item.trade_case_id,
+      entryStatus: item.entry_status,
+      positionState: item.position_state,
+      terminalAt: item.display?.terminal_at,
+      gapObserved: item.display?.gap_observed
+    }))
+  });
+  const initialDocumentSignature = documentSignature(workbench);
+
   const byId = id => document.getElementById(id);
-  const setText = (id, value) => { byId(id).textContent = value || '—'; };
-  const element = (tag, className, text) => {
+  const create = (tag, className, text) => {
     const node = document.createElement(tag);
     if (className) node.className = className;
-    if (text !== undefined) node.textContent = text;
+    if (text !== undefined && text !== null) node.textContent = String(text);
     return node;
   };
+  const appendText = (node, tag, className, text) => {
+    const child = create(tag, className, text);
+    node.append(child);
+    return child;
+  };
+  const rowMap = rows => Object.fromEntries((rows || []).map(row => [row.key, row]));
+  const valueMap = rows => Object.fromEntries((rows || []).map(row => [row.key, row.value]));
+  const isUnknown = value => value === undefined || value === null || value === '' || value === 'UNKNOWN';
+  const shortValue = value => {
+    if (isUnknown(value)) return '未知';
+    const text = String(value);
+    if (text.startsWith('sha256:')) return `${text.slice(7, 15)}…`;
+    return text.length > 28 ? `${text.slice(0, 27)}…` : text;
+  };
+  const localFormatter = new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23'
+  });
+  const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short'
+  });
+  const formatTimestamp = value => {
+    if (isUnknown(value)) return '未知';
+    const instantValue = typeof value === 'string' && /^\d{13}$/.test(value) ? Number(value) : value;
+    const instant = new Date(instantValue);
+    return Number.isNaN(instant.getTime()) ? String(value) : localFormatter.format(instant);
+  };
+  const formatDate = value => {
+    const instant = new Date(value);
+    return Number.isNaN(instant.getTime()) ? 'Session 未知' : dateFormatter.format(instant);
+  };
+  const displayRowValue = row => row.kind === 'timestamp' ? formatTimestamp(row.value) : translate(row.value);
+  const countLabel = value => isUnknown(value) ? '未知' : String(value);
 
-  const renderList = (targetId, values, emptyText) => {
-    const target = byId(targetId);
-    target.replaceChildren();
-    if (!values.length) {
-      const item = element('li', 'none', emptyText);
-      target.append(item);
-      return;
+  const translations = {
+    PUBLIC_SHADOW: '公开行情模拟',
+    UNAUTHORIZED: '尚未授权',
+    RUNNING: '持续运行',
+    RECOVERY_GAP: '恢复中断形成数据缺口',
+    MARKET_GAP: '公开行情数据缺口',
+    STARTING: '启动中',
+    RECOVERING: '恢复中',
+    STOPPED: '已停止',
+    STOPPED_FOR_RESTART: '等待重启',
+    SNAPSHOT_ONLY: '单次快照',
+    COMPLETE: '已完成',
+    COMPLETE_PENDING_TRADER_ACCEPTANCE: '完成 · 待交易员验收',
+    UNKNOWN: '未知',
+    KNOWN: '已知',
+    YES: '是',
+    NO: '否',
+    NONE: '无',
+    STRUCTURE_FOUND: '发现完整结构',
+    NO_STRUCTURE: '无符合条件结构',
+    NO_LEGAL_FOUR_LEG_STRUCTURE: '当前到期与行权价组合未形成合法完整四腿',
+    NO_PRICE_EVALUABLE_FOUR_LEG_STRUCTURE: '已有合法结构，但完整四腿无法估价',
+    NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE: '已有合法且可估价结构，但没有符合当前 Policy 的候选',
+    PUBLIC_MARKET_GAP: '公开行情切面不完整，本窗口无法判断',
+    RESTART_INTERRUPTED_CAUSAL_CUT: '重启中断因果切面，本窗口不重抓',
+    BOUNDARY_NET_CREDIT_TOO_SMALL: '净权利金不足',
+    CREDIT_TO_PAYOFF_CAP_TOO_SMALL: '权利金 / 契约赔付上限不足',
+    BOUNDARY_REFERENCE_LOSS_TOO_HIGH: '边界参考损失过高',
+    SESSION_VRP_PROXY_BELOW_THRESHOLD: '本 Session 隐含—实际波动率溢价代理不足',
+    RV_ACCELERATION_TOO_HIGH: '实际波动率正在加速',
+    EVENT_OR_SHOCK_IN_PROGRESS: '事件或冲击状态仍在持续',
+    NET_DELTA_TOO_DIRECTIONAL: '组合净 Delta 方向性过高',
+    NOT_EVALUATED: '未评估',
+    ASYMMETRIC_IRON_CONDOR: '非对称铁鹰',
+    CORE_CARRY: '核心持有阶段',
+    LATEST_EXIT: '最晚退出边界',
+    EVENT_OR_SHOCK: '事件或冲击',
+    MAXIMUM_LOSS: '最大亏损',
+    SHORT_DELTA: '短腿 Delta',
+    ADVERSE_MOVE: '标的不利移动',
+    RV_ACCELERATION: '实际波动率加速',
+    VRP_PROXY_DISSIPATED: 'VRP 代理消散',
+    TAKE_PROFIT: '止盈',
+    SHADOW_ATOMIC_EVALUABLE: '完整组合可估价',
+    SHADOW_ATOMIC_NOT_EVALUABLE: '完整事实证明无法估价',
+    MONITORING: '管理中',
+    EXIT_INTENT_FROZEN: '退出意图已冻结',
+    TERMINAL: '终局已冻结',
+    WHOLE_PRODUCT_EXIT: '完整组合退出估价',
+    CONTRACT_SETTLEMENT: '到期交割结算',
+    NO_POSITION: '未形成模拟头寸',
+    AVAILABLE: '可用',
+    UNAVAILABLE: '不可用',
+    SHADOW_PROJECTION: '公开行情模拟',
+    MARKET_SOURCE_AFTER_RECEIPT: '市场源时间晚于接收边界',
+    MARKET_SOURCE_BOUNDARY_STALE: '行情源时间落后于当前因果边界，本窗口无法判断',
+    MARKET_SOURCE_STALE: '行情源时间已过期，本窗口无法判断',
+    MARKET_RECEIPT_STALE: '行情接收时间已过期，本窗口无法判断',
+    MARKET_SOURCE_IN_FUTURE: '行情源时间超出当前因果边界',
+    MARKET_RECEIPT_IN_FUTURE: '行情接收时间超出当前因果边界',
+    MARKET_SOURCE_SPAN_EXCEEDED: '所需盘口的市场时间跨度过大',
+    MARKET_RECEIVE_SPAN_EXCEEDED: '所需盘口的接收时间跨度过大',
+    OBSERVATION_UNIVERSE_MISMATCH: '市场观察与所需期权集合不一致',
+    OBSERVATION_AFTER_INPUT_DEADLINE: '市场观察晚于本窗口输入截止',
+    OBSERVATION_OUTSIDE_WINDOW: '市场观察不属于当前窗口',
+    DATA_HEALTH_POLICY_AGE_MISMATCH: '行情新鲜度不符合冻结的 DataHealth Policy',
+    DELIVERY_TWAP: '交割价计算时段',
+    BOUNDED_SNAPSHOT_IS_NOT_A_DECISION_RECORD: '当前快照不是权威 DecisionRecord',
+    WINDOW: '市场窗口',
+    CASE: 'TradeCase',
+    NO_OBSERVATION: '无有效市场观察',
+    POLICY_NOT_QUALIFIED: 'Policy 尚未资格化',
+    PUBLIC_WINDOW_HAS_NO_EXECUTION: '公开行情窗口没有真实执行',
+    NOT_YET_MEASURED: '尚未测量'
+  };
+  function translate(value) {
+    if (isUnknown(value)) return '未知';
+    const text = String(value);
+    if (translations[text]) return translations[text];
+    if (text.includes('BOUNDARY') || text.includes('SNAPSHOT') || text.includes('MARKET_')) {
+      return text.replaceAll('_', ' ');
     }
-    values.forEach(value => {
-      const item = element('li', '', value.code);
-      if (value.tone) item.dataset.tone = value.tone;
-      target.append(item);
-    });
-  };
+    return text.replaceAll('_', ' ');
+  }
+  const translateComposite = value => String(value)
+    .split(' · ')
+    .map(part => translate(part))
+    .join(' · ');
 
-  const renderRowsInto = (target, rows) => {
-    target.replaceChildren();
-    if (!rows.length) {
-      const wrapper = element('div');
-      wrapper.append(element('dt', '', 'Availability'), element('dd', '', 'UNKNOWN'));
-      target.append(wrapper);
-      return;
+  let selectedCaseId = null;
+  let lastFocusedElement = null;
+
+  function routeFromHash() {
+    const raw = window.location.hash.slice(1);
+    if (raw.startsWith('product/')) {
+      return { screen: 'product', caseId: decodeURIComponent(raw.slice('product/'.length)) };
     }
-    rows.forEach(row => {
-      const wrapper = element('div');
-      wrapper.append(element('dt', '', row.label), element('dd', '', row.value));
-      target.append(wrapper);
-    });
-  };
-  const renderRows = (targetId, rows) => renderRowsInto(byId(targetId), rows);
+    if (raw === 'review') return { screen: 'review', caseId: null };
+    return { screen: 'ledger', caseId: null };
+  }
 
-  const renderBreakdowns = (targetId, breakdowns) => {
-    const target = byId(targetId);
-    target.replaceChildren();
-    breakdowns.forEach(breakdown => {
-      const section = element('section', 'population-breakdown');
-      section.append(element('h4', '', breakdown.label));
-      const values = element('dl', 'key-values');
-      renderRowsInto(values, breakdown.rows);
-      section.append(values);
-      target.append(section);
-    });
-  };
-
-  const renderPopulation = (prefix, population) => {
-    setText(`${prefix}-population-label`, population.label);
-    setText(
-      `${prefix}-population-count`,
-      `${population.recorded} / ${population.attempted} recorded / attempted`
-    );
-    renderRows(`${prefix}-population-values`, population.rows);
-    renderBreakdowns(`${prefix}-population-breakdowns`, population.breakdowns);
-  };
-
-  const renderEligibility = (target, facts) => {
-    target.replaceChildren();
-    if (!facts.length) {
-      target.append(element('li', 'none', 'No terminal eligibility facts.'));
-      return;
-    }
-    facts.forEach(fact => {
-      target.append(
-        element('li', '', `${fact.label}: ${fact.value} · ${fact.reason || 'NONE'}`)
-      );
-    });
-  };
-
-  const caseEvidence = (title, rows) => {
-    const section = element('section');
-    section.append(element('h4', '', title));
-    const values = element('dl', 'key-values');
-    renderRowsInto(values, rows);
-    section.append(values);
-    return section;
-  };
-
-  const renderCaseStructure = structure => {
-    const section = element('section', 'case-structure-evidence');
-    section.append(element('h4', '', 'Frozen selected structure'));
-    if (!structure.available) {
-      section.append(element('p', 'none', 'Frozen structure evidence is unavailable.'));
-      return section;
-    }
-    const summary = element('dl', 'key-values case-structure-summary');
-    renderRowsInto(summary, structure.summary);
-    section.append(summary);
-    const legs = element('div', 'case-leg-grid');
-    structure.legs.forEach(leg => {
-      const card = element('article', 'case-leg-card');
-      card.dataset.action = leg.action;
-      card.append(
-        element('span', 'leg-order', `LEG ${leg.position} · ${leg.role}`),
-        element('h5', '', leg.label),
-        element('p', 'instrument', leg.instrument_name)
-      );
-      const details = element('dl', 'key-values');
-      renderRowsInto(details, leg.details);
-      card.append(details);
-      legs.append(card);
-    });
-    section.append(legs);
-    return section;
-  };
-
-  const renderCase = (caseValue, index) => {
-    const card = element('article', 'case-card');
-    const heading = element('div', 'case-card-heading');
-    const identity = element('div');
-    identity.append(
-      element('span', 'section-kicker', `CASE ${String(index + 1).padStart(2, '0')}`),
-      element('h3', 'case-identity', caseValue.trade_case_id || 'UNKNOWN')
-    );
-    const state = caseValue.position_state !== 'UNKNOWN'
-      ? caseValue.position_state
-      : caseValue.entry_status;
-    heading.append(identity, element('span', 'state-badge', state));
-    card.append(heading, element('p', 'case-message', caseValue.message));
-
-    const evidence = element('div', 'case-evidence-grid');
-    evidence.append(
-      caseEvidence('Case and Position', caseValue.facts),
-      renderCaseStructure(
-        caseValue.selected_structure || { available: false, summary: [], legs: [] }
-      ),
-      caseEvidence('Frozen Shadow Risk Allocation', caseValue.risk_allocation || []),
-      caseEvidence('Entry causal evidence', caseValue.entry_evidence || []),
-      caseEvidence('Entry economics', caseValue.entry_economics || []),
-      caseEvidence('First immutable exit intent', caseValue.exit_intent),
-      caseEvidence('Terminal Outcome', caseValue.outcome)
-    );
-    const eligibilitySection = element('section');
-    eligibilitySection.append(element('h4', '', 'Eligibility'));
-    const eligibility = element('ul', 'chip-list');
-    renderEligibility(eligibility, caseValue.eligibility);
-    eligibilitySection.append(eligibility);
-    evidence.append(eligibilitySection);
-    card.append(evidence);
-    return card;
-  };
-
-  const renderCases = values => {
-    const target = byId('case-list');
-    target.replaceChildren();
-    setText('case-count', String(values.length));
-    if (!values.length) {
-      target.append(
-        element('p', 'empty-state', 'No TradeCase has been recorded for this target Session.')
-      );
-      return;
-    }
-    values.forEach((value, index) => target.append(renderCase(value, index)));
-  };
-
-  const renderLeg = leg => {
-    const card = element('article', 'leg-card');
-    card.dataset.action = leg.action;
-    card.append(
-      element('span', 'leg-order', `LEG ${leg.position} · ${leg.action} ${leg.option_type}`),
-      element('h3', '', leg.label),
-      element('p', 'instrument', leg.instrument_name)
-    );
-    const details = element('dl');
-    leg.details.forEach(row => {
-      const wrapper = element('div');
-      wrapper.append(element('dt', '', row.label), element('dd', '', row.value));
-      details.append(wrapper);
-    });
-    if (!leg.quote_available) {
-      const wrapper = element('div');
-      wrapper.append(element('dt', '', 'Public quote'), element('dd', '', 'UNAVAILABLE'));
-      details.append(wrapper);
-    }
-    card.append(details);
-    return card;
-  };
-
-  const renderStructure = structure => {
-    setText('structure-kind', structure.kind);
-    setText('structure-message', structure.message);
-    const kind = byId('structure-kind');
-    kind.dataset.tone = structure.available ? 'positive' : 'warning';
-    const empty = byId('structure-empty');
-    const grid = byId('leg-grid');
-    grid.replaceChildren();
-    empty.hidden = structure.available;
-    if (structure.available) {
-      structure.legs.forEach(leg => grid.append(renderLeg(leg)));
+  function navigate(route, caseId) {
+    if (route === 'product') {
+      const target = caseId || selectedCaseId || workbench.cases[0]?.trade_case_id;
+      if (!target) {
+        showNotice('当前没有 TradeCase 可打开；市场窗口仍可在产品账中查看。');
+        return;
+      }
+      window.location.hash = `product/${encodeURIComponent(target)}`;
     } else {
-      empty.textContent = structure.message;
+      window.location.hash = route === 'review' ? 'review' : 'ledger';
     }
-    renderRows('structure-metrics', structure.metrics);
-  };
+  }
 
-  const product = documentValue.product;
-  const snapshot = documentValue.snapshot;
-  const runtime = documentValue.runtime;
-  const projection = documentValue.projection;
-  setText('product-title', product.title);
-  setText('strategy-name', product.strategy);
-  setText('boundary-label', documentValue.boundary.label);
-  setText('runtime-status', runtime.status);
-  byId('runtime-status').dataset.tone = runtime.tone;
-  setText('target-session-id', runtime.session_id);
-  setText('session-id', snapshot.session_id);
-  setText('observed-at', snapshot.observed_at);
-  setText('runtime-updated-at', runtime.updated_at);
-  setText('projection-state', projection.state);
-  setText('projection-phase', projection.phase);
-  byId('projection-state').dataset.tone = projection.tone;
+  function applyRoute() {
+    const route = routeFromHash();
+    document.querySelectorAll('[data-screen]').forEach(screen => {
+      screen.hidden = screen.dataset.screen !== route.screen;
+    });
+    document.querySelectorAll('.nav-button').forEach(button => {
+      const active = button.dataset.route === route.screen || (route.screen === 'product' && button.dataset.route === 'ledger');
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-current', active ? 'page' : 'false');
+    });
+    if (route.screen === 'product') {
+      selectedCaseId = route.caseId;
+      renderProduct(route.caseId);
+    }
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  }
 
-  const boundaryList = byId('boundary-statements');
-  boundaryList.replaceChildren();
-  documentValue.boundary.statements.forEach(value => boundaryList.append(element('li', '', value)));
+  function showNotice(message) {
+    const notice = byId('channel-notice');
+    notice.textContent = message;
+    notice.hidden = false;
+    window.clearTimeout(showNotice.timeoutId);
+    showNotice.timeoutId = window.setTimeout(() => { notice.hidden = true; }, 3600);
+  }
 
-  setText('warning-count', String(documentValue.warnings.length));
-  renderList('warning-list', documentValue.warnings, 'No snapshot warnings were reported.');
-  renderList('blocker-list', projection.blockers, 'No projection blocker was reported.');
-  renderRows('runtime-values', runtime.facts);
-  setText(
-    'session-calendar-reference',
-    `${documentValue.population.calendar_reference} scheduled windows`
-  );
-  renderPopulation('decision', documentValue.population.decisions);
-  renderPopulation('outcome', documentValue.population.outcomes);
-  renderRows('window-values', documentValue.window);
-  renderRows('context-values', documentValue.context);
-  renderRows('methodology-values', documentValue.methodology);
-  renderStructure(documentValue.structure);
-  renderCases(documentValue.cases);
+  function renderShell() {
+    byId('session-label').textContent = `${formatDate(workbench.runtime.session_id)} · Deribit 08:00 UTC 到期`;
+    const switcher = byId('channel-switcher');
+    switcher.replaceChildren();
+    workbench.channels.forEach(channel => {
+      const button = create('button', 'channel-button', `${channel.strategy}`);
+      button.type = 'button';
+      button.dataset.underlying = channel.underlying;
+      button.dataset.channelId = channel.channel_id;
+      button.classList.toggle('is-active', channel.channel_id === workbench.ledger.active_channel_id);
+      button.classList.toggle('is-reserved', !channel.implemented);
+      button.title = channel.implemented ? channel.status_label : `${channel.status_label}；没有 Policy、运行时或业务人口`;
+      button.addEventListener('click', () => {
+        if (!channel.implemented) {
+          showNotice(`${channel.underlying} ${channel.strategy}：尚未授权、尚未定义，不显示伪造的机会、持仓或零值。`);
+          return;
+        }
+        navigate('ledger');
+      });
+      switcher.append(button);
+    });
+  }
 
-  document.querySelectorAll('[data-theme]').forEach(button => {
-    button.addEventListener('click', () => {
-      const theme = button.dataset.theme;
-      document.documentElement.dataset.theme = theme;
-      document.querySelectorAll('[data-theme]').forEach(candidate => {
-        candidate.setAttribute('aria-pressed', String(candidate === button));
+  function renderLedger() {
+    const summary = workbench.ledger.summary;
+    const summaryTarget = byId('ledger-summary');
+    summaryTarget.replaceChildren();
+    [
+      ['市场窗口', `${countLabel(summary.recorded_windows)} / ${countLabel(summary.session_denominator)}`],
+      ['TradeCase', countLabel(summary.case_count)],
+      ['未完责任', countLabel(summary.unresolved_count)]
+    ].forEach(([label, value]) => {
+      const item = create('div', 'heading-metric');
+      appendText(item, 'span', '', label);
+      appendText(item, 'strong', '', value);
+      summaryTarget.append(item);
+    });
+
+    const grid = byId('ledger-grid');
+    grid.replaceChildren();
+    grid.append(create('div', 'ledger-cell ledger-stage-corner', '策略书 / 研究赛道'));
+    workbench.ledger.stages.forEach(stage => {
+      const head = create('div', 'ledger-cell ledger-stage-head');
+      appendText(head, 'strong', '', stage.label);
+      appendText(head, 'span', '', stage.description);
+      grid.append(head);
+    });
+    workbench.ledger.rows.forEach(row => {
+      const channel = row.channel;
+      const channelCell = create('section', `ledger-cell channel-cell ${channel.implemented ? 'is-active' : 'is-reserved'}`);
+      appendText(channelCell, 'strong', '', `${channel.underlying} ${channel.strategy}`);
+      appendText(channelCell, 'span', '', channel.product_name);
+      const status = create('div', 'channel-status');
+      appendText(status, 'em', '', channel.implemented ? '业务通道' : 'Authority 边界');
+      appendText(status, 'b', '', channel.status_label);
+      if (channel.implemented) appendText(status, 'em', '', `${channel.case_count} 宗 Case · ${channel.unresolved_count} 件未完责任`);
+      channelCell.append(status);
+      grid.append(channelCell);
+
+      workbench.ledger.stages.forEach(stage => {
+        const cell = create('div', `ledger-cell stage-cell ${channel.implemented ? '' : 'is-reserved'}`);
+        if (!channel.implemented) {
+          cell.textContent = '当前 Authority 未授权\n无运行时';
+        } else {
+          const items = row.items.filter(item => item.stage === stage.key);
+          if (!items.length) {
+            cell.append(create('div', 'empty-stage', '—'));
+          } else {
+            items.forEach(item => cell.append(productCard(item)));
+          }
+        }
+        grid.append(cell);
       });
     });
-  });
+
+    const attention = workbench.ledger.attention;
+    byId('attention-count').textContent = `${attention.length} 件未解决责任`;
+    const list = byId('attention-list');
+    list.replaceChildren();
+    if (!attention.length) {
+      list.append(create('div', 'attention-empty', '当前没有未终结 TradeCase。仍需持续观察市场窗口。'));
+    } else {
+      attention.forEach(item => {
+        const card = create('button', 'attention-card');
+        card.type = 'button';
+        card.dataset.tone = item.tone;
+        appendText(card, 'strong', '', `${item.stage_label} · ${item.short_id}`);
+        appendText(card, 'span', '', item.structure_line);
+        appendText(card, 'small', '', item.responsibility);
+        appendText(card, 'small', '', `边界：${formatTimestamp(item.deadline)}`);
+        card.addEventListener('click', () => navigate('product', item.case_id));
+        list.append(card);
+      });
+    }
+    const urgentButton = byId('open-urgent');
+    urgentButton.disabled = !attention.length;
+    urgentButton.onclick = attention.length ? () => navigate('product', attention[0].case_id) : null;
+
+    const market = workbench.ledger.market_strip;
+    const marketTarget = byId('market-strip');
+    marketTarget.replaceChildren();
+    [
+      ['BTC 指数', `${market.index_price} USD`],
+      ['当前 Session 阶段', translate(market.phase)],
+      ['Public Shadow runtime', translate(market.runtime_status)],
+      ['下一输入截止', formatTimestamp(market.next_boundary)],
+      ['最后更新', formatTimestamp(market.updated_at)]
+    ].forEach(([label, value]) => {
+      const fact = create('div', 'market-fact');
+      appendText(fact, 'span', '', label);
+      appendText(fact, 'strong', '', value);
+      marketTarget.append(fact);
+    });
+  }
+
+  function productCard(item) {
+    const card = create(item.case_id ? 'button' : 'article', 'product-card');
+    if (item.case_id) {
+      card.type = 'button';
+      card.addEventListener('click', () => navigate('product', item.case_id));
+    }
+    card.dataset.tone = item.tone;
+    const head = create('div', 'product-card-head');
+    appendText(head, 'strong', '', item.title);
+    appendText(head, 'span', '', translate(item.kind));
+    card.append(head);
+    appendText(card, 'p', '', translateComposite(item.subtitle));
+    appendText(card, 'small', '', translate(item.responsibility));
+    if (item.kind === 'WINDOW' && item.facts) {
+      const facts = create('dl', 'window-facts');
+      [
+        ['合法结构', item.facts.legal],
+        ['可估价', item.facts.price_evaluable],
+        ['符合 Policy', item.facts.policy_eligible]
+      ].forEach(([label, value]) => {
+        const fact = create('div');
+        appendText(fact, 'dt', '', label);
+        appendText(fact, 'dd', '', countLabel(value));
+        facts.append(fact);
+      });
+      card.append(facts);
+    }
+    appendText(card, 'small', '', formatTimestamp(item.time));
+    return card;
+  }
+
+  function renderProduct(caseId) {
+    const caseView = workbench.cases.find(item => item.trade_case_id === caseId) || workbench.cases[0];
+    if (!caseView || !caseView.display) {
+      navigate('ledger');
+      return;
+    }
+    selectedCaseId = caseView.trade_case_id;
+    const display = caseView.display;
+    byId('product-case-title').textContent = `Case ${display.short_id} · BTC 铁鹰`;
+    byId('product-case-subtitle').textContent = `${display.structure_line} · ${display.option_amount} BTC · 公开行情模拟（非真实成交/持仓）`;
+    byId('product-stage-label').textContent = display.stage_label;
+    byId('product-stage-label').dataset.tone = display.tone;
+    byId('product-responsibility').textContent = display.responsibility;
+    byId('position-state-badge').textContent = translate(display.position_state);
+    byId('position-state-badge').dataset.tone = display.tone;
+    renderLifecycle(display.timeline);
+    renderStructure(caseView);
+    renderManagement(caseView);
+    renderResponsibility(caseView);
+  }
+
+  function renderLifecycle(timeline) {
+    const target = byId('product-lifecycle');
+    target.replaceChildren();
+    timeline.forEach(item => {
+      const step = create('li', 'lifecycle-step');
+      step.classList.toggle('is-done', item.state === 'DONE');
+      step.classList.toggle('is-current', item.state === 'CURRENT');
+      step.append(create('span', 'lifecycle-marker'));
+      appendText(step, 'strong', '', item.label);
+      if (item.at) step.title = formatTimestamp(item.at);
+      target.append(step);
+    });
+  }
+
+  function metricItem(label, value, tone) {
+    const item = create('div', 'metric-item');
+    appendText(item, 'span', '', label);
+    const strong = appendText(item, 'strong', '', isUnknown(value) ? '未知' : value);
+    if (tone) strong.dataset.tone = tone;
+    return item;
+  }
+
+  function renderStructure(caseView) {
+    const display = caseView.display;
+    const allocation = valueMap(caseView.risk_allocation);
+    const economics = valueMap(caseView.entry_economics);
+    const summary = byId('structure-summary');
+    summary.replaceChildren(
+      metricItem('组合名义金额', `${display.option_amount} BTC`),
+      metricItem('入场净权利金', economics.native_net_credit ? `${economics.native_net_credit} BTC` : '未知', 'positive'),
+      metricItem('标准 Combo 手续费', economics.combo_standard_fee_native ? `${economics.combo_standard_fee_native} BTC` : allocation.combo_fee_native ? `${allocation.combo_fee_native} BTC` : '未知'),
+      metricItem('契约赔付上限', allocation.maximum_contractual_payoff_usd ? `${allocation.maximum_contractual_payoff_usd} USD` : '未知'),
+      metricItem('研究预算结果', translate(display.allocation_result), display.allocation_result === 'AVAILABLE' ? 'positive' : 'warning'),
+      metricItem('到期', formatTimestamp(display.expiry))
+    );
+    renderPayoffRail(caseView.selected_structure.legs || []);
+    renderLegTable(caseView.selected_structure.legs || []);
+    renderCausalStory(caseView);
+  }
+
+  function renderPayoffRail(legs) {
+    const target = byId('payoff-chart');
+    target.replaceChildren();
+    if (legs.length !== 4) {
+      target.append(create('div', 'trace-empty', '冻结四腿结构不可用。'));
+      return;
+    }
+    const rail = create('div', 'strike-rail');
+    const positions = [12, 34, 66, 88];
+    const body = create('div', 'payoff-segment');
+    body.style.left = `${positions[1]}%`;
+    body.style.width = `${positions[2] - positions[1]}%`;
+    rail.append(body);
+    const leftWing = create('div', 'payoff-wing');
+    leftWing.style.left = '0';
+    leftWing.style.width = `${positions[0]}%`;
+    const rightWing = create('div', 'payoff-wing');
+    rightWing.style.left = `${positions[3]}%`;
+    rightWing.style.width = `${100 - positions[3]}%`;
+    rail.append(leftWing, rightWing);
+    legs.forEach((leg, index) => {
+      const marker = create('div', 'strike-marker');
+      marker.style.left = `${positions[index]}%`;
+      appendText(marker, 'span', '', leg.strike);
+      rail.append(marker);
+    });
+    target.append(rail, create('div', 'payoff-axis-label', 'BTC 交割价格（USD） · 示意位置仅表达四腿顺序，经济值来自冻结 Case'));
+  }
+
+  function renderLegTable(legs) {
+    const target = byId('case-leg-table');
+    target.replaceChildren();
+    if (!legs.length) return;
+    const table = create('table');
+    const head = create('thead');
+    const headerRow = create('tr');
+    ['方向', '买低 Put 翼', '卖高 Put 身', '卖低 Call 身', '买高 Call 翼'].forEach(label => appendText(headerRow, 'th', '', label));
+    head.append(headerRow);
+    const body = create('tbody');
+    const tableRows = [
+      ['操作', ...legs.map(leg => leg.action === 'LONG' ? '买入' : '卖出')],
+      ['行权价', ...legs.map(leg => `${leg.strike} USD`)],
+      ['期权类型', ...legs.map(leg => leg.option_type === 'PUT' ? '看跌期权' : '看涨期权')],
+      ['数量', ...legs.map(leg => `${leg.option_amount} BTC`)],
+      ['合约', ...legs.map(leg => shortValue(leg.instrument_name))]
+    ];
+    tableRows.forEach((row, rowIndex) => {
+      const tr = create('tr');
+      row.forEach((value, cellIndex) => {
+        const td = appendText(tr, 'td', '', value);
+        if (rowIndex === 0 && cellIndex > 0) td.className = legs[cellIndex - 1].action === 'LONG' ? 'is-long' : 'is-short';
+        if (rowIndex === 4 && cellIndex > 0) td.title = legs[cellIndex - 1].instrument_name;
+      });
+      body.append(tr);
+    });
+    table.append(head, body);
+    target.append(table);
+  }
+
+  function renderCausalStory(caseView) {
+    const target = byId('causal-story');
+    target.replaceChildren();
+    const context = valueMap(workbench.context);
+    const allocation = valueMap(caseView.risk_allocation);
+    const blocks = [
+      ['为什么发现', `本窗口状态为 ${translate(workbench.projection.state)}；IV/RV、跳跃占比与事件状态都是具名公开代理，不是 Edge 或预测。`],
+      ['为什么选它', `四腿作为一个不可拆的铁鹰整体冻结。短腿、翼宽与 Combo 费都属于同一候选，不能拆成两笔 Vertical。`],
+      ['为什么允许打开 Case', `Shadow 风险预算结果为 ${translate(allocation.result)}；市场上下文为 ${translate(context.knowledge)}。这是研究名义限额，不是保证金或资本预留。`]
+    ];
+    blocks.forEach(([title, copy]) => {
+      const block = create('article', 'story-block');
+      appendText(block, 'h3', '', title);
+      appendText(block, 'p', '', copy);
+      target.append(block);
+    });
+  }
+
+  function renderManagement(caseView) {
+    const display = caseView.display;
+    const entry = valueMap(caseView.entry_evidence);
+    const outcome = valueMap(caseView.outcome);
+    const summary = byId('management-summary');
+    summary.replaceChildren(
+      metricItem('入场结果', translate(display.entry_status)),
+      metricItem('Position 状态', translate(display.position_state), display.tone),
+      metricItem('最后生命周期观察', formatTimestamp(valueMap(caseView.facts).last_observed_at)),
+      metricItem('首次退出原因', translate(display.exit_reason)),
+      metricItem('Shadow result', outcome.native_result_btc ? `${outcome.native_result_btc} BTC` : '未知'),
+      metricItem('数据 Gap', display.gap_observed ? '有' : '无', display.gap_observed ? 'warning' : 'positive')
+    );
+    const target = byId('management-timeline');
+    target.replaceChildren();
+    const track = create('div', 'timeline-track');
+    display.timeline.forEach(item => {
+      const event = create('div', 'timeline-event');
+      event.classList.toggle('is-done', item.state === 'DONE');
+      event.classList.toggle('is-current', item.state === 'CURRENT');
+      appendText(event, 'strong', '', item.label);
+      appendText(event, 'span', '', item.at ? formatTimestamp(item.at) : item.state === 'PENDING' ? '等待后续事实' : '时间未知');
+      track.append(event);
+    });
+    target.append(track);
+    const quality = byId('evidence-quality');
+    quality.replaceChildren();
+    const knownBlock = create('div', 'quality-block');
+    appendText(knownBlock, 'strong', '', display.gap_observed ? '存在数据 Gap' : '因果前缀连续');
+    appendText(knownBlock, 'span', '', 'DataHealth 不等于 TradingRisk；Gap 不会擦除 Position 或退出责任');
+    const pricingBlock = create('div', 'quality-block');
+    appendText(pricingBlock, 'strong', '', translate(entry.entry_pricing_basis || 'SYNTHETIC_FOUR_LEG_COMPONENT_BOOK_ESTIMATE_V1'));
+    appendText(pricingBlock, 'span', '', '公众四腿合成估价，不代表 Combo 可成交或已预留流动性');
+    quality.append(knownBlock, pricingBlock);
+  }
+
+  function renderResponsibility(caseView) {
+    const display = caseView.display;
+    const title = display.stage === 'EXIT' ? '退出意图已冻结' : display.stage === 'MONITORING' ? '持续管理完整组合' : display.stage === 'OUTCOME' ? '终局经济结果已冻结' : '等待完整组合入场估价';
+    byId('responsibility-title').textContent = title;
+    byId('responsibility-copy').textContent = display.responsibility;
+    const facts = byId('responsibility-facts');
+    facts.replaceChildren();
+    const values = [
+      ['入场截止', formatTimestamp(display.entry_deadline)],
+      ['到期 / 交割边界', formatTimestamp(display.expiry)],
+      ['首次退出原因', translate(display.exit_reason)],
+      ['终局方法', translate(display.outcome_method)]
+    ];
+    values.forEach(([label, value]) => {
+      const wrapper = create('div');
+      appendText(wrapper, 'dt', '', label);
+      appendText(wrapper, 'dd', '', value);
+      facts.append(wrapper);
+    });
+    const action = byId('responsibility-action');
+    action.textContent = display.stage === 'OUTCOME' ? '进入复盘与进化' : '查看原始证据';
+    action.onclick = display.stage === 'OUTCOME' ? () => navigate('review') : openEvidenceDrawer;
+  }
+
+  function renderReview() {
+    const review = workbench.review;
+    byId('review-freeze-time').textContent = `数据冻结：${formatTimestamp(workbench.runtime.updated_at)}`;
+    byId('review-window-count').textContent = `${countLabel(review.summary.recorded_windows)} / ${countLabel(review.summary.session_denominator)} 个市场窗口`;
+    const flow = byId('review-flow');
+    flow.replaceChildren();
+    review.flow.forEach(item => {
+      const node = create('div', 'flow-node');
+      node.dataset.tone = item.key === 'CANDIDATE' || item.key === 'CASE' || item.key === 'OUTCOME' ? 'positive' : item.key === 'REVIEW' ? 'warning' : 'info';
+      appendText(node, 'strong', '', item.count);
+      appendText(node, 'span', '', item.label);
+      flow.append(node);
+    });
+    const traces = byId('case-traces');
+    traces.replaceChildren();
+    if (!review.traces.length) {
+      traces.append(create('div', 'trace-empty', '当前没有 TradeCase 生命周期可展示；Window Outcome 仍是学习分母。'));
+    } else {
+      review.traces.forEach(trace => {
+        const row = create('div', 'case-trace');
+        appendText(row, 'span', 'trace-id', trace.short_id);
+        trace.timeline.forEach(step => {
+          const item = create('div', 'trace-step');
+          item.classList.toggle('is-done', step.state === 'DONE');
+          item.classList.toggle('is-current', step.state === 'CURRENT');
+          item.title = `${step.label} · ${step.at ? formatTimestamp(step.at) : translate(step.state)}`;
+          row.append(item);
+        });
+        row.addEventListener('click', () => navigate('product', trace.case_id));
+        traces.append(row);
+      });
+    }
+    renderOutcomeSummary('case-outcome-summary', [
+      ['Outcome 数', review.case_outcomes.population],
+      ['完整组合退出', review.case_outcomes.whole_product_exit],
+      ['到期交割结算', review.case_outcomes.contract_settlement],
+      ['未形成模拟头寸', review.case_outcomes.no_position]
+    ]);
+    renderOutcomeSummary('window-outcome-summary', [
+      ['已记录', `${countLabel(review.window_outcomes.recorded)} / ${countLabel(review.window_outcomes.denominator)}`],
+      ['未来路径已知', countLabel(review.window_outcomes.future_path_known)],
+      ['未来路径连续', countLabel(review.window_outcomes.future_path_continuous)],
+      ['学习边界', '全市场窗口']
+    ]);
+    const eligibility = byId('eligibility-grid');
+    eligibility.replaceChildren();
+    review.eligibility.forEach(item => {
+      const card = create('div', 'eligibility-item');
+      appendText(card, 'strong', '', item.label);
+      appendText(card, 'span', '', item.population ? `是 ${item.yes} · 否 ${item.no} · 未知 ${item.unknown}` : '尚无 Case Outcome 人口');
+      eligibility.append(card);
+    });
+    renderChallenger(review.challenger);
+  }
+
+  function renderOutcomeSummary(targetId, values) {
+    const target = byId(targetId);
+    target.replaceChildren();
+    values.forEach(([label, value]) => {
+      const wrapper = create('div');
+      appendText(wrapper, 'dt', '', label);
+      appendText(wrapper, 'dd', '', value);
+      target.append(wrapper);
+    });
+  }
+
+  function renderChallenger(challenger) {
+    byId('challenger-status').textContent = challenger.status_label;
+    byId('challenger-status').dataset.tone = 'warning';
+    const arms = byId('challenger-arms');
+    arms.replaceChildren();
+    challenger.arms.forEach(arm => {
+      const item = create('div', `challenger-arm ${arm.available ? '' : 'is-disabled'}`);
+      appendText(item, 'strong', '', arm.label);
+      appendText(item, 'span', '', arm.available ? '冻结线上 Policy' : '尚未授权 / 尚未测量');
+      arms.append(item);
+    });
+    const table = byId('challenger-table');
+    table.replaceChildren();
+    const header = create('div', 'comparison-row');
+    ['关键风险与收益指标', 'Base', 'Challenger', '无筛选铁鹰', '不交易'].forEach(value => appendText(header, 'span', '', value));
+    table.append(header);
+    challenger.metrics.forEach(metric => {
+      const row = create('div', 'comparison-row');
+      appendText(row, 'span', '', metric);
+      ['尚未测量', '尚未测量', '尚未测量', '尚未测量'].forEach(value => appendText(row, 'span', '', value));
+      table.append(row);
+    });
+    byId('challenger-reason').textContent = challenger.reason;
+    byId('human-gate-copy').textContent = challenger.human_gate;
+  }
+
+  function renderEvidence() {
+    renderEvidenceRows('evidence-runtime', workbench.runtime.facts);
+    renderEvidenceRows('evidence-window', workbench.window);
+    renderEvidenceRows('evidence-context', workbench.context);
+    renderEvidenceRows('evidence-methodology', workbench.methodology);
+    const warnings = byId('evidence-warnings');
+    warnings.replaceChildren();
+    if (!workbench.warnings.length) warnings.append(create('span', 'warning-chip', '无额外警告'));
+    workbench.warnings.forEach(warning => warnings.append(create('span', 'warning-chip', translate(warning.code))));
+  }
+
+  function renderEvidenceRows(targetId, rows) {
+    const target = byId(targetId);
+    target.replaceChildren();
+    (rows || []).forEach(row => {
+      const wrapper = create('div');
+      appendText(wrapper, 'dt', '', row.label);
+      appendText(wrapper, 'dd', '', displayRowValue(row));
+      target.append(wrapper);
+    });
+    if (!rows?.length) {
+      const wrapper = create('div');
+      appendText(wrapper, 'dt', '', '可用性');
+      appendText(wrapper, 'dd', '', '未知');
+      target.append(wrapper);
+    }
+  }
+
+  function openEvidenceDrawer() {
+    lastFocusedElement = document.activeElement;
+    const drawer = byId('evidence-drawer');
+    drawer.hidden = false;
+    document.body.style.overflow = 'hidden';
+    drawer.querySelector('.drawer-close').focus();
+  }
+
+  function closeEvidenceDrawer() {
+    const drawer = byId('evidence-drawer');
+    drawer.hidden = true;
+    document.body.style.overflow = '';
+    if (lastFocusedElement instanceof HTMLElement) lastFocusedElement.focus();
+  }
+
+  function wireInteractions() {
+    document.querySelectorAll('[data-route]').forEach(button => {
+      button.addEventListener('click', () => navigate(button.dataset.route));
+    });
+    byId('product-evidence-button').addEventListener('click', openEvidenceDrawer);
+    byId('footer-evidence-button').addEventListener('click', openEvidenceDrawer);
+    document.querySelectorAll('[data-close-drawer]').forEach(button => button.addEventListener('click', closeEvidenceDrawer));
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !byId('evidence-drawer').hidden) closeEvidenceDrawer();
+    });
+    window.addEventListener('hashchange', applyRoute);
+  }
+
+  function refreshDocumentWhenCurrent() {
+    const currentScript = document.querySelector('script[src^="workbench-data.js"]');
+    const refreshScript = document.createElement('script');
+    refreshScript.src = `workbench-data.js?refresh=${Date.now()}`;
+    refreshScript.onload = () => {
+      if (documentSignature(window.OPTIMATRIX_WORKBENCH) !== initialDocumentSignature) {
+        window.location.reload();
+      }
+      refreshScript.remove();
+    };
+    refreshScript.onerror = () => refreshScript.remove();
+    currentScript?.parentNode?.insertBefore(refreshScript, currentScript);
+  }
+
+  renderShell();
+  renderLedger();
+  renderReview();
+  renderEvidence();
+  wireInteractions();
+  applyRoute();
+  window.setInterval(refreshDocumentWhenCurrent, 10000);
 })();

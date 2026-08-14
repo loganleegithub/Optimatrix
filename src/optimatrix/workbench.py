@@ -6,11 +6,46 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from optimatrix.channels import CHANNELS, ChannelId
 from optimatrix.lifecycle import TradeCase
 
 WORKBENCH_SCHEMA_VERSION = 3
 _ASSET_ROOT = Path(__file__).with_name("workbench_static")
 _STATIC_ASSETS = ("index.html", "styles.css", "app.js")
+
+# These are UTC instants whose presentation belongs to the browser. Identities such as
+# market_session_id deliberately stay as exact backend text even when they resemble ISO timestamps.
+_TIMESTAMP_ROW_KEYS = frozenset(
+    {
+        "decision_boundary",
+        "ends_at",
+        "entry_deadline",
+        "entry_known_at",
+        "entry_observed_at",
+        "event_state_known_at_ms",
+        "expires_at",
+        "expiry",
+        "history_coverage_end_ms",
+        "history_coverage_start_ms",
+        "input_deadline",
+        "known_at",
+        "last_observed_at",
+        "last_recovery_at",
+        "market_received_max_ms",
+        "market_received_min_ms",
+        "market_source_max_ms",
+        "market_source_min_ms",
+        "observed_at",
+        "opened_at",
+        "received_timestamp_ms",
+        "required_history_start_ms",
+        "source_timestamp_ms",
+        "started_at",
+        "starts_at",
+        "terminal_at",
+        "updated_at",
+    }
+)
 
 _WINDOW_LABELS = {
     "decision_window_id": "Decision Window identity",
@@ -202,6 +237,34 @@ _BOUNDARY_STATEMENTS = (
     "This static export creates no Shadow Case and grants no execution permission.",
 )
 
+_CHANNEL_PRESENTATION = (
+    (ChannelId.INVERSE_BTC_SHORT_VOL, "BTC", "卖波动率", "铁鹰 / Iron Condor"),
+    (ChannelId.INVERSE_BTC_LONG_GAMMA, "BTC", "Long Gamma", "Gamma 结构"),
+    (ChannelId.INVERSE_ETH_SHORT_VOL, "ETH", "卖波动率", "铁鹰 / Iron Condor"),
+    (ChannelId.INVERSE_ETH_LONG_GAMMA, "ETH", "Long Gamma", "Gamma 结构"),
+)
+
+_LEDGER_STAGES = (
+    ("DISCOVERY", "发现", "机会判断"),
+    ("CONSTRUCTION", "构造", "完整四腿"),
+    ("ENTRY", "待入场估价", "严格更晚估价"),
+    ("MONITORING", "管理中", "持仓与风控"),
+    ("EXIT", "退出意图", "冻结并等待估价"),
+    ("SETTLEMENT", "待结算", "官方交割价格"),
+    ("OUTCOME", "Outcome", "终局经济结果"),
+)
+
+_ELIGIBILITY_LABELS = {
+    "decision_evaluable": "机会判断可评估",
+    "future_path_known": "未来路径已知",
+    "future_path_continuous": "未来路径连续",
+    "shadow_entry_evaluable": "模拟入场可估价",
+    "terminal_economics_evaluable": "终局经济结果可评估",
+    "live_execution_attributable": "真实执行可归因",
+    "strategy_population_eligible": "策略样本合格",
+    "qualification_eligible": "Policy 晋升样本合格",
+}
+
 
 @dataclass(frozen=True)
 class WorkbenchExport:
@@ -229,6 +292,7 @@ def build_workbench_document(
     root = _mapping(snapshot, "snapshot")
     session_id = _required_text(root.get("session_id"), "snapshot.session_id")
     observed_at = _required_text(root.get("observed_at"), "snapshot.observed_at")
+    known_at = _required_text(root.get("known_at"), "snapshot.known_at")
     window = _mapping(root.get("window"), "snapshot.window")
     context = _mapping(root.get("context"), "snapshot.context")
     projection = _mapping(root.get("projection"), "snapshot.projection")
@@ -242,6 +306,36 @@ def build_workbench_document(
         runtime_state,
         fallback_session_id=session_id,
         fallback_updated_at=observed_at,
+    )
+    population = _ledger_population_projection(
+        ledger_population,
+        attempted_window_count=runtime["attempted_window_count"],
+    )
+    structure = _structure_projection(
+        projection.get("structure"),
+        quote_index,
+        projection_state=state,
+    )
+    structure_population = _structure_population_projection(
+        projection.get("structure"),
+        blockers=blockers,
+    )
+    case_views = _case_collection_projection(
+        trade_case=trade_case,
+        recovered_cases=recovered_cases,
+    )
+    channels = _channel_projection(case_views)
+    ledger = _product_ledger_projection(
+        snapshot=root,
+        runtime=runtime,
+        population=population,
+        projection_state=state,
+        projection_phase=phase,
+        blockers=blockers,
+        structure=structure,
+        structure_population=structure_population,
+        cases=case_views,
+        channels=channels,
     )
 
     return {
@@ -258,15 +352,13 @@ def build_workbench_document(
         "snapshot": {
             "session_id": session_id,
             "observed_at": observed_at,
+            "known_at": known_at,
             "instrument_count": _display_value(root.get("instrument_count")),
             "requested_book_count": _display_value(root.get("requested_book_count")),
             "fetched_book_count": _display_value(root.get("fetched_book_count")),
         },
         "runtime": runtime,
-        "population": _ledger_population_projection(
-            ledger_population,
-            attempted_window_count=runtime["attempted_window_count"],
-        ),
+        "population": population,
         "warnings": [{"code": warning, "tone": "warning"} for warning in warnings],
         "window": _display_rows(window, _WINDOW_LABELS),
         "projection": {
@@ -275,17 +367,18 @@ def build_workbench_document(
             "tone": _projection_tone(state),
             "blockers": [{"code": blocker, "tone": "danger"} for blocker in blockers],
         },
-        "structure": _structure_projection(
-            projection.get("structure"),
-            quote_index,
-            projection_state=state,
-        ),
+        "structure": structure,
+        "structure_population": structure_population,
         "context": _display_rows(context, _CONTEXT_LABELS),
         "methodology": _optional_display_rows(root.get("methodology"), {}),
         "case": build_case_projection(trade_case),
-        "cases": _case_collection_projection(
-            trade_case=trade_case,
-            recovered_cases=recovered_cases,
+        "cases": case_views,
+        "channels": channels,
+        "ledger": ledger,
+        "review": _review_projection(
+            population=population,
+            cases=case_views,
+            ledger=ledger,
         ),
     }
 
@@ -342,6 +435,7 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
         return {
             "available": False,
             "trade_case_id": None,
+            "channel_id": None,
             "entry_status": "UNKNOWN",
             "position_state": "UNKNOWN",
             "message": "This bounded snapshot did not open a TradeCase.",
@@ -353,6 +447,7 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
             "exit_intent": [],
             "outcome": [],
             "eligibility": [],
+            "display": None,
         }
     facts = {
         "truth_layer": case.truth_layer,
@@ -444,7 +539,7 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
         [
             {
                 "key": name,
-                "label": name.replace("_", " ").title(),
+                "label": _ELIGIBILITY_LABELS[name],
                 "value": ("UNKNOWN" if fact.value is None else "YES" if fact.value else "NO"),
                 "reason": fact.reason,
             }
@@ -474,6 +569,7 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
     return {
         "available": True,
         "trade_case_id": case.identity,
+        "channel_id": _enum_text(getattr(case, "channel_id", ChannelId.INVERSE_BTC_SHORT_VOL)),
         "entry_status": case.entry_status.value if case.entry_status is not None else "UNKNOWN",
         "position_state": (
             case.position_state.value if case.position_state is not None else "UNKNOWN"
@@ -490,7 +586,166 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
         "exit_intent": _optional_display_rows(intent, _EXIT_INTENT_LABELS),
         "outcome": _optional_display_rows(outcome_values, _OUTCOME_LABELS),
         "eligibility": eligibility,
+        "display": _case_display_projection(
+            case,
+            selected_structure=selected_structure,
+            risk_allocation=risk_allocation,
+            outcome_values=outcome_values,
+        ),
     }
+
+
+def _case_display_projection(
+    case: TradeCase,
+    *,
+    selected_structure: Mapping[str, object],
+    risk_allocation: Mapping[str, object] | None,
+    outcome_values: Mapping[str, object] | None,
+) -> dict[str, object]:
+    stage, stage_label, tone = _case_stage(case)
+    frozen_structure = _case_mapping(
+        case,
+        "selected_structure",
+        "TradeCase.selected_structure",
+    )
+    legs = selected_structure.get("legs")
+    leg_values = list(legs) if isinstance(legs, Sequence) else []
+    strikes = [str(leg.get("strike", "UNKNOWN")) for leg in leg_values if isinstance(leg, Mapping)]
+    structure_line = " / ".join(strikes) if len(strikes) == 4 else "完整四腿已冻结"
+    allocation_result = (
+        _display_loose(risk_allocation.get("result")) if risk_allocation is not None else "UNKNOWN"
+    )
+    entry_status = (
+        case.entry_status.value if case.entry_status is not None else "等待严格更晚入场估价"
+    )
+    outcome_method = (
+        _display_loose(outcome_values.get("terminal_method"))
+        if outcome_values is not None
+        else None
+    )
+    exit_reason = case.exit_intent.reason if case.exit_intent is not None else None
+    terminal_at = outcome_values.get("terminal_at") if outcome_values is not None else None
+    native_result = outcome_values.get("native_result_btc") if outcome_values is not None else None
+
+    responsibility = {
+        "ENTRY": "等待严格更晚的完整四腿入场估价",
+        "MONITORING": "持续监控完整组合,首次已知触发将冻结退出意图",
+        "EXIT": "退出意图已冻结;等待严格更晚的完整组合估价或到期交割",
+        "OUTCOME": "终局经济结果已冻结,可进入复盘",
+    }.get(stage, "保持产品责任")
+    if case.gap_observed and stage != "OUTCOME":
+        responsibility = f"数据存在 Gap;{responsibility}"
+
+    timeline = [
+        {
+            "key": "DISCOVERY",
+            "label": "发现",
+            "state": "DONE",
+            "at": _optional_isoformat(getattr(case, "decision_boundary", None)),
+        },
+        {
+            "key": "CONSTRUCTION",
+            "label": "构造",
+            "state": "DONE",
+            "at": case.opened_at.isoformat(),
+        },
+        {
+            "key": "ALLOCATION",
+            "label": "冻结研究预算",
+            "state": "DONE" if allocation_result == "AVAILABLE" else "UNKNOWN",
+            "at": (
+                _display_loose(risk_allocation.get("known_at"))
+                if risk_allocation is not None
+                else None
+            ),
+        },
+        {
+            "key": "ENTRY",
+            "label": "入场估价",
+            "state": (
+                "DONE"
+                if case.entry_status is not None and case.entry_final
+                else "CURRENT"
+                if stage == "ENTRY"
+                else "UNKNOWN"
+            ),
+            "at": _optional_isoformat(getattr(case, "entry_known_at", None)),
+        },
+        {
+            "key": "MONITORING",
+            "label": "持续管理",
+            "state": (
+                "CURRENT"
+                if stage == "MONITORING"
+                else "DONE"
+                if stage in {"EXIT", "OUTCOME"}
+                else "PENDING"
+            ),
+            "at": _optional_isoformat(case.last_observed_at),
+        },
+        {
+            "key": "EXIT",
+            "label": "退出意图",
+            "state": (
+                "CURRENT"
+                if stage == "EXIT"
+                else "DONE"
+                if stage == "OUTCOME" and case.exit_intent is not None
+                else "PENDING"
+            ),
+            "at": (case.exit_intent.known_at.isoformat() if case.exit_intent is not None else None),
+        },
+        {
+            "key": "OUTCOME",
+            "label": "Outcome",
+            "state": "DONE" if stage == "OUTCOME" else "PENDING",
+            "at": _display_loose(terminal_at) if terminal_at is not None else None,
+        },
+    ]
+
+    return {
+        "short_id": case.identity.split(":", 1)[-1][:12].upper(),
+        "stage": stage,
+        "stage_label": stage_label,
+        "tone": tone,
+        "priority": 0 if stage == "EXIT" else 1 if stage == "MONITORING" else 2,
+        "structure_line": structure_line,
+        "option_amount": (
+            _display_loose(frozen_structure.get("option_amount"))
+            if frozen_structure is not None
+            else "UNKNOWN"
+        ),
+        "expiry": (
+            _display_loose(frozen_structure.get("expiry"))
+            if frozen_structure is not None
+            else "UNKNOWN"
+        ),
+        "opened_at": case.opened_at.isoformat(),
+        "entry_deadline": case.entry_deadline.isoformat(),
+        "entry_status": entry_status,
+        "position_state": (
+            case.position_state.value if case.position_state is not None else "NO_POSITION"
+        ),
+        "allocation_result": allocation_result,
+        "exit_reason": exit_reason,
+        "outcome_method": outcome_method,
+        "native_result_btc": _display_loose(native_result) if native_result is not None else None,
+        "terminal_at": _display_loose(terminal_at) if terminal_at is not None else None,
+        "gap_observed": case.gap_observed,
+        "responsibility": responsibility,
+        "timeline": timeline,
+    }
+
+
+def _case_stage(case: TradeCase) -> tuple[str, str, str]:
+    state = case.position_state.value if case.position_state is not None else None
+    if state == "TERMINAL" or case.outcome is not None:
+        return "OUTCOME", "Outcome", "positive"
+    if state == "EXIT_INTENT_FROZEN" or case.exit_intent is not None:
+        return "EXIT", "退出意图", "danger"
+    if state == "MONITORING":
+        return "MONITORING", "管理中", "positive"
+    return "ENTRY", "待入场估价", "warning"
 
 
 def _empty_case_structure_projection() -> dict[str, object]:
@@ -719,6 +974,398 @@ def _case_collection_projection(
     return [build_case_projection(case) for case in selected]
 
 
+def _channel_projection(cases: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
+    counts = {channel_id.value: 0 for channel_id, *_ in _CHANNEL_PRESENTATION}
+    unresolved = {channel_id.value: 0 for channel_id, *_ in _CHANNEL_PRESENTATION}
+    for case in cases:
+        channel_id = str(case.get("channel_id") or ChannelId.INVERSE_BTC_SHORT_VOL.value)
+        if channel_id in counts:
+            counts[channel_id] += 1
+            display = case.get("display")
+            if isinstance(display, Mapping) and display.get("stage") != "OUTCOME":
+                unresolved[channel_id] += 1
+
+    output: list[dict[str, object]] = []
+    for channel_id, underlying, strategy, product_name in _CHANNEL_PRESENTATION:
+        descriptor = CHANNELS[channel_id]
+        output.append(
+            {
+                "channel_id": channel_id.value,
+                "underlying": underlying,
+                "strategy": strategy,
+                "product_name": product_name,
+                "implemented": descriptor.implemented,
+                "implementation_name": descriptor.implementation_name,
+                "status": "PUBLIC_SHADOW" if descriptor.implemented else "UNAUTHORIZED",
+                "status_label": (
+                    "公开行情模拟" if descriptor.implemented else "尚未授权 · 尚未定义"
+                ),
+                "case_count": counts[channel_id.value] if descriptor.implemented else None,
+                "unresolved_count": (
+                    unresolved[channel_id.value] if descriptor.implemented else None
+                ),
+            }
+        )
+    return output
+
+
+def _product_ledger_projection(
+    *,
+    snapshot: Mapping[str, object],
+    runtime: Mapping[str, object],
+    population: Mapping[str, object],
+    projection_state: str,
+    projection_phase: str,
+    blockers: Sequence[str],
+    structure: Mapping[str, object],
+    structure_population: Mapping[str, object],
+    cases: Sequence[Mapping[str, object]],
+    channels: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    stages = [
+        {"key": key, "label": label, "description": description}
+        for key, label, description in _LEDGER_STAGES
+    ]
+    active_channel_id = ChannelId.INVERSE_BTC_SHORT_VOL.value
+    product_rows: list[dict[str, object]] = []
+    for channel in channels:
+        channel_id = str(channel["channel_id"])
+        items: list[dict[str, object]] = []
+        if channel["implemented"]:
+            current_window_stage = "DISCOVERY"
+            current_window_responsibility = (
+                blockers[0]
+                if blockers
+                else "完整四腿候选已形成;等待业务链后续事实"
+                if structure.get("available")
+                else "本窗口尚无可展示结构"
+            )
+            items.append(
+                {
+                    "id": "CURRENT_WINDOW",
+                    "kind": "WINDOW",
+                    "stage": current_window_stage,
+                    "title": "当前市场窗口",
+                    "subtitle": f"{projection_state} · {projection_phase}",
+                    "time": _display_loose(snapshot.get("known_at")),
+                    "tone": _projection_tone(projection_state),
+                    "responsibility": current_window_responsibility,
+                    "facts": structure_population,
+                    "case_id": None,
+                }
+            )
+            if structure.get("available"):
+                items.append(
+                    {
+                        "id": "CURRENT_STRUCTURE",
+                        "kind": "STRUCTURE",
+                        "stage": "CONSTRUCTION",
+                        "title": "完整四腿候选",
+                        "subtitle": _current_structure_line(structure),
+                        "time": _display_loose(snapshot.get("known_at")),
+                        "tone": "positive",
+                        "responsibility": "完整结构已联合选出;不拆分为两侧独立交易",
+                        "case_id": None,
+                    }
+                )
+            for case in cases:
+                if case.get("channel_id") != channel_id:
+                    continue
+                display = case.get("display")
+                if not isinstance(display, Mapping):
+                    continue
+                items.append(
+                    {
+                        "id": display.get("short_id"),
+                        "kind": "CASE",
+                        "stage": display.get("stage"),
+                        "title": f"Case {display.get('short_id')}",
+                        "subtitle": display.get("structure_line"),
+                        "time": display.get("opened_at"),
+                        "tone": display.get("tone"),
+                        "responsibility": display.get("responsibility"),
+                        "case_id": case.get("trade_case_id"),
+                        "entry_deadline": display.get("entry_deadline"),
+                        "expiry": display.get("expiry"),
+                        "gap_observed": display.get("gap_observed"),
+                    }
+                )
+        product_rows.append({"channel": channel, "items": items})
+
+    attention: list[dict[str, object]] = []
+    for case in cases:
+        display = case.get("display")
+        if not isinstance(display, Mapping) or display.get("stage") == "OUTCOME":
+            continue
+        attention.append(
+            {
+                "case_id": case.get("trade_case_id"),
+                "short_id": display.get("short_id"),
+                "stage": display.get("stage"),
+                "stage_label": display.get("stage_label"),
+                "tone": display.get("tone"),
+                "priority": display.get("priority"),
+                "structure_line": display.get("structure_line"),
+                "responsibility": display.get("responsibility"),
+                "deadline": (
+                    display.get("entry_deadline")
+                    if display.get("stage") == "ENTRY"
+                    else display.get("expiry")
+                ),
+            }
+        )
+    attention.sort(key=lambda item: (str(item["priority"]), str(item["deadline"])))
+
+    decisions = _mapping(population.get("decisions"), "population.decisions")
+    outcomes = _mapping(population.get("outcomes"), "population.outcomes")
+    return {
+        "active_channel_id": active_channel_id,
+        "stages": stages,
+        "rows": product_rows,
+        "attention": attention,
+        "summary": {
+            "recorded_windows": decisions.get("recorded"),
+            "attempted_windows": decisions.get("attempted"),
+            "session_denominator": decisions.get("denominator"),
+            "recorded_window_outcomes": outcomes.get("recorded"),
+            "case_count": len(cases),
+            "unresolved_count": len(attention),
+        },
+        "market_strip": {
+            "underlying": "BTC",
+            "index_price": _display_loose(
+                next(
+                    (
+                        row.get("value")
+                        for row in _display_rows(
+                            _mapping(snapshot.get("context"), "snapshot.context"),
+                            _CONTEXT_LABELS,
+                        )
+                        if row.get("key") == "index_price"
+                    ),
+                    "UNKNOWN",
+                )
+            ),
+            "phase": projection_phase,
+            "runtime_status": runtime.get("status"),
+            "updated_at": runtime.get("updated_at"),
+            "next_boundary": next(
+                (
+                    row.get("value")
+                    for row in _display_rows(
+                        _mapping(snapshot.get("window"), "snapshot.window"),
+                        _WINDOW_LABELS,
+                    )
+                    if row.get("key") == "input_deadline"
+                ),
+                "UNKNOWN",
+            ),
+        },
+    }
+
+
+def _current_structure_line(structure: Mapping[str, object]) -> str:
+    legs = structure.get("legs")
+    if not isinstance(legs, Sequence) or isinstance(legs, (str, bytes)):
+        return "完整四腿候选"
+    names = [
+        str(leg.get("instrument_name"))
+        for leg in legs
+        if isinstance(leg, Mapping) and leg.get("instrument_name")
+    ]
+    return " / ".join(names) if len(names) == 4 else "完整四腿候选"
+
+
+def _structure_population_projection(
+    value: object,
+    *,
+    blockers: Sequence[str],
+) -> dict[str, object]:
+    if value is not None:
+        structure = _mapping(value, "snapshot.projection.structure")
+        counts = structure.get("population_counts")
+        if isinstance(counts, Mapping):
+            return {
+                "legal": _display_value(counts.get("legal")),
+                "price_evaluable": _display_value(counts.get("price_evaluable")),
+                "policy_eligible": _display_value(counts.get("policy_eligible")),
+                "known": True,
+            }
+    return {
+        "legal": "UNKNOWN",
+        "price_evaluable": "UNKNOWN",
+        "policy_eligible": "0" if "NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE" in blockers else "UNKNOWN",
+        "known": False,
+    }
+
+
+def _review_projection(
+    *,
+    population: Mapping[str, object],
+    cases: Sequence[Mapping[str, object]],
+    ledger: Mapping[str, object],
+) -> dict[str, object]:
+    decisions = _mapping(population.get("decisions"), "population.decisions")
+    outcomes = _mapping(population.get("outcomes"), "population.outcomes")
+    breakdowns = decisions.get("breakdowns")
+    result_counts: dict[str, str] = {}
+    if isinstance(breakdowns, Sequence):
+        for breakdown in breakdowns:
+            if not isinstance(breakdown, Mapping) or breakdown.get("key") != "result_counts":
+                continue
+            rows = breakdown.get("rows")
+            if isinstance(rows, Sequence):
+                result_counts = {
+                    str(row.get("key")): str(row.get("value"))
+                    for row in rows
+                    if isinstance(row, Mapping)
+                }
+
+    flow = [
+        {"key": "UNKNOWN", "label": "未知", "count": result_counts.get("UNKNOWN", "0")},
+        {"key": "ABSTAIN", "label": "不做", "count": result_counts.get("ABSTAIN", "0")},
+        {"key": "REVIEW", "label": "复核", "count": result_counts.get("REVIEW", "0")},
+        {
+            "key": "CANDIDATE",
+            "label": "候选",
+            "count": result_counts.get("CANDIDATE", "0"),
+        },
+        {"key": "CASE", "label": "形成 Case", "count": str(len(cases))},
+        {
+            "key": "OUTCOME",
+            "label": "Case Outcome",
+            "count": str(sum(bool(case.get("outcome")) for case in cases)),
+        },
+    ]
+    traces = []
+    for case in cases:
+        display = case.get("display")
+        if isinstance(display, Mapping):
+            traces.append(
+                {
+                    "case_id": case.get("trade_case_id"),
+                    "short_id": display.get("short_id"),
+                    "stage": display.get("stage"),
+                    "tone": display.get("tone"),
+                    "timeline": display.get("timeline"),
+                    "outcome_method": display.get("outcome_method"),
+                    "native_result_btc": display.get("native_result_btc"),
+                }
+            )
+
+    case_outcomes = {
+        "population": str(sum(bool(case.get("outcome")) for case in cases)),
+        "whole_product_exit": str(_case_outcome_method_counts(cases).get("WHOLE_PRODUCT_EXIT", 0)),
+        "contract_settlement": str(
+            _case_outcome_method_counts(cases).get("CONTRACT_SETTLEMENT", 0)
+        ),
+        "no_position": str(_case_outcome_method_counts(cases).get("NO_POSITION", 0)),
+    }
+    outcome_rows_value = outcomes.get("rows", [])
+    outcome_rows = (
+        outcome_rows_value
+        if isinstance(outcome_rows_value, Sequence)
+        and not isinstance(outcome_rows_value, (str, bytes))
+        else []
+    )
+    window_outcomes = {
+        "recorded": outcomes.get("recorded"),
+        "denominator": outcomes.get("denominator"),
+        "future_path_known": next(
+            (
+                row.get("value")
+                for row in outcome_rows
+                if isinstance(row, Mapping) and row.get("key") == "future_path_known"
+            ),
+            "UNKNOWN",
+        ),
+        "future_path_continuous": next(
+            (
+                row.get("value")
+                for row in outcome_rows
+                if isinstance(row, Mapping) and row.get("key") == "continuous"
+            ),
+            "UNKNOWN",
+        ),
+    }
+    return {
+        "flow": flow,
+        "traces": traces,
+        "case_outcomes": case_outcomes,
+        "window_outcomes": window_outcomes,
+        "eligibility": _aggregate_case_eligibility(cases),
+        "challenger": {
+            "status": "NOT_YET_MEASURED",
+            "status_label": "尚未测量",
+            "reason": "D1 离线 AI Challenger 尚未授权;当前没有可比较的冻结 Challenger Policy 与合格前向样本。",
+            "arms": [
+                {"key": "BASE", "label": "Base", "available": True},
+                {"key": "CHALLENGER", "label": "Challenger", "available": False},
+                {"key": "UNFILTERED_CONDOR", "label": "无筛选铁鹰", "available": False},
+                {"key": "NO_TRADE", "label": "不交易", "available": False},
+            ],
+            "metrics": [
+                "尾部损失",
+                "最差单日损失",
+                "ES / CVaR",
+                "最大回撤",
+                "手续费后净收益",
+                "错失有效机会",
+                "覆盖率与稳定性",
+            ],
+            "human_gate": "AI 只能提出建议;新 Policy 必须由交易负责人在另一个授权任务中批准。",
+        },
+        "summary": ledger.get("summary"),
+    }
+
+
+def _case_outcome_method_counts(
+    cases: Sequence[Mapping[str, object]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for case in cases:
+        rows = case.get("outcome")
+        if not isinstance(rows, Sequence):
+            continue
+        method = next(
+            (
+                str(row.get("value"))
+                for row in rows
+                if isinstance(row, Mapping) and row.get("key") == "terminal_method"
+            ),
+            None,
+        )
+        if method is not None:
+            counts[method] = counts.get(method, 0) + 1
+    return counts
+
+
+def _aggregate_case_eligibility(
+    cases: Sequence[Mapping[str, object]],
+) -> list[dict[str, object]]:
+    output: list[dict[str, object]] = []
+    for key, label in _ELIGIBILITY_LABELS.items():
+        eligibility_values = [case.get("eligibility", []) for case in cases]
+        values = [
+            item
+            for raw_values in eligibility_values
+            if isinstance(raw_values, Sequence) and not isinstance(raw_values, (str, bytes))
+            for item in raw_values
+            if isinstance(item, Mapping) and item.get("key") == key
+        ]
+        output.append(
+            {
+                "key": key,
+                "label": label,
+                "yes": sum(item.get("value") == "YES" for item in values),
+                "no": sum(item.get("value") == "NO" for item in values),
+                "unknown": sum(item.get("value") == "UNKNOWN" for item in values),
+                "population": len(values),
+            }
+        )
+    return output
+
+
 def _structure_projection(
     value: object,
     quote_index: Mapping[str, Mapping[str, object]],
@@ -821,13 +1468,14 @@ def _display_rows(
             isinstance(raw, Sequence) and not isinstance(raw, (str, bytes))
         ):
             continue
-        rows.append(
-            {
-                "key": key,
-                "label": labels.get(key, key.replace("_", " ").title()),
-                "value": _display_value(raw),
-            }
-        )
+        row = {
+            "key": key,
+            "label": labels.get(key, key.replace("_", " ").title()),
+            "value": _display_value(raw),
+        }
+        if key in _TIMESTAMP_ROW_KEYS:
+            row["kind"] = "timestamp"
+        rows.append(row)
     return rows
 
 
@@ -849,6 +1497,29 @@ def _runtime_tone(status: str) -> str:
         "ERROR": "danger",
         "FAILED": "danger",
     }.get(status.upper(), "neutral")
+
+
+def _enum_text(value: object) -> str | None:
+    text = getattr(value, "value", value)
+    return text if isinstance(text, str) and text else None
+
+
+def _display_loose(value: object) -> str:
+    if value is None:
+        return "UNKNOWN"
+    text = getattr(value, "value", value)
+    if isinstance(text, str):
+        return text or "UNKNOWN"
+    if isinstance(text, bool):
+        return "YES" if text else "NO"
+    if isinstance(text, (int, float)):
+        return str(text)
+    isoformat = getattr(text, "isoformat", None)
+    if callable(isoformat):
+        result = isoformat()
+        if isinstance(result, str):
+            return result
+    return str(text)
 
 
 def _display_value(value: object) -> str:
