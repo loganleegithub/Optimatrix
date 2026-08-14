@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 NATURAL FORWARD CHAIN ACCEPTANCE — ACTIVE
+**Status:** B3 CAPABILITY ACCEPTANCE SEMANTICS — ACTIVE
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -8,9 +8,9 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `AUTHORITY_ONLY`
 
-**Sole authorized closure:** [`B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE`](../../tasks/B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE.md)
+**Sole authorized closure:** [`B3_CAPABILITY_ACCEPTANCE_SEMANTICS`](../../tasks/B3_CAPABILITY_ACCEPTANCE_SEMANTICS.md)
 
 ## Current permissions
 
@@ -21,7 +21,8 @@ Stage is the permission ceiling; a future active task may only narrow it.
 **Public market calls:** only unauthenticated production `wss://www.deribit.com/ws/api/v2` public
 heartbeat, subscribe, unsubscribe, test, BTC index, and aggregated `100ms` BTC option book/ticker
 channels, plus `https://www.deribit.com/api/v2` public clock, instrument metadata, initial index-path
-recovery seed, affected-book resync, and official settlement calls made by the exact active command
+recovery seed, affected-book resync, and official settlement calls made only by the already deployed
+launchd runtime identified below
 
 **Stable ObservationLedger root:** only
 `/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2`
@@ -41,7 +42,7 @@ loopback Workbench port `8765`, and no duration expansion into another process o
 
 **Private read-only account permission:** `NONE`
 
-**Orders, capital, and deployment:** the exact active-task local launchd public Shadow job is
+**Orders, capital, and deployment:** the exact already deployed local launchd public Shadow job is
 deployed and may remain under `KeepAlive`. Any other local or remote deployment, orders, fills,
 capital, and private access remain `NONE`
 
@@ -139,12 +140,12 @@ capital, and private access remain `NONE`
   disabled. Private facts, orders, capital, and any other local or remote deployment remain
   unconditionally disabled.
 
-**Primary blocker:** `NATURAL_FORWARD_CHAIN_UNVERIFIED` — the current launchd runtime passed its
-deployment gate and the lower-bound correction produced a healthy boundary cut, but v2 still has no
-causally complete Candidate → Entry → Shadow Position → monitoring → terminal Outcome chain. The
-durable startup Gap correctly kept the interrupted Window `UNKNOWN`; future uninterrupted natural
-Windows must provide the remaining evidence. Policy, ranking, lifecycle, route, risk, and Outcome
-semantics remain unchanged.
+**Primary blocker:** `B3_CAPABILITY_AND_OPPORTUNITY_CONFLATED` — the implementation evidence and
+live public no-trade evidence establish different facts, but the superseded closure made one
+exogenous natural Candidate the sole exit for a controllable system-capability stage. The natural
+Candidate → Entry → Shadow Position → monitoring → terminal Outcome chain remains
+`NOT_YET_OBSERVED`; Policy reachability and Edge remain `UNVERIFIED`. This task may correct only
+that evidence boundary and may not change Policy, runtime behavior, or market facts.
 
 ## Maturity ladder
 
@@ -158,7 +159,8 @@ semantics remain unchanged.
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Active closure boundary:** keep the exact deployed launchd job on v2 and close only when the exact
-natural chain exists. launchd `KeepAlive` may recover that same command, but no other process, root,
-port, code target, or deployment is authorized. Private facts, orders, v1 reuse, threshold changes,
-Edge claims, remote deployment, and B4 remain forbidden.
+**Active closure boundary:** separate B3 pipeline-capability acceptance from natural-opportunity
+observation without treating deterministic fixtures as market evidence or treating truthful
+`ABSTAIN` as failure. The already deployed launchd job may remain unchanged under `KeepAlive`, but
+this Authority-only task may issue no live command. Private facts, orders, v1 reuse, threshold
+changes, Policy qualification, Edge claims, remote deployment, and B4 remain forbidden.
