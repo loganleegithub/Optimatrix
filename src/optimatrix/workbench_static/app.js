@@ -2,7 +2,7 @@
   'use strict';
 
   const workbench = window.OPTIMATRIX_WORKBENCH;
-  if (!workbench || workbench.schema_version !== 6) {
+  if (!workbench || workbench.schema_version !== 7) {
     document.body.textContent = 'Workbench 数据缺失或版本不受支持。';
     return;
   }
@@ -88,6 +88,16 @@
     COMPLETE_PENDING_TRADER_ACCEPTANCE: '完成 · 待交易员验收',
     UNKNOWN: '未知',
     KNOWN: '已知',
+    EVALUABLE: '可评估',
+    NOT_EVALUABLE: '不可评估',
+    NOT_APPLICABLE: '不适用',
+    DECISION: '决策',
+    ENTRY: '入场重承保',
+    MONITOR: '持续监控',
+    EXIT: '退出估价',
+    NO_ENTRY: '不入场对照',
+    HOLD_TO_EXPIRY: '持有到期对照',
+    OFFICIAL_EXPIRY_SETTLEMENT_PENDING: '等待匹配的官方交割事实',
     YES: '是',
     NO: '否',
     NONE: '无',
@@ -382,6 +392,7 @@
     renderLifecycle(display.timeline);
     renderStructure(caseView);
     renderManagement(caseView);
+    renderOutcomeExplanation(caseView);
     renderResponsibility(caseView);
   }
 
@@ -549,6 +560,46 @@
     appendText(pricingBlock, 'strong', '', `${translate(route.kind || 'COMPONENT_SYNTHETIC_ESTIMATE')} · ${translate(route.status || 'UNKNOWN')}`);
     appendText(pricingBlock, 'span', '', `${route.model_id || 'SYNTHETIC_FOUR_LEG_COMPONENT_BOOK_ESTIMATE_V1'}；不代表 Combo 报价、RFQ、订单、成交、账户仓位或已预留流动性`);
     quality.append(knownBlock, pricingBlock);
+  }
+
+  function renderOutcomeExplanation(caseView) {
+    const explanation = caseView.outcome_explanation || {};
+    const summary = valueMap(explanation.summary);
+    const metrics = byId('outcome-explanation-summary');
+    metrics.replaceChildren(
+      metricItem('解释状态', explanation.complete === true ? '完整' : explanation.complete === false ? '等待官方交割补全' : '路径累积中', explanation.complete === true ? 'positive' : 'warning'),
+      metricItem('MFE', summary.maximum_favorable_excursion_btc ? `${summary.maximum_favorable_excursion_btc} BTC` : '未知'),
+      metricItem('MAE', summary.maximum_adverse_excursion_btc ? `${summary.maximum_adverse_excursion_btc} BTC` : '未知'),
+      metricItem('最大短腿 Delta', summary.maximum_short_abs_delta || '未知'),
+      metricItem('Put 最近距离', summary.minimum_put_short_distance_usd ? `${summary.minimum_put_short_distance_usd} USD` : '未知'),
+      metricItem('Call 最近距离', summary.minimum_call_short_distance_usd ? `${summary.minimum_call_short_distance_usd} USD` : '未知'),
+      metricItem('观察 / 代表点', `${explanation.observation_count || 0} / ${(explanation.path || []).length}`),
+      metricItem('路径 Gap', String((explanation.gaps || []).length), (explanation.gaps || []).length ? 'warning' : 'positive'),
+      metricItem('冻结替代结果', String((explanation.alternative_outcomes || []).length))
+    );
+    const path = byId('outcome-explanation-path');
+    path.replaceChildren();
+    (explanation.path || []).forEach(point => {
+      const card = create('article', 'explanation-point');
+      appendText(card, 'strong', '', `${translate(point.phase)} · ${translate(point.observation_status)}`);
+      appendText(card, 'span', '', formatTimestamp(point.observed_at));
+      appendText(card, 'span', '', point.native_result_btc === null ? translate(point.valuation_reason || point.reason) : `${point.native_result_btc} BTC`);
+      appendText(card, 'small', '', point.observation_status === 'KNOWN'
+        ? `Put/Call Delta ${point.short_put_abs_delta} / ${point.short_call_abs_delta} · IV ${point.short_put_mark_iv} / ${point.short_call_mark_iv} · RV ${point.trailing_realized_variance_proxy}`
+        : translate(point.reason));
+      path.append(card);
+    });
+    if (!(explanation.path || []).length) {
+      path.append(create('p', 'trace-empty', '尚无可展示的解释路径。'));
+    }
+    const counterfactuals = byId('outcome-counterfactuals');
+    counterfactuals.replaceChildren();
+    (explanation.counterfactuals || []).forEach(item => {
+      const card = create('article', 'quality-block');
+      appendText(card, 'strong', '', `${translate(item.kind)} · ${translate(item.status)}`);
+      appendText(card, 'span', '', item.native_result_btc === null ? translate(item.reason) : `${item.native_result_btc} BTC · ${item.boundary_reference_result_usd} USD`);
+      counterfactuals.append(card);
+    });
   }
 
   function renderResponsibility(caseView) {

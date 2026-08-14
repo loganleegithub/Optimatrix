@@ -82,7 +82,10 @@ It is implemented and authorized only when `CURRENT_STAGE.md` says so.
 
 `CaseJournal` begins only after a Candidate opens a TradeCase. It stores accepted immutable-prefix
 snapshots of the TradeCase, later Entry truth, Position lifecycle, and Case/Position Outcome defined
-by the same contract. It cannot replace Session coverage or infer missing Window evidence.
+by the same contract. A terminal snapshot is otherwise closed; the only post-terminal append is the
+contract-owned official-settlement enrichment of an already pending early-exit hold counterfactual,
+with all terminal economics and risk state unchanged. It cannot replace Session coverage or infer
+missing Window evidence.
 At B3 the active runtime task authorizes one exact manifest-enrolled stable root and one process-
 exclusive continuous writer. The manifest freezes implementation and Policy identity plus the
 Session, Window, and boundary of first enrollment; it does not bind the root forever to that

@@ -32,8 +32,13 @@ Entry result, and a Shadow TradeCase cannot be upgraded in place to a private-ex
 structure, amount, and Decision boundary.
 
 `CaseJournal` preserves the accepted causal prefix needed to recover the TradeCase and any Position.
-It does not record every tick and does not validate the all-Window denominator. Exact codec and
-event shape are implementation facts, not a second business specification.
+It retains bounded representative Decision, Entry, monitoring, and exit points rather than every
+tick. Every accepted observation still advances one exact count and updates content-addressed
+landmarks for MFE/MAE, maximum short Delta, minimum distance to each short strike, IV/RV range, and
+jump or directional extremes. Typed Gaps preserve their causal source, observation when one exists,
+known-at boundary, and exact reason. The retained points, landmarks, and Gaps form one monotonic
+explanatory prefix; they do not validate the all-Window denominator. Exact codec and event shape are
+implementation facts, not a second business specification.
 
 An unresolved same-Session Shadow Case retains its frozen `stress_reserve_usd` whether Entry is
 pending or a Position exists. Recovery verifies the allocation identity and conservative component
@@ -149,7 +154,24 @@ denominator.
 `ShadowCaseOutcome` contains either the no-Position Entry result and reason or the counterfactual
 entry plus whole-product exit or settlement economics. It also records standard/public fee model,
 Shadow model identity, native BTC result when evaluable, explicit boundary-valued USD diagnostics,
-and observation quality. It is never called realized PnL.
+and observation quality. Its explanation binds the final Decision-to-Entry reunderwriting change,
+the accepted path landmarks and Gaps, projected Entry and terminal Combo fees, primary terminal
+category and reason, a zero-economics no-entry counterfactual, and a hold-to-expiry counterfactual.
+These are Shadow projections and are never called realized PnL, fill, slippage, account Position,
+or executable liquidity.
+
+Alternative Outcomes are limited to the bounded alternative structures frozen by the owning
+Decision. Their Entry basis is classified once against the same later Entry observation; an
+evaluable basis is projected against the same actual terminal market cut or official settlement as
+the selected structure. An unknown or not-evaluable alternative keeps its exact reason. Outcome
+construction cannot rerun search, select a new structure, or infer unavailable route economics.
+
+A whole-product Shadow exit freezes terminal economics and releases its exact reserve immediately.
+Until expiry, its hold-to-expiry counterfactual remains `UNKNOWN` with the official-settlement-
+pending reason. The matching official settlement may later perform exactly one append-only
+explanatory enrichment: it fills only that counterfactual, cannot rewrite exit economics or the
+primary exit reason, cannot reopen risk, and cannot append another market-path claim. Contract
+settlement terminality records the same counterfactual as known at its original terminal boundary.
 
 For a no-Position Outcome, a known Entry Policy/allocation/route rejection sets
 `shadow_entry_evaluable=false` with its exact reason. Terminal `ENTRY_EVIDENCE_UNKNOWN` preserves

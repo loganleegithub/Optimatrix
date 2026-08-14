@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 CANDIDATE-LOCAL DATA READINESS — CLOSED
+**Status:** B3 OUTCOME EXPLANATORY PATH — CLOSED
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -76,15 +76,35 @@ is retained without migration or mutation and remains ineligible for the current
 - Source/receive span, freshness, continuity, required metadata, response timing, and instrument
   identity remain global causal DataHealth. The slow-unavailable-book fixture still fails globally
   on its original receive-span and stale boundaries.
-- Workbench schema 6 exposes Candidate-local readiness, unavailable books, and unresolved Primary
-  rank without inventing a structure.
-- The complete repository gate passes: `212` tests and `8` deterministic business scenarios. This
+- Every current-Policy Candidate Case owns one content-addressed Decision-to-Outcome explanation.
+  It retains at most `20` representative market points while every accepted observation advances
+  an exact count and monotonic evidence-bound landmarks for MFE/MAE, maximum short Delta, minimum
+  distance to both short strikes, IV/RV range, and jump or directional extremes.
+- Exact typed Gaps replace the former scalar flag and bind their causal source, known-at boundary,
+  observation when one exists, Entry reunderwriting when applicable, and reason. `CaseJournal`
+  rejects erased prefixes, non-monotonic extrema, and extrema not owned by the advancing cut.
+- Final Entry freezes the status and later route evidence of every bounded Decision alternative.
+  Evaluable alternatives use the same actual Entry and terminal cuts; unavailable alternatives
+  preserve `UNKNOWN`, `NOT_EVALUABLE`, or `NOT_APPLICABLE` with an exact reason and are never
+  reselected after the Decision.
+- `ShadowCaseOutcomeV2` binds Decision and Entry metrics, path and Gap identities, standard Combo
+  fee projections, MFE/MAE, Delta and short-strike breaches, alternative Outcomes, the primary
+  terminal reason, an exact zero no-entry baseline, and a hold-to-expiry counterfactual. It makes
+  no fill, slippage, account, executable-liquidity, real-Position, or realized-PnL claim.
+- A strictly later whole-product Shadow exit remains economically terminal and releases its exact
+  reserve immediately. Only the matching official settlement may append one hold-counterfactual
+  enrichment; it cannot rewrite exit economics, primary reason, path, terminality, or risk state.
+- Runtime root schema 2, `TradeCaseSnapshotV3`, `ShadowExplanationPathV2`, and Workbench schema 7
+  reject the former thin explanatory shape rather than migrating the frozen prior root. Workbench
+  exposes Candidate-local readiness plus the Decision-to-Outcome path, extrema, Gaps, alternatives,
+  fees, and counterfactuals without inventing missing facts.
+- The complete repository gate passes: `214` tests and `8` deterministic business scenarios. This
   is offline implementation evidence, not current market, execution, or profitability evidence.
 - Live runtime, stable-root writes, market calls, private facts, orders, and capital remain disabled.
 
-**Primary blocker:** `OUTCOME_EXPLANATORY_PATH_THIN` — current terminal economics do not yet retain
-the complete Decision-to-Entry change, MFE/MAE, maximum Delta, short-strike distance, IV/RV path,
-data gaps, bounded alternatives, and exit counterfactuals required by the audit sequence.
+**Primary blocker:** `FORWARD_OBSERVATION_HTTP_POLLING_ONLY` — future market observation still
+depends on repeated HTTP snapshots instead of one bounded WebSocket incremental fact stream with
+HTTP limited to metadata, official settlement, and explicit recovery fallback.
 
 ## Maturity ladder
 
@@ -98,5 +118,6 @@ data gaps, bounded alternatives, and exit counterfactuals required by the audit 
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Next closure:** a bounded `B3_OUTCOME_EXPLANATORY_PATH` task must add the declared explanatory
-path without changing Policy thresholds, ranking, execution truth, live permissions, or B4 scope.
+**Next closure:** a bounded `B3_WEBSOCKET_FORWARD_OBSERVATION` task must replace the future primary
+observation path without changing Policy thresholds, ranking, execution truth, live permissions,
+stable-root authority, or B4 scope.

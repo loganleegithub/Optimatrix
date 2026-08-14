@@ -394,6 +394,13 @@ button.product-card:hover { border-color: var(--cyan); background: #0d2434; }
 .timeline-event strong { display: block; font-size: 11px; }
 .timeline-event span { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; }
 .evidence-quality { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--border); }
+.outcome-explanation { border-top: 1px solid var(--border); }
+.explanation-heading { padding: 18px 20px 8px; }
+.explanation-heading span { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
+.explanation-heading h3 { margin: 4px 0 0; }
+.explanation-path { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; padding: 16px 20px 20px; }
+.explanation-point { display: grid; gap: 5px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); }
+.explanation-point span, .explanation-point small { color: var(--muted); overflow-wrap: anywhere; }
 .quality-block { padding: 10px; text-align: center; }
 .quality-block + .quality-block { border-left: 1px solid var(--border); }
 .quality-block strong { display: block; color: var(--blue); font-size: 11px; }

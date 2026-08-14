@@ -9,6 +9,7 @@ from optimatrix.case_journal import CaseJournal
 from optimatrix.decision import DecisionResult, DecisionWindow
 from optimatrix.engine import Btc0DteShortVolEngine
 from optimatrix.lifecycle import (
+    CounterfactualStatus,
     FuturePathSummary,
     ObservationStatus,
     PositionState,
@@ -303,7 +304,23 @@ def atomic_shadow_case_exit(policy: BtcShortVolPolicy, root: Path) -> ScenarioRe
             context=market_context(exit_at),
         ),
     )
+    exit_outcome = case.outcome
+    expiry = current_expiry(exit_at)
+    case = engine.enrich_exit_outcome(
+        journal=journal,
+        case=case,
+        settlement=ExpirySettlementFact(
+            product_id=BTC.product_id,
+            expiry=expiry,
+            delivery_price_usd=Decimal("110000"),
+            known_at=expiry + timedelta(minutes=5),
+            evidence_kind=SettlementEvidenceKind.DETERMINISTIC_ACCEPTANCE_FIXTURE,
+            source_id="DETERMINISTIC_DELIVERY_FIXTURE",
+            method_id="FIXED_DELIVERY_PRICE_V1",
+        ),
+    )
     recovered = journal.recover(case.identity)
+    explanation = case.outcome.explanation if case.outcome is not None else None
     passed = (
         entry.final
         and case.position_state is PositionState.TERMINAL
@@ -317,6 +334,15 @@ def atomic_shadow_case_exit(policy: BtcShortVolPolicy, root: Path) -> ScenarioRe
         and recovered.entry_reunderwriting.route_evidence.identity == entry.route_evidence.identity
         and case.outcome is not None
         and case.outcome.terminal_method is TerminalMethod.WHOLE_PRODUCT_EXIT
+        and exit_outcome is not None
+        and not exit_outcome.explanation.complete
+        and explanation is not None
+        and explanation.complete
+        and explanation.maximum_favorable_excursion_btc is not None
+        and explanation.maximum_adverse_excursion_btc is not None
+        and explanation.maximum_short_abs_delta is not None
+        and explanation.hold_to_expiry.status is CounterfactualStatus.EVALUABLE
+        and case.outcome.native_result_btc == exit_outcome.native_result_btc
     )
     return ScenarioResult(
         "atomic_shadow_case_exit",
@@ -331,6 +357,15 @@ def atomic_shadow_case_exit(policy: BtcShortVolPolicy, root: Path) -> ScenarioRe
             "decision_route_evidence_id": assessment.record.route_evidence_id,
             "entry_route_evidence_id": entry.route_evidence.identity,
             "route_kind": entry.route_evidence.kind.value,
+            "explanation_complete": explanation.complete if explanation is not None else None,
+            "path_observations": case.explanation_path.observation_count,
+            "retained_path_points": len(case.explanation_path.points),
+            "alternative_outcomes": (
+                len(explanation.alternative_outcomes) if explanation is not None else 0
+            ),
+            "hold_counterfactual": (
+                explanation.hold_to_expiry.status.value if explanation is not None else None
+            ),
         },
     )
 

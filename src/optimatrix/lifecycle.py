@@ -29,6 +29,24 @@ from optimatrix.route import (
 from optimatrix.session import SessionPhase, current_deribit_session
 from optimatrix.structure import Btc0DteCondorUnderwriting, underwrite_btc_0dte_condor
 
+SHADOW_OUTCOME_EXPLANATION_METHOD_ID = canonical_identity(
+    "ShadowOutcomeExplanationMethodV1",
+    (
+        "CAUSAL_MARKET_OBSERVATION_PREFIX",
+        "ENTRY_NET_CREDIT_ZERO_BASELINE",
+        "COMPONENT_SYNTHETIC_CLOSE_MFE_MAE",
+        "OFFICIAL_SETTLEMENT_HOLD_COUNTERFACTUAL",
+        "DECISION_BOUNDED_ALTERNATIVES",
+    ),
+)
+SHADOW_ENTRY_BASELINE_METHOD_ID = canonical_identity(
+    "ShadowPathValuationMethodV1", "ENTRY_NET_CREDIT_ZERO_BASELINE"
+)
+SHADOW_COMPONENT_CLOSE_METHOD_ID = canonical_identity(
+    "ShadowPathValuationMethodV1", "COMPONENT_SYNTHETIC_CLOSE"
+)
+MAX_RETAINED_EXPLANATION_POINTS = 20
+
 
 class ShadowEntryStatus(StrEnum):
     SHADOW_ATOMIC_EVALUABLE = "SHADOW_ATOMIC_EVALUABLE"
@@ -61,6 +79,44 @@ class TerminalMethod(StrEnum):
     NO_POSITION = "NO_POSITION"
     WHOLE_PRODUCT_EXIT = "WHOLE_PRODUCT_EXIT"
     CONTRACT_SETTLEMENT = "CONTRACT_SETTLEMENT"
+
+
+class ShadowPathPhase(StrEnum):
+    DECISION = "DECISION"
+    ENTRY = "ENTRY"
+    MONITOR = "MONITOR"
+    EXIT = "EXIT"
+
+
+class CounterfactualStatus(StrEnum):
+    EVALUABLE = "EVALUABLE"
+    NOT_EVALUABLE = "NOT_EVALUABLE"
+    UNKNOWN = "UNKNOWN"
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+
+
+class ExitCounterfactualKind(StrEnum):
+    NO_ENTRY = "NO_ENTRY"
+    HOLD_TO_EXPIRY = "HOLD_TO_EXPIRY"
+
+
+class ShadowPathStatisticKind(StrEnum):
+    MAXIMUM_FAVORABLE_EXCURSION_BTC = "MAXIMUM_FAVORABLE_EXCURSION_BTC"
+    MAXIMUM_ADVERSE_EXCURSION_BTC = "MAXIMUM_ADVERSE_EXCURSION_BTC"
+    MAXIMUM_FAVORABLE_EXCURSION_BOUNDARY_USD = "MAXIMUM_FAVORABLE_EXCURSION_BOUNDARY_USD"
+    MAXIMUM_ADVERSE_EXCURSION_BOUNDARY_USD = "MAXIMUM_ADVERSE_EXCURSION_BOUNDARY_USD"
+    MAXIMUM_SHORT_ABS_DELTA = "MAXIMUM_SHORT_ABS_DELTA"
+    MINIMUM_PUT_SHORT_DISTANCE_USD = "MINIMUM_PUT_SHORT_DISTANCE_USD"
+    MINIMUM_CALL_SHORT_DISTANCE_USD = "MINIMUM_CALL_SHORT_DISTANCE_USD"
+    MINIMUM_IMPLIED_VARIANCE_PROXY = "MINIMUM_IMPLIED_VARIANCE_PROXY"
+    MAXIMUM_IMPLIED_VARIANCE_PROXY = "MAXIMUM_IMPLIED_VARIANCE_PROXY"
+    MINIMUM_TRAILING_RV_PROXY = "MINIMUM_TRAILING_RV_PROXY"
+    MAXIMUM_TRAILING_RV_PROXY = "MAXIMUM_TRAILING_RV_PROXY"
+    MINIMUM_SHORT_MARK_IV = "MINIMUM_SHORT_MARK_IV"
+    MAXIMUM_SHORT_MARK_IV = "MAXIMUM_SHORT_MARK_IV"
+    MAXIMUM_RV_ACCELERATION = "MAXIMUM_RV_ACCELERATION"
+    MAXIMUM_JUMP_SHARE = "MAXIMUM_JUMP_SHARE"
+    MAXIMUM_DIRECTIONAL_PERSISTENCE = "MAXIMUM_DIRECTIONAL_PERSISTENCE"
 
 
 @dataclass(frozen=True)
@@ -405,6 +461,815 @@ class ShadowEntryReunderwriting:
 
 
 @dataclass(frozen=True)
+class ShadowPathPoint:
+    phase: ShadowPathPhase
+    observation_status: ObservationStatus
+    observation_id: str
+    observed_at: datetime
+    known_at: datetime
+    reunderwriting_id: str | None
+    index_price_usd: Decimal | None
+    native_result_btc: Decimal | None
+    boundary_reference_result_usd: Decimal | None
+    combo_fee_native: Decimal | None
+    short_put_abs_delta: Decimal | None
+    short_call_abs_delta: Decimal | None
+    net_delta: Decimal | None
+    put_short_distance_usd: Decimal | None
+    call_short_distance_usd: Decimal | None
+    long_put_mark_iv: Decimal | None
+    short_put_mark_iv: Decimal | None
+    short_call_mark_iv: Decimal | None
+    long_call_mark_iv: Decimal | None
+    same_session_implied_variance_proxy: Decimal | None
+    trailing_realized_variance_proxy: Decimal | None
+    rv_acceleration: Decimal | None
+    jump_share: Decimal | None
+    directional_persistence: Decimal | None
+    event_state: EventState | None
+    valuation_method_id: str | None
+    valuation_reason: str | None
+    reason: str | None
+
+    def __post_init__(self) -> None:
+        require_identity(self.observation_id, "observation_id")
+        observed_at = _utc(self.observed_at, "observed_at")
+        if observed_at > _utc(self.known_at, "known_at"):
+            raise ValueError("explanation point cannot be known before its observation")
+        if self.reunderwriting_id is not None:
+            require_identity(self.reunderwriting_id, "reunderwriting_id")
+            if self.phase is not ShadowPathPhase.ENTRY:
+                raise ValueError("only an Entry point may bind reunderwriting")
+        market_values = (
+            self.index_price_usd,
+            self.short_put_abs_delta,
+            self.short_call_abs_delta,
+            self.net_delta,
+            self.put_short_distance_usd,
+            self.call_short_distance_usd,
+            self.long_put_mark_iv,
+            self.short_put_mark_iv,
+            self.short_call_mark_iv,
+            self.long_call_mark_iv,
+            self.same_session_implied_variance_proxy,
+            self.trailing_realized_variance_proxy,
+            self.rv_acceleration,
+            self.jump_share,
+            self.directional_persistence,
+            self.event_state,
+        )
+        if self.observation_status is ObservationStatus.UNKNOWN:
+            if not self.reason or any(value is not None for value in market_values):
+                raise ValueError("unknown explanation point cannot claim known market metrics")
+            if any(
+                value is not None
+                for value in (
+                    self.native_result_btc,
+                    self.boundary_reference_result_usd,
+                    self.combo_fee_native,
+                    self.valuation_method_id,
+                    self.valuation_reason,
+                )
+            ):
+                raise ValueError("unknown explanation point cannot claim a valuation")
+            return
+        if self.reason is not None or any(value is None for value in market_values):
+            raise ValueError("known explanation point requires complete market metrics")
+        assert self.index_price_usd is not None
+        if not self.index_price_usd.is_finite() or self.index_price_usd <= 0:
+            raise ValueError("explanation index price must be finite and positive")
+        bounded_deltas = (
+            self.short_put_abs_delta,
+            self.short_call_abs_delta,
+            self.net_delta,
+        )
+        if any(
+            value is None or not value.is_finite() or abs(value) > 1 for value in bounded_deltas
+        ):
+            raise ValueError("explanation Deltas must be finite and bounded")
+        positive_values = (
+            self.long_put_mark_iv,
+            self.short_put_mark_iv,
+            self.short_call_mark_iv,
+            self.long_call_mark_iv,
+            self.same_session_implied_variance_proxy,
+            self.trailing_realized_variance_proxy,
+        )
+        if any(value is None or not value.is_finite() or value <= 0 for value in positive_values):
+            raise ValueError("explanation IV/RV values must be finite and positive")
+        fractions = (self.rv_acceleration, self.jump_share, self.directional_persistence)
+        if any(
+            value is None or not value.is_finite() or not Decimal(0) <= value <= Decimal(1)
+            for value in fractions
+        ):
+            raise ValueError("explanation path fractions must be in [0, 1]")
+        distances = (self.put_short_distance_usd, self.call_short_distance_usd)
+        if any(value is None or not value.is_finite() for value in distances):
+            raise ValueError("short-strike distances must be finite")
+        valuation = (
+            self.native_result_btc,
+            self.boundary_reference_result_usd,
+            self.valuation_method_id,
+        )
+        if any(value is None for value in valuation) != all(value is None for value in valuation):
+            raise ValueError("whole-product valuation fields must appear together")
+        if self.native_result_btc is None:
+            if not self.valuation_reason or self.combo_fee_native is not None:
+                raise ValueError("missing whole-product valuation requires one exact reason")
+        else:
+            assert self.boundary_reference_result_usd is not None
+            if (
+                not self.native_result_btc.is_finite()
+                or not self.boundary_reference_result_usd.is_finite()
+                or self.valuation_reason is not None
+            ):
+                raise ValueError("known whole-product valuation must be finite and blocker-free")
+            if self.combo_fee_native is not None and (
+                not self.combo_fee_native.is_finite() or self.combo_fee_native < 0
+            ):
+                raise ValueError("Combo fee projection must be finite and non-negative")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("ShadowPathPointV1", self)
+
+    def as_object(self) -> dict[str, object]:
+        value = _canonical_object(self)
+        value["path_point_id"] = self.identity
+        return value
+
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "shadow_path_point")
+        result = cls(
+            phase=ShadowPathPhase(_text(item, "phase")),
+            observation_status=ObservationStatus(_text(item, "observation_status")),
+            observation_id=_text(item, "observation_id"),
+            observed_at=_datetime(item, "observed_at"),
+            known_at=_datetime(item, "known_at"),
+            reunderwriting_id=_optional_text(item, "reunderwriting_id"),
+            index_price_usd=_optional_decimal(item, "index_price_usd"),
+            native_result_btc=_optional_decimal(item, "native_result_btc"),
+            boundary_reference_result_usd=_optional_decimal(item, "boundary_reference_result_usd"),
+            combo_fee_native=_optional_decimal(item, "combo_fee_native"),
+            short_put_abs_delta=_optional_decimal(item, "short_put_abs_delta"),
+            short_call_abs_delta=_optional_decimal(item, "short_call_abs_delta"),
+            net_delta=_optional_decimal(item, "net_delta"),
+            put_short_distance_usd=_optional_decimal(item, "put_short_distance_usd"),
+            call_short_distance_usd=_optional_decimal(item, "call_short_distance_usd"),
+            long_put_mark_iv=_optional_decimal(item, "long_put_mark_iv"),
+            short_put_mark_iv=_optional_decimal(item, "short_put_mark_iv"),
+            short_call_mark_iv=_optional_decimal(item, "short_call_mark_iv"),
+            long_call_mark_iv=_optional_decimal(item, "long_call_mark_iv"),
+            same_session_implied_variance_proxy=_optional_decimal(
+                item, "same_session_implied_variance_proxy"
+            ),
+            trailing_realized_variance_proxy=_optional_decimal(
+                item, "trailing_realized_variance_proxy"
+            ),
+            rv_acceleration=_optional_decimal(item, "rv_acceleration"),
+            jump_share=_optional_decimal(item, "jump_share"),
+            directional_persistence=_optional_decimal(item, "directional_persistence"),
+            event_state=(
+                EventState(event_state)
+                if (event_state := _optional_text(item, "event_state")) is not None
+                else None
+            ),
+            valuation_method_id=_optional_text(item, "valuation_method_id"),
+            valuation_reason=_optional_text(item, "valuation_reason"),
+            reason=_optional_text(item, "reason"),
+        )
+        if _text(item, "path_point_id") != result.identity:
+            raise ValueError("Shadow path point identity mismatch")
+        return result
+
+
+@dataclass(frozen=True)
+class ShadowPathStatistic:
+    kind: ShadowPathStatisticKind
+    value: Decimal
+    observation_id: str
+    observed_at: datetime
+    known_at: datetime
+
+    def __post_init__(self) -> None:
+        require_identity(self.observation_id, "observation_id")
+        observed_at = _utc(self.observed_at, "observed_at")
+        if observed_at > _utc(self.known_at, "known_at"):
+            raise ValueError("path statistic cannot be known before its observation")
+        if not self.value.is_finite():
+            raise ValueError("path statistic value must be finite")
+        if (
+            self.kind
+            in {
+                ShadowPathStatisticKind.MAXIMUM_FAVORABLE_EXCURSION_BTC,
+                ShadowPathStatisticKind.MAXIMUM_ADVERSE_EXCURSION_BTC,
+                ShadowPathStatisticKind.MAXIMUM_FAVORABLE_EXCURSION_BOUNDARY_USD,
+                ShadowPathStatisticKind.MAXIMUM_ADVERSE_EXCURSION_BOUNDARY_USD,
+                ShadowPathStatisticKind.MAXIMUM_SHORT_ABS_DELTA,
+                ShadowPathStatisticKind.MINIMUM_IMPLIED_VARIANCE_PROXY,
+                ShadowPathStatisticKind.MAXIMUM_IMPLIED_VARIANCE_PROXY,
+                ShadowPathStatisticKind.MINIMUM_TRAILING_RV_PROXY,
+                ShadowPathStatisticKind.MAXIMUM_TRAILING_RV_PROXY,
+                ShadowPathStatisticKind.MINIMUM_SHORT_MARK_IV,
+                ShadowPathStatisticKind.MAXIMUM_SHORT_MARK_IV,
+                ShadowPathStatisticKind.MAXIMUM_RV_ACCELERATION,
+                ShadowPathStatisticKind.MAXIMUM_JUMP_SHARE,
+                ShadowPathStatisticKind.MAXIMUM_DIRECTIONAL_PERSISTENCE,
+            }
+            and self.value < 0
+        ):
+            raise ValueError("non-negative path statistic cannot be negative")
+        if (
+            self.kind
+            in {
+                ShadowPathStatisticKind.MAXIMUM_SHORT_ABS_DELTA,
+                ShadowPathStatisticKind.MAXIMUM_RV_ACCELERATION,
+                ShadowPathStatisticKind.MAXIMUM_JUMP_SHARE,
+                ShadowPathStatisticKind.MAXIMUM_DIRECTIONAL_PERSISTENCE,
+            }
+            and self.value > 1
+        ):
+            raise ValueError("bounded path statistic must be in [0, 1]")
+        if (
+            self.kind
+            in {
+                ShadowPathStatisticKind.MINIMUM_IMPLIED_VARIANCE_PROXY,
+                ShadowPathStatisticKind.MAXIMUM_IMPLIED_VARIANCE_PROXY,
+                ShadowPathStatisticKind.MINIMUM_TRAILING_RV_PROXY,
+                ShadowPathStatisticKind.MAXIMUM_TRAILING_RV_PROXY,
+                ShadowPathStatisticKind.MINIMUM_SHORT_MARK_IV,
+                ShadowPathStatisticKind.MAXIMUM_SHORT_MARK_IV,
+            }
+            and self.value <= 0
+        ):
+            raise ValueError("IV/RV path statistic must be positive")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("ShadowPathStatisticV1", self)
+
+    def as_object(self) -> dict[str, object]:
+        value = _canonical_object(self)
+        value["path_statistic_id"] = self.identity
+        return value
+
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "shadow_path_statistic")
+        result = cls(
+            kind=ShadowPathStatisticKind(_text(item, "kind")),
+            value=_decimal(item, "value"),
+            observation_id=_text(item, "observation_id"),
+            observed_at=_datetime(item, "observed_at"),
+            known_at=_datetime(item, "known_at"),
+        )
+        if _text(item, "path_statistic_id") != result.identity:
+            raise ValueError("Shadow path statistic identity mismatch")
+        return result
+
+
+@dataclass(frozen=True)
+class ShadowPathGap:
+    known_at: datetime
+    reason: str
+    source: str
+    observation_id: str | None = None
+    observed_at: datetime | None = None
+    reunderwriting_id: str | None = None
+
+    def __post_init__(self) -> None:
+        known_at = _utc(self.known_at, "known_at")
+        if not self.reason or not self.source:
+            raise ValueError("explanation Gap requires a reason and source")
+        if (self.observation_id is None) != (self.observed_at is None):
+            raise ValueError("Gap observation identity and source boundary must appear together")
+        if self.observation_id is not None:
+            require_identity(self.observation_id, "observation_id")
+            assert self.observed_at is not None
+            if _utc(self.observed_at, "observed_at") > known_at:
+                raise ValueError("Gap cannot be known before its observation")
+        if self.reunderwriting_id is not None:
+            require_identity(self.reunderwriting_id, "reunderwriting_id")
+            if self.source != "ENTRY_EVALUATION":
+                raise ValueError("only an Entry-evaluation Gap may bind reunderwriting")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("ShadowPathGapV1", self)
+
+    def as_object(self) -> dict[str, object]:
+        value = _canonical_object(self)
+        value["path_gap_id"] = self.identity
+        return value
+
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "shadow_path_gap")
+        result = cls(
+            known_at=_datetime(item, "known_at"),
+            reason=_text(item, "reason"),
+            source=_text(item, "source"),
+            observation_id=_optional_text(item, "observation_id"),
+            observed_at=_optional_datetime(item, "observed_at"),
+            reunderwriting_id=_optional_text(item, "reunderwriting_id"),
+        )
+        if _text(item, "path_gap_id") != result.identity:
+            raise ValueError("Shadow path Gap identity mismatch")
+        return result
+
+
+@dataclass(frozen=True)
+class ShadowAlternativeEntryBasis:
+    candidate_id: str
+    status: CounterfactualStatus
+    route_evidence: ShadowRouteEvidence | None
+    blockers: tuple[str, ...]
+    reason: str | None
+
+    def __post_init__(self) -> None:
+        require_identity(self.candidate_id, "candidate_id")
+        if len(set(self.blockers)) != len(self.blockers):
+            raise ValueError("alternative Entry blockers must be unique")
+        route = self.route_evidence
+        if route is not None and route.selected_structure_id != self.candidate_id:
+            raise ValueError("alternative Entry route does not bind its Candidate")
+        if self.status is CounterfactualStatus.EVALUABLE:
+            if (
+                route is None
+                or route.status is not RouteEvidenceStatus.EVALUABLE
+                or self.blockers
+                or self.reason is not None
+            ):
+                raise ValueError("evaluable alternative Entry requires complete route economics")
+        elif self.status is CounterfactualStatus.UNKNOWN:
+            if (
+                route is None
+                or route.status is not RouteEvidenceStatus.UNKNOWN
+                or not self.reason
+                or self.reason != route.reason
+            ):
+                raise ValueError("unknown alternative Entry requires matching route evidence")
+        elif self.status is CounterfactualStatus.NOT_EVALUABLE:
+            expected = self.blockers[0] if self.blockers else route.reason if route else None
+            if route is None or not expected or self.reason != expected:
+                raise ValueError("not-evaluable alternative Entry requires an exact blocker")
+        elif route is not None or self.blockers or not self.reason:
+            raise ValueError("not-applicable alternative Entry cannot claim route evidence")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("ShadowAlternativeEntryBasisV1", self)
+
+    def as_object(self) -> dict[str, object]:
+        value = _canonical_object(self)
+        value["route_evidence"] = (
+            self.route_evidence.as_object() if self.route_evidence is not None else None
+        )
+        value["alternative_entry_basis_id"] = self.identity
+        return value
+
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "alternative_entry_basis")
+        result = cls(
+            candidate_id=_text(item, "candidate_id"),
+            status=CounterfactualStatus(_text(item, "status")),
+            route_evidence=(
+                ShadowRouteEvidence.from_object(item.get("route_evidence"))
+                if item.get("route_evidence") is not None
+                else None
+            ),
+            blockers=_text_tuple(item, "blockers"),
+            reason=_optional_text(item, "reason"),
+        )
+        if _text(item, "alternative_entry_basis_id") != result.identity:
+            raise ValueError("alternative Entry basis identity mismatch")
+        return result
+
+
+@dataclass(frozen=True)
+class ShadowExplanationPath:
+    decision_record_id: str
+    policy_id: str
+    selected_structure_id: str
+    observation_count: int
+    last_observation_id: str
+    last_observed_at: datetime
+    points: tuple[ShadowPathPoint, ...]
+    statistics: tuple[ShadowPathStatistic, ...]
+    gaps: tuple[ShadowPathGap, ...]
+    alternative_entry_bases: tuple[ShadowAlternativeEntryBasis, ...]
+
+    def __post_init__(self) -> None:
+        for value, field in (
+            (self.decision_record_id, "decision_record_id"),
+            (self.policy_id, "policy_id"),
+            (self.selected_structure_id, "selected_structure_id"),
+        ):
+            require_identity(value, field)
+        if not self.points or self.points[0].phase is not ShadowPathPhase.DECISION:
+            raise ValueError("explanation path must begin at the Decision")
+        if self.observation_count < len(self.points) or self.observation_count < 1:
+            raise ValueError("explanation observation count cannot omit retained points")
+        require_identity(self.last_observation_id, "last_observation_id")
+        last_observed_at = _utc(self.last_observed_at, "last_observed_at")
+        if len(self.points) > MAX_RETAINED_EXPLANATION_POINTS:
+            raise ValueError("explanation path exceeds its retained-point bound")
+        if any(
+            current.observed_at <= previous.observed_at
+            for previous, current in zip(self.points, self.points[1:], strict=False)
+        ):
+            raise ValueError("explanation market points must be strictly chronological")
+        if len({point.identity for point in self.points}) != len(self.points):
+            raise ValueError("explanation path points must be unique")
+        phase_order = {
+            ShadowPathPhase.DECISION: 0,
+            ShadowPathPhase.ENTRY: 1,
+            ShadowPathPhase.MONITOR: 2,
+            ShadowPathPhase.EXIT: 3,
+        }
+        if any(
+            phase_order[current.phase] < phase_order[previous.phase]
+            for previous, current in zip(self.points, self.points[1:], strict=False)
+        ):
+            raise ValueError("explanation path phases cannot move backwards")
+        if self.points[-1].observed_at > last_observed_at:
+            raise ValueError("explanation path cursor cannot precede a retained point")
+        if self.points[-1].observed_at == last_observed_at and (
+            self.points[-1].observation_id != self.last_observation_id
+        ):
+            raise ValueError("explanation path cursor must bind its latest retained point")
+        if len({statistic.kind for statistic in self.statistics}) != len(self.statistics):
+            raise ValueError("explanation statistics must bind distinct extrema")
+        if tuple(statistic.kind for statistic in self.statistics) != tuple(
+            sorted((statistic.kind for statistic in self.statistics), key=lambda item: item.value)
+        ):
+            raise ValueError("explanation statistics must preserve canonical kind order")
+        if any(statistic.observed_at > last_observed_at for statistic in self.statistics):
+            raise ValueError("explanation statistic cannot follow the observation cursor")
+        if any(
+            current.known_at < previous.known_at
+            for previous, current in zip(self.gaps, self.gaps[1:], strict=False)
+        ):
+            raise ValueError("explanation Gaps must preserve known-at order")
+        if len({gap.identity for gap in self.gaps}) != len(self.gaps):
+            raise ValueError("explanation Gaps must be unique")
+        if len({basis.candidate_id for basis in self.alternative_entry_bases}) != len(
+            self.alternative_entry_bases
+        ):
+            raise ValueError("alternative Entry bases must bind distinct Candidates")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("ShadowExplanationPathV2", self)
+
+    def as_object(self) -> dict[str, object]:
+        value = _canonical_object(self)
+        value["points"] = tuple(point.as_object() for point in self.points)
+        value["statistics"] = tuple(statistic.as_object() for statistic in self.statistics)
+        value["gaps"] = tuple(gap.as_object() for gap in self.gaps)
+        value["alternative_entry_bases"] = tuple(
+            basis.as_object() for basis in self.alternative_entry_bases
+        )
+        value["explanation_path_id"] = self.identity
+        return value
+
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "shadow_explanation_path")
+        result = cls(
+            decision_record_id=_text(item, "decision_record_id"),
+            policy_id=_text(item, "policy_id"),
+            selected_structure_id=_text(item, "selected_structure_id"),
+            observation_count=_integer(item, "observation_count"),
+            last_observation_id=_text(item, "last_observation_id"),
+            last_observed_at=_datetime(item, "last_observed_at"),
+            points=tuple(
+                ShadowPathPoint.from_object(member) for member in _object_sequence(item, "points")
+            ),
+            statistics=tuple(
+                ShadowPathStatistic.from_object(member)
+                for member in _object_sequence(item, "statistics")
+            ),
+            gaps=tuple(
+                ShadowPathGap.from_object(member) for member in _object_sequence(item, "gaps")
+            ),
+            alternative_entry_bases=tuple(
+                ShadowAlternativeEntryBasis.from_object(member)
+                for member in _object_sequence(item, "alternative_entry_bases")
+            ),
+        )
+        if _text(item, "explanation_path_id") != result.identity:
+            raise ValueError("Shadow explanation path identity mismatch")
+        return result
+
+
+@dataclass(frozen=True)
+class ShadowAlternativeOutcome:
+    candidate_id: str
+    entry_basis_id: str
+    status: CounterfactualStatus
+    terminal_method: TerminalMethod
+    terminal_evidence_id: str | None
+    known_at: datetime
+    native_result_btc: Decimal | None
+    boundary_reference_result_usd: Decimal | None
+    entry_combo_fee_native: Decimal | None
+    terminal_combo_fee_native: Decimal | None
+    reason: str | None
+
+    def __post_init__(self) -> None:
+        require_identity(self.candidate_id, "candidate_id")
+        require_identity(self.entry_basis_id, "entry_basis_id")
+        _utc(self.known_at, "known_at")
+        if self.terminal_evidence_id is not None:
+            require_identity(self.terminal_evidence_id, "terminal_evidence_id")
+        economics = (
+            self.native_result_btc,
+            self.boundary_reference_result_usd,
+            self.entry_combo_fee_native,
+        )
+        if self.status is CounterfactualStatus.EVALUABLE:
+            if (
+                self.terminal_evidence_id is None
+                or any(value is None for value in economics)
+                or self.reason is not None
+            ):
+                raise ValueError("evaluable alternative Outcome requires complete economics")
+            assert self.native_result_btc is not None
+            assert self.boundary_reference_result_usd is not None
+            assert self.entry_combo_fee_native is not None
+            if any(
+                not value.is_finite()
+                for value in (
+                    self.native_result_btc,
+                    self.boundary_reference_result_usd,
+                    self.entry_combo_fee_native,
+                )
+            ):
+                raise ValueError("alternative Outcome economics must be finite")
+            if self.entry_combo_fee_native < 0:
+                raise ValueError("alternative Entry Combo fee must be non-negative")
+            if self.terminal_combo_fee_native is not None and (
+                not self.terminal_combo_fee_native.is_finite() or self.terminal_combo_fee_native < 0
+            ):
+                raise ValueError("alternative terminal Combo fee must be non-negative")
+        elif any(value is not None for value in (*economics, self.terminal_combo_fee_native)) or (
+            not self.reason
+        ):
+            raise ValueError("unevaluable alternative Outcome cannot claim economics")
+        elif self.terminal_evidence_id is not None:
+            raise ValueError("unevaluable alternative Outcome cannot claim terminal evidence")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("ShadowAlternativeOutcomeV1", self)
+
+    def as_object(self) -> dict[str, object]:
+        value = _canonical_object(self)
+        value["alternative_outcome_id"] = self.identity
+        return value
+
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "shadow_alternative_outcome")
+        result = cls(
+            candidate_id=_text(item, "candidate_id"),
+            entry_basis_id=_text(item, "entry_basis_id"),
+            status=CounterfactualStatus(_text(item, "status")),
+            terminal_method=TerminalMethod(_text(item, "terminal_method")),
+            terminal_evidence_id=_optional_text(item, "terminal_evidence_id"),
+            known_at=_datetime(item, "known_at"),
+            native_result_btc=_optional_decimal(item, "native_result_btc"),
+            boundary_reference_result_usd=_optional_decimal(item, "boundary_reference_result_usd"),
+            entry_combo_fee_native=_optional_decimal(item, "entry_combo_fee_native"),
+            terminal_combo_fee_native=_optional_decimal(item, "terminal_combo_fee_native"),
+            reason=_optional_text(item, "reason"),
+        )
+        if _text(item, "alternative_outcome_id") != result.identity:
+            raise ValueError("alternative Outcome identity mismatch")
+        return result
+
+
+@dataclass(frozen=True)
+class ShadowExitCounterfactual:
+    kind: ExitCounterfactualKind
+    status: CounterfactualStatus
+    known_at: datetime
+    terminal_evidence_id: str | None
+    native_result_btc: Decimal | None
+    boundary_reference_result_usd: Decimal | None
+    fee_model_id: str | None
+    reason: str | None
+
+    def __post_init__(self) -> None:
+        _utc(self.known_at, "known_at")
+        if self.terminal_evidence_id is not None:
+            require_identity(self.terminal_evidence_id, "terminal_evidence_id")
+        economics = (self.native_result_btc, self.boundary_reference_result_usd)
+        if self.status is CounterfactualStatus.EVALUABLE:
+            if any(value is None for value in economics) or self.reason is not None:
+                raise ValueError("evaluable exit counterfactual requires complete economics")
+            assert self.native_result_btc is not None
+            assert self.boundary_reference_result_usd is not None
+            if not self.native_result_btc.is_finite() or not (
+                self.boundary_reference_result_usd.is_finite()
+            ):
+                raise ValueError("exit counterfactual economics must be finite")
+        elif any(value is not None for value in (*economics, self.fee_model_id)) or not self.reason:
+            raise ValueError("unevaluable exit counterfactual cannot claim economics")
+        elif self.terminal_evidence_id is not None:
+            raise ValueError("unevaluable exit counterfactual cannot claim terminal evidence")
+        if self.kind is ExitCounterfactualKind.NO_ENTRY:
+            if (
+                self.status is not CounterfactualStatus.EVALUABLE
+                or self.terminal_evidence_id is not None
+                or self.fee_model_id is not None
+                or self.native_result_btc != 0
+                or self.boundary_reference_result_usd != 0
+            ):
+                raise ValueError("no-entry counterfactual must be an exact zero baseline")
+        elif self.status is CounterfactualStatus.EVALUABLE and (
+            self.terminal_evidence_id is None or not self.fee_model_id
+        ):
+            raise ValueError("evaluable hold counterfactual requires settlement evidence and fee")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("ShadowExitCounterfactualV1", self)
+
+    def as_object(self) -> dict[str, object]:
+        value = _canonical_object(self)
+        value["exit_counterfactual_id"] = self.identity
+        return value
+
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "shadow_exit_counterfactual")
+        result = cls(
+            kind=ExitCounterfactualKind(_text(item, "kind")),
+            status=CounterfactualStatus(_text(item, "status")),
+            known_at=_datetime(item, "known_at"),
+            terminal_evidence_id=_optional_text(item, "terminal_evidence_id"),
+            native_result_btc=_optional_decimal(item, "native_result_btc"),
+            boundary_reference_result_usd=_optional_decimal(item, "boundary_reference_result_usd"),
+            fee_model_id=_optional_text(item, "fee_model_id"),
+            reason=_optional_text(item, "reason"),
+        )
+        if _text(item, "exit_counterfactual_id") != result.identity:
+            raise ValueError("exit counterfactual identity mismatch")
+        return result
+
+
+@dataclass(frozen=True)
+class ShadowOutcomeExplanation:
+    method_id: str
+    path_id: str
+    entry_reunderwriting_id: str
+    decision_metrics: EntryUnderwritingMetrics
+    entry_metrics: EntryUnderwritingMetrics
+    maximum_favorable_excursion_btc: Decimal | None
+    maximum_adverse_excursion_btc: Decimal | None
+    maximum_favorable_excursion_boundary_usd: Decimal | None
+    maximum_adverse_excursion_boundary_usd: Decimal | None
+    maximum_short_abs_delta: Decimal | None
+    minimum_put_short_distance_usd: Decimal | None
+    minimum_call_short_distance_usd: Decimal | None
+    put_short_breached: bool | None
+    call_short_breached: bool | None
+    gap_ids: tuple[str, ...]
+    alternative_outcomes: tuple[ShadowAlternativeOutcome, ...]
+    entry_combo_fee_native: Decimal | None
+    terminal_combo_fee_native: Decimal | None
+    total_combo_fee_native: Decimal | None
+    primary_exit_category: str
+    primary_exit_reason: str
+    no_entry: ShadowExitCounterfactual
+    hold_to_expiry: ShadowExitCounterfactual
+    complete: bool
+
+    def __post_init__(self) -> None:
+        require_identity(self.method_id, "method_id")
+        require_identity(self.path_id, "path_id")
+        require_identity(self.entry_reunderwriting_id, "entry_reunderwriting_id")
+        for gap_id in self.gap_ids:
+            require_identity(gap_id, "gap_id")
+        if len(set(self.gap_ids)) != len(self.gap_ids):
+            raise ValueError("Outcome explanation Gap identities must be unique")
+        if len({item.candidate_id for item in self.alternative_outcomes}) != len(
+            self.alternative_outcomes
+        ):
+            raise ValueError("Outcome alternatives must bind distinct Candidates")
+        excursions = (
+            self.maximum_favorable_excursion_btc,
+            self.maximum_adverse_excursion_btc,
+            self.maximum_favorable_excursion_boundary_usd,
+            self.maximum_adverse_excursion_boundary_usd,
+        )
+        if any(value is not None and (not value.is_finite() or value < 0) for value in excursions):
+            raise ValueError("MFE/MAE values must be finite non-negative magnitudes")
+        if self.maximum_short_abs_delta is not None and (
+            not self.maximum_short_abs_delta.is_finite()
+            or not Decimal(0) <= self.maximum_short_abs_delta <= Decimal(1)
+        ):
+            raise ValueError("maximum short Delta must be in [0, 1]")
+        distances = (
+            self.minimum_put_short_distance_usd,
+            self.minimum_call_short_distance_usd,
+        )
+        if any(value is not None and not value.is_finite() for value in distances):
+            raise ValueError("minimum short-strike distances must be finite")
+        if (self.minimum_put_short_distance_usd is None) != (self.put_short_breached is None) or (
+            self.minimum_call_short_distance_usd is None
+        ) != (self.call_short_breached is None):
+            raise ValueError("short-strike breach flags require matching distances")
+        fees = (
+            self.entry_combo_fee_native,
+            self.terminal_combo_fee_native,
+            self.total_combo_fee_native,
+        )
+        if any(value is not None and (not value.is_finite() or value < 0) for value in fees):
+            raise ValueError("Outcome Combo fees must be finite and non-negative")
+        if self.total_combo_fee_native is not None:
+            if self.entry_combo_fee_native is None:
+                raise ValueError("total Combo fee requires an Entry fee")
+            expected = self.entry_combo_fee_native + (self.terminal_combo_fee_native or Decimal(0))
+            if self.total_combo_fee_native != expected:
+                raise ValueError("Outcome total Combo fee is incoherent")
+        if not self.primary_exit_category or not self.primary_exit_reason:
+            raise ValueError("Outcome explanation requires a primary terminal reason")
+        if self.no_entry.kind is not ExitCounterfactualKind.NO_ENTRY:
+            raise ValueError("Outcome explanation no-entry counterfactual kind is invalid")
+        if self.hold_to_expiry.kind is not ExitCounterfactualKind.HOLD_TO_EXPIRY:
+            raise ValueError("Outcome explanation hold counterfactual kind is invalid")
+        if self.complete == (self.hold_to_expiry.status is CounterfactualStatus.UNKNOWN):
+            raise ValueError("Outcome explanation completeness must match hold counterfactual")
+
+    @property
+    def identity(self) -> str:
+        return canonical_identity("ShadowOutcomeExplanationV1", self)
+
+    def as_object(self) -> dict[str, object]:
+        value = _canonical_object(self)
+        value["decision_metrics"] = self.decision_metrics.as_object()
+        value["entry_metrics"] = self.entry_metrics.as_object()
+        value["alternative_outcomes"] = tuple(
+            item.as_object() for item in self.alternative_outcomes
+        )
+        value["no_entry"] = self.no_entry.as_object()
+        value["hold_to_expiry"] = self.hold_to_expiry.as_object()
+        value["outcome_explanation_id"] = self.identity
+        return value
+
+    @classmethod
+    def from_object(cls, value: object) -> Self:
+        item = _mapping(value, "shadow_outcome_explanation")
+        result = cls(
+            method_id=_text(item, "method_id"),
+            path_id=_text(item, "path_id"),
+            entry_reunderwriting_id=_text(item, "entry_reunderwriting_id"),
+            decision_metrics=EntryUnderwritingMetrics.from_object(item.get("decision_metrics")),
+            entry_metrics=EntryUnderwritingMetrics.from_object(item.get("entry_metrics")),
+            maximum_favorable_excursion_btc=_optional_decimal(
+                item, "maximum_favorable_excursion_btc"
+            ),
+            maximum_adverse_excursion_btc=_optional_decimal(item, "maximum_adverse_excursion_btc"),
+            maximum_favorable_excursion_boundary_usd=_optional_decimal(
+                item, "maximum_favorable_excursion_boundary_usd"
+            ),
+            maximum_adverse_excursion_boundary_usd=_optional_decimal(
+                item, "maximum_adverse_excursion_boundary_usd"
+            ),
+            maximum_short_abs_delta=_optional_decimal(item, "maximum_short_abs_delta"),
+            minimum_put_short_distance_usd=_optional_decimal(
+                item, "minimum_put_short_distance_usd"
+            ),
+            minimum_call_short_distance_usd=_optional_decimal(
+                item, "minimum_call_short_distance_usd"
+            ),
+            put_short_breached=_optional_boolean(item, "put_short_breached"),
+            call_short_breached=_optional_boolean(item, "call_short_breached"),
+            gap_ids=_text_tuple(item, "gap_ids"),
+            alternative_outcomes=tuple(
+                ShadowAlternativeOutcome.from_object(member)
+                for member in _object_sequence(item, "alternative_outcomes")
+            ),
+            entry_combo_fee_native=_optional_decimal(item, "entry_combo_fee_native"),
+            terminal_combo_fee_native=_optional_decimal(item, "terminal_combo_fee_native"),
+            total_combo_fee_native=_optional_decimal(item, "total_combo_fee_native"),
+            primary_exit_category=_text(item, "primary_exit_category"),
+            primary_exit_reason=_text(item, "primary_exit_reason"),
+            no_entry=ShadowExitCounterfactual.from_object(item.get("no_entry")),
+            hold_to_expiry=ShadowExitCounterfactual.from_object(item.get("hold_to_expiry")),
+            complete=_boolean(item, "complete"),
+        )
+        if _text(item, "outcome_explanation_id") != result.identity:
+            raise ValueError("Outcome explanation identity mismatch")
+        return result
+
+
+@dataclass(frozen=True)
 class ShadowMonitorEvaluation:
     observation_status: ObservationStatus
     observation_id: str
@@ -518,6 +1383,7 @@ class ShadowCaseOutcome:
     data_gap_observed: bool
     reason: str | None
     eligibility: OutcomeEligibility
+    explanation: ShadowOutcomeExplanation
 
     def __post_init__(self) -> None:
         _utc(self.terminal_at, "terminal_at")
@@ -525,14 +1391,22 @@ class ShadowCaseOutcome:
             raise ValueError("terminal_source must be non-empty")
         if self.terminal_evidence_id is not None:
             require_identity(self.terminal_evidence_id, "terminal_evidence_id")
+        if self.data_gap_observed != bool(self.explanation.gap_ids):
+            raise ValueError("Outcome Gap summary does not match its explanation")
+        if self.entry_status is ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE:
+            if self.explanation.entry_combo_fee_native is None:
+                raise ValueError("entered Shadow Outcome requires its Entry Combo fee")
+        elif self.explanation.entry_combo_fee_native is not None:
+            raise ValueError("no-Position Outcome cannot claim an Entry Combo fee")
 
     @property
     def identity(self) -> str:
-        return canonical_identity("ShadowCaseOutcomeV1", self)
+        return canonical_identity("ShadowCaseOutcomeV2", self)
 
     def as_object(self) -> dict[str, object]:
         value = _canonical_object(self)
         value["eligibility"] = self.eligibility.as_object()
+        value["explanation"] = self.explanation.as_object()
         return value
 
     @classmethod
@@ -552,6 +1426,7 @@ class ShadowCaseOutcome:
             data_gap_observed=_boolean(item, "data_gap_observed"),
             reason=_optional_text(item, "reason"),
             eligibility=OutcomeEligibility.from_object(item.get("eligibility")),
+            explanation=ShadowOutcomeExplanation.from_object(item.get("explanation")),
         )
 
 
@@ -672,6 +1547,7 @@ class TradeCase:
     entry_deadline: datetime
     decision_route_evidence_id: str
     decision_route_evidence_json: str
+    explanation_path: ShadowExplanationPath
     entry_status: ShadowEntryStatus | None = None
     entry_final: bool = False
     entry_observation_id: str | None = None
@@ -687,7 +1563,6 @@ class TradeCase:
     entry_vrp_proxy_ratio: Decimal | None = None
     last_observation_id: str | None = None
     last_observed_at: datetime | None = None
-    gap_observed: bool = False
     exit_intent: ExitIntent | None = None
     outcome: ShadowCaseOutcome | None = None
 
@@ -738,6 +1613,19 @@ class TradeCase:
         )
         if _route_economics(decision_route) != _recorded_pricing_economics(selected_pricing):
             raise ValueError("TradeCase Decision route economics do not match its structure")
+        path = self.explanation_path
+        if (
+            path.decision_record_id != self.decision_record_id
+            or path.policy_id != self.decision_policy_id
+            or path.selected_structure_id != self.selected_structure_id
+            or path.points[0].observation_id != decision_route.observation_id
+        ):
+            raise ValueError("TradeCase explanation path does not bind its frozen Decision")
+        if self.last_observation_id is not None and (
+            path.last_observation_id != self.last_observation_id
+            or path.last_observed_at != self.last_observed_at
+        ):
+            raise ValueError("TradeCase latest observation does not match its explanation cursor")
         if self.entry_final and self.entry_status is None:
             raise ValueError("final Entry requires a status")
         if (self.entry_status is None) != (self.entry_reunderwriting_json is None):
@@ -762,6 +1650,20 @@ class TradeCase:
         ):
             raise ValueError("TradeCase Entry fields do not match reunderwriting evidence")
         if reunderwriting is not None:
+            entry_evidence = [
+                (point.known_at, point.reunderwriting_id)
+                for point in path.points
+                if point.phase is ShadowPathPhase.ENTRY and point.reunderwriting_id is not None
+            ] + [
+                (gap.known_at, gap.reunderwriting_id)
+                for gap in path.gaps
+                if gap.reunderwriting_id is not None
+            ]
+            if (
+                not entry_evidence
+                or max(entry_evidence, key=lambda item: item[0])[1] != reunderwriting.identity
+            ):
+                raise ValueError("TradeCase explanation path lacks its latest Entry evaluation")
             entry_pricing = self.entry_pricing
             route_is_evaluable = (
                 reunderwriting.route_evidence.status is RouteEvidenceStatus.EVALUABLE
@@ -773,6 +1675,18 @@ class TradeCase:
                 != _recorded_pricing_economics(entry_pricing)
             ):
                 raise ValueError("TradeCase Entry route economics do not match its pricing")
+        elif any(point.phase is ShadowPathPhase.ENTRY for point in path.points) or any(
+            gap.reunderwriting_id is not None for gap in path.gaps
+        ):
+            raise ValueError("TradeCase cannot retain Entry path facts before Entry evaluation")
+        alternatives = _structure_alternatives(self)
+        basis_ids = tuple(basis.candidate_id for basis in path.alternative_entry_bases)
+        expected_alternative_ids = tuple(_text(item, "candidate_id") for item in alternatives)
+        if self.entry_final:
+            if basis_ids != expected_alternative_ids:
+                raise ValueError("final Entry must classify every frozen bounded alternative")
+        elif basis_ids:
+            raise ValueError("provisional Entry cannot freeze alternative Entry bases")
         if self.position_id is not None and (
             self.entry_status is not ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE
             or not self.entry_final
@@ -793,11 +1707,89 @@ class TradeCase:
         if self.position_state is PositionState.TERMINAL and self.outcome is None:
             raise ValueError("TERMINAL Position requires one Outcome")
         if self.outcome is not None:
+            outcome = self.outcome
             has_position = self.position_id is not None
-            if has_position != (self.outcome.terminal_method is not TerminalMethod.NO_POSITION):
+            if has_position != (outcome.terminal_method is not TerminalMethod.NO_POSITION):
                 raise ValueError("Outcome terminal method does not match Position existence")
             if has_position != (self.position_state is PositionState.TERMINAL):
                 raise ValueError("Position Outcome requires terminal Position state")
+            explanation = outcome.explanation
+            if explanation.path_id != path.identity:
+                raise ValueError("Outcome explanation does not bind the accepted Case path")
+            if (
+                reunderwriting is None
+                or explanation.entry_reunderwriting_id != reunderwriting.identity
+            ):
+                raise ValueError("Outcome explanation does not bind final Entry truth")
+            if (
+                explanation.decision_metrics != reunderwriting.decision_metrics
+                or explanation.entry_metrics != reunderwriting.entry_metrics
+            ):
+                raise ValueError("Outcome explanation metrics do not match final Entry truth")
+            expected_entry_fee = (
+                reunderwriting.combo_fee_native
+                if reunderwriting.status is ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE
+                else None
+            )
+            if explanation.entry_combo_fee_native != expected_entry_fee:
+                raise ValueError("Outcome explanation Entry fee does not match final Entry truth")
+            if explanation.gap_ids != tuple(gap.identity for gap in path.gaps):
+                raise ValueError("Outcome explanation does not bind every accepted Gap")
+            if tuple(
+                item.candidate_id for item in explanation.alternative_outcomes
+            ) != basis_ids or any(
+                item.entry_basis_id != basis.identity
+                or item.terminal_method is not outcome.terminal_method
+                for item, basis in zip(
+                    explanation.alternative_outcomes,
+                    path.alternative_entry_bases,
+                    strict=True,
+                )
+            ):
+                raise ValueError("Outcome alternatives do not bind the frozen Entry bases")
+            if any(
+                item.status is CounterfactualStatus.EVALUABLE
+                and item.terminal_evidence_id != outcome.terminal_evidence_id
+                for item in explanation.alternative_outcomes
+            ):
+                raise ValueError("evaluable Outcome alternatives require the actual terminal cut")
+            expected_primary_category = (
+                self.exit_intent.category if self.exit_intent is not None else "TIME"
+            )
+            expected_primary_reason = (
+                self.exit_intent.reason if self.exit_intent is not None else "EXPIRY_SETTLEMENT"
+            )
+            if outcome.terminal_method is TerminalMethod.NO_POSITION:
+                expected_primary_category = "ENTRY"
+                expected_primary_reason = reunderwriting.reason or reunderwriting.status.value
+                if explanation.hold_to_expiry.status is not CounterfactualStatus.NOT_APPLICABLE:
+                    raise ValueError("no-Position Outcome cannot claim hold-to-expiry economics")
+            elif outcome.terminal_method is TerminalMethod.CONTRACT_SETTLEMENT:
+                hold = explanation.hold_to_expiry
+                if (
+                    hold.status is not CounterfactualStatus.EVALUABLE
+                    or hold.terminal_evidence_id != outcome.terminal_evidence_id
+                    or hold.native_result_btc != outcome.native_result_btc
+                    or hold.boundary_reference_result_usd != outcome.boundary_reference_result_usd
+                ):
+                    raise ValueError("settlement Outcome must bind its exact hold counterfactual")
+            else:
+                if self.exit_intent is None:
+                    raise ValueError("whole-product exit Outcome requires its frozen ExitIntent")
+                hold = explanation.hold_to_expiry
+                if hold.status is CounterfactualStatus.UNKNOWN:
+                    if hold.reason != "OFFICIAL_EXPIRY_SETTLEMENT_PENDING":
+                        raise ValueError("pending hold counterfactual requires its exact reason")
+                elif hold.status is CounterfactualStatus.EVALUABLE:
+                    if hold.known_at < _structure_expiry(self):
+                        raise ValueError("hold counterfactual cannot precede the frozen expiry")
+                else:
+                    raise ValueError("whole-product exit hold counterfactual has invalid status")
+            if (
+                explanation.primary_exit_category != expected_primary_category
+                or explanation.primary_exit_reason != expected_primary_reason
+            ):
+                raise ValueError("Outcome explanation primary reason is incoherent")
 
     @property
     def identity(self) -> str:
@@ -816,7 +1808,11 @@ class TradeCase:
 
     @property
     def snapshot_identity(self) -> str:
-        return canonical_identity("TradeCaseSnapshotV2", self.as_object(include_snapshot=False))
+        return canonical_identity("TradeCaseSnapshotV3", self.as_object(include_snapshot=False))
+
+    @property
+    def gap_observed(self) -> bool:
+        return bool(self.explanation_path.gaps)
 
     @property
     def selected_structure(self) -> dict[str, object]:
@@ -872,6 +1868,8 @@ class TradeCase:
 
     def as_object(self, *, include_snapshot: bool = True) -> dict[str, object]:
         value = _canonical_object(self)
+        value["explanation_path"] = self.explanation_path.as_object()
+        value["outcome"] = self.outcome.as_object() if self.outcome is not None else None
         value["trade_case_id"] = self.identity
         if include_snapshot:
             value["snapshot_id"] = self.snapshot_identity
@@ -897,6 +1895,7 @@ class TradeCase:
             entry_deadline=_datetime(item, "entry_deadline"),
             decision_route_evidence_id=_text(item, "decision_route_evidence_id"),
             decision_route_evidence_json=_text(item, "decision_route_evidence_json"),
+            explanation_path=ShadowExplanationPath.from_object(item.get("explanation_path")),
             entry_status=_optional_enum(item, "entry_status", ShadowEntryStatus),
             entry_final=_boolean(item, "entry_final"),
             entry_observation_id=_optional_text(item, "entry_observation_id"),
@@ -912,7 +1911,6 @@ class TradeCase:
             entry_vrp_proxy_ratio=_optional_decimal(item, "entry_vrp_proxy_ratio"),
             last_observation_id=_optional_text(item, "last_observation_id"),
             last_observed_at=_optional_datetime(item, "last_observed_at"),
-            gap_observed=_boolean(item, "gap_observed"),
             exit_intent=(
                 ExitIntent.from_object(item.get("exit_intent"))
                 if item.get("exit_intent") is not None
@@ -956,6 +1954,14 @@ def open_trade_case(record: DecisionRecord, policy: BtcShortVolPolicy) -> TradeC
         record.observation.context.same_session_implied_variance_proxy
         / record.observation.context.trailing_realized_variance_proxy
     )
+    selected_structure = _json_mapping(record.selected_structure_json, "selected_structure")
+    decision_point = _market_path_point(
+        structure=selected_structure,
+        expiry=_parse_iso(_text(selected_structure, "expiry"), "expiry"),
+        observation=record.observation,
+        phase=ShadowPathPhase.DECISION,
+        valuation_reason="NO_POSITION_AT_DECISION",
+    )
     return TradeCase(
         channel_id=record.window.channel_id,
         truth_layer="SHADOW_PROJECTION",
@@ -974,6 +1980,18 @@ def open_trade_case(record: DecisionRecord, policy: BtcShortVolPolicy) -> TradeC
         + timedelta(seconds=policy.lifecycle.entry_evaluation_window_seconds),
         decision_route_evidence_id=route_evidence.identity,
         decision_route_evidence_json=_json_text(route_evidence.as_object()),
+        explanation_path=ShadowExplanationPath(
+            decision_record_id=record.identity,
+            policy_id=policy.identity,
+            selected_structure_id=_required(record.selected_structure_id, "selected_structure_id"),
+            observation_count=1,
+            last_observation_id=decision_point.observation_id,
+            last_observed_at=decision_point.observed_at,
+            points=(decision_point,),
+            statistics=_updated_path_statistics((), decision_point),
+            gaps=(),
+            alternative_entry_bases=(),
+        ),
     )
 
 
@@ -1035,7 +2053,13 @@ def evaluate_shadow_entry(
             route_evidence=route_evidence,
             evidence_blockers=tuple(evidence_blockers),
         )
-        return _apply_entry_evaluation(case, result, pricing=None), result
+        return _apply_entry_evaluation(
+            case,
+            result,
+            pricing=None,
+            observation=observation,
+            policy=policy,
+        ), result
 
     assert observation is not None and legs is not None
     session = current_deribit_session(observation.observed_at, phase_policy=policy.session)
@@ -1111,6 +2135,7 @@ def evaluate_shadow_entry(
         result,
         pricing=underwriting.pricing,
         observation=observation,
+        policy=policy,
     ), result
 
 
@@ -1123,24 +2148,53 @@ def monitor_shadow_position(
     _require_open_position(case, policy)
     _require_next_observation(case, observation, policy)
     if observation.observed_at >= _structure_expiry(case):
-        updated = _advance_observation(case, observation, gap=False)
+        point = _market_path_point(
+            structure=case.selected_structure,
+            expiry=_structure_expiry(case),
+            observation=observation,
+            phase=ShadowPathPhase.MONITOR,
+            valuation_reason="EXPIRY_REQUIRES_OFFICIAL_SETTLEMENT",
+        )
+        updated = _advance_observation(_append_path_point(case, point), observation)
+        if point.observation_status is ObservationStatus.UNKNOWN:
+            updated = record_shadow_gap(
+                updated,
+                known_at=observation.known_at,
+                reason=point.reason or "EXPIRY_MARKET_OBSERVATION_UNKNOWN",
+                source="EXPIRY_OBSERVATION",
+                observation=observation,
+            )
         return updated, ShadowMonitorEvaluation(
-            ObservationStatus.KNOWN,
+            point.observation_status,
             observation.identity,
             observation.observed_at,
             PositionAction.SETTLE_AT_EXPIRY,
             ("EXPIRY_REACHED",),
             None,
             case.exit_intent,
-            None,
+            point.reason,
         )
     latest_exit_due = (
         _structure_expiry(case) - observation.observed_at
     ).total_seconds() <= policy.lifecycle.latest_exit_minutes_to_expiry * 60
     if observation.data_health_blockers:
         intent = _latest_exit_intent(case, observation, policy) if latest_exit_due else None
+        point = _market_path_point(
+            structure=case.selected_structure,
+            expiry=_structure_expiry(case),
+            observation=observation,
+            phase=ShadowPathPhase.MONITOR,
+            valuation_reason="WHOLE_PRODUCT_CLOSE_NOT_EVALUABLE",
+        )
+        advanced = record_shadow_gap(
+            _advance_observation(_append_path_point(case, point), observation),
+            known_at=observation.known_at,
+            reason=observation.data_health_blockers[0],
+            source="MONITORING_OBSERVATION",
+            observation=observation,
+        )
         updated = replace(
-            _advance_observation(case, observation, gap=True),
+            advanced,
             exit_intent=intent,
             position_state=(
                 PositionState.EXIT_INTENT_FROZEN if intent is not None else PositionState.MONITORING
@@ -1161,8 +2215,22 @@ def monitor_shadow_position(
     legs = _selected_quotes(case, observation)
     if legs is None:
         intent = _latest_exit_intent(case, observation, policy) if latest_exit_due else None
+        point = _market_path_point(
+            structure=case.selected_structure,
+            expiry=_structure_expiry(case),
+            observation=observation,
+            phase=ShadowPathPhase.MONITOR,
+            valuation_reason="WHOLE_PRODUCT_CLOSE_NOT_EVALUABLE",
+        )
+        advanced = record_shadow_gap(
+            _advance_observation(_append_path_point(case, point), observation),
+            known_at=observation.known_at,
+            reason="SELECTED_STRUCTURE_QUOTES_MISSING",
+            source="MONITORING_OBSERVATION",
+            observation=observation,
+        )
         updated = replace(
-            _advance_observation(case, observation, gap=True),
+            advanced,
             exit_intent=intent,
             position_state=(
                 PositionState.EXIT_INTENT_FROZEN if intent is not None else PositionState.MONITORING
@@ -1181,7 +2249,14 @@ def monitor_shadow_position(
     close = _close_projection(case, observation, legs) if legs is not None else None
     triggers = _position_triggers(case, observation, close, policy) if legs is not None else ()
     if not triggers and close is None:
-        updated = _advance_observation(case, observation, gap=False)
+        point = _market_path_point(
+            structure=case.selected_structure,
+            expiry=_structure_expiry(case),
+            observation=observation,
+            phase=ShadowPathPhase.MONITOR,
+            valuation_reason="POSITION_CLOSE_CONTEXT_UNKNOWN",
+        )
+        updated = _advance_observation(_append_path_point(case, point), observation)
         return updated, ShadowMonitorEvaluation(
             ObservationStatus.UNKNOWN,
             observation.identity,
@@ -1211,8 +2286,21 @@ def monitor_shadow_position(
             policy_id=policy.identity,
         )
     action = PositionAction.EXIT_WHOLE_PRODUCT if intent is not None else PositionAction.HOLD
+    point = _market_path_point(
+        structure=case.selected_structure,
+        expiry=_structure_expiry(case),
+        observation=observation,
+        phase=ShadowPathPhase.MONITOR,
+        native_result_btc=native_result,
+        boundary_reference_result_usd=(
+            native_result * observation.context.index_price if native_result is not None else None
+        ),
+        combo_fee_native=close.combo_standard_fee_native if close is not None else None,
+        valuation_method_id=SHADOW_COMPONENT_CLOSE_METHOD_ID if close is not None else None,
+        valuation_reason=None if close is not None else "WHOLE_PRODUCT_CLOSE_NOT_EVALUABLE",
+    )
     updated = replace(
-        _advance_observation(case, observation, gap=False),
+        _advance_observation(_append_path_point(case, point), observation),
         exit_intent=intent,
         position_state=(
             PositionState.EXIT_INTENT_FROZEN if intent is not None else PositionState.MONITORING
@@ -1301,16 +2389,43 @@ def evaluate_shadow_exit(
     if observation.observed_at >= _structure_expiry(case):
         raise ValueError("at or after expiry, only settlement can terminalize a Position")
     _require_next_observation(case, observation, policy)
-    legs = None if observation.data_health_blockers else _selected_quotes(case, observation)
-    if legs is not None and not _quotes_strictly_after(legs, case.exit_intent.known_at):
-        legs = None
+    selected_legs = (
+        None if observation.data_health_blockers else _selected_quotes(case, observation)
+    )
+    quotes_not_future = selected_legs is not None and not _quotes_strictly_after(
+        selected_legs, case.exit_intent.known_at
+    )
+    legs = None if quotes_not_future else selected_legs
     close = _close_projection(case, observation, legs) if legs is not None else None
     if close is None:
-        updated = _advance_observation(
-            case,
-            observation,
-            gap=bool(observation.data_health_blockers or legs is None),
+        reason = (
+            observation.data_health_blockers[0]
+            if observation.data_health_blockers
+            else "SELECTED_STRUCTURE_QUOTES_MISSING"
+            if selected_legs is None
+            else "EXIT_QUOTES_NOT_STRICTLY_FUTURE"
+            if quotes_not_future
+            else "WHOLE_PRODUCT_EXIT_NOT_PRICE_EVALUABLE"
         )
+        point = _market_path_point(
+            structure=case.selected_structure,
+            expiry=_structure_expiry(case),
+            observation=observation,
+            phase=ShadowPathPhase.EXIT,
+            valuation_reason=reason,
+            unknown_reason=(
+                reason if observation.data_health_blockers or selected_legs is None else None
+            ),
+        )
+        updated = _advance_observation(_append_path_point(case, point), observation)
+        if observation.data_health_blockers or selected_legs is None or quotes_not_future:
+            updated = record_shadow_gap(
+                updated,
+                known_at=observation.known_at,
+                reason=reason,
+                source="EXIT_OBSERVATION",
+                observation=observation,
+            )
         evaluation = ShadowExitEvaluation(
             ObservationStatus.UNKNOWN,
             observation.identity,
@@ -1318,19 +2433,28 @@ def evaluate_shadow_exit(
             None,
             None,
             False,
-            (
-                observation.data_health_blockers[0]
-                if observation.data_health_blockers
-                else "WHOLE_PRODUCT_EXIT_NOT_PRICE_EVALUABLE"
-            ),
+            reason,
         )
         return updated, evaluation
     native_result = (
         _required_decimal(case.entry_native_net_credit, "entry_native_net_credit")
         + close.native_net_cashflow
     )
+    point = _market_path_point(
+        structure=case.selected_structure,
+        expiry=_structure_expiry(case),
+        observation=observation,
+        phase=ShadowPathPhase.EXIT,
+        native_result_btc=native_result,
+        boundary_reference_result_usd=native_result * observation.context.index_price,
+        combo_fee_native=close.combo_standard_fee_native,
+        valuation_method_id=SHADOW_COMPONENT_CLOSE_METHOD_ID,
+    )
+    terminal_case = _advance_observation(
+        _append_path_point(case, point, terminal=True), observation
+    )
     outcome = _position_outcome(
-        case,
+        terminal_case,
         method=TerminalMethod.WHOLE_PRODUCT_EXIT,
         terminal_at=observation.known_at,
         terminal_evidence_id=observation.identity,
@@ -1338,9 +2462,12 @@ def evaluate_shadow_exit(
         boundary_result=native_result * observation.context.index_price,
         fee_model_id=close.fee_model_id,
         source="STRICTLY_LATER_PUBLIC_FOUR_LEG_ESTIMATE",
+        terminal_combo_fee_native=close.combo_standard_fee_native,
+        alternative_outcomes=_alternative_outcomes_for_exit(case, observation=observation),
+        hold_to_expiry=_pending_hold_counterfactual(observation.known_at),
     )
     updated = replace(
-        _advance_observation(case, observation, gap=False),
+        terminal_case,
         position_state=PositionState.TERMINAL,
         outcome=outcome,
     )
@@ -1383,19 +2510,95 @@ def settle_shadow_position(
         _required_decimal(case.entry_native_net_credit, "entry_native_net_credit")
         + economics.native_net_cashflow
     )
+    settlement_fee_model = (
+        "DERIBIT_DAILY_OPTION_DELIVERY_FEE_EXEMPT"
+        if economics.delivery_fee_native == 0
+        else "DERIBIT_STANDARD_DELIVERY_FEE"
+    )
+    boundary_result = native_result * settlement.delivery_price_usd
     outcome = _position_outcome(
         case,
         method=TerminalMethod.CONTRACT_SETTLEMENT,
         terminal_at=boundary,
         terminal_evidence_id=settlement.identity,
         native_result=native_result,
-        boundary_result=native_result * settlement.delivery_price_usd,
-        fee_model_id="DERIBIT_DAILY_OPTION_DELIVERY_FEE_EXEMPT"
-        if economics.delivery_fee_native == 0
-        else "DERIBIT_STANDARD_DELIVERY_FEE",
+        boundary_result=boundary_result,
+        fee_model_id=settlement_fee_model,
         source=(f"{settlement.evidence_kind.value}:{settlement.source_id}:{settlement.method_id}"),
+        terminal_combo_fee_native=None,
+        alternative_outcomes=_alternative_outcomes_for_settlement(case, settlement=settlement),
+        hold_to_expiry=ShadowExitCounterfactual(
+            kind=ExitCounterfactualKind.HOLD_TO_EXPIRY,
+            status=CounterfactualStatus.EVALUABLE,
+            known_at=settlement.known_at,
+            terminal_evidence_id=settlement.identity,
+            native_result_btc=native_result,
+            boundary_reference_result_usd=boundary_result,
+            fee_model_id=settlement_fee_model,
+            reason=None,
+        ),
     )
     return replace(case, position_state=PositionState.TERMINAL, outcome=outcome)
+
+
+def enrich_shadow_exit_outcome_at_settlement(
+    case: TradeCase,
+    *,
+    settlement: ExpirySettlementFact,
+    policy: BtcShortVolPolicy,
+) -> TradeCase:
+    """Complete only the hold-to-expiry explanation of an already terminal Shadow exit."""
+
+    _require_case_policy(case, policy)
+    outcome = case.outcome
+    if (
+        case.position_state is not PositionState.TERMINAL
+        or outcome is None
+        or outcome.terminal_method is not TerminalMethod.WHOLE_PRODUCT_EXIT
+    ):
+        raise ValueError("settlement enrichment requires a terminal whole-product Shadow exit")
+    if settlement.product_id is not ProductId.INVERSE_BTC:
+        raise ValueError("BTC hold counterfactual requires a BTC settlement fact")
+    if settlement.expiry != _structure_expiry(case):
+        raise ValueError("hold counterfactual settlement does not match the frozen structure")
+    current = outcome.explanation.hold_to_expiry
+    if current.status is CounterfactualStatus.EVALUABLE:
+        if current.terminal_evidence_id != settlement.identity:
+            raise ValueError("Outcome already binds a different expiry settlement")
+        return case
+    if current.status is not CounterfactualStatus.UNKNOWN:
+        raise ValueError("Outcome hold counterfactual is not pending")
+    legs = _structure_legs(case)
+    economics = settle_btc_0dte_condor(
+        long_put_strike=legs[0][1],
+        short_put_strike=legs[1][1],
+        short_call_strike=legs[2][1],
+        long_call_strike=legs[3][1],
+        amount=_structure_amount(case),
+        delivery_price=settlement.delivery_price_usd,
+        daily_delivery_fee_exempt=all(leg[3] for leg in legs),
+    )
+    native_result = (
+        _required_decimal(case.entry_native_net_credit, "entry_native_net_credit")
+        + economics.native_net_cashflow
+    )
+    fee_model_id = (
+        "DERIBIT_DAILY_OPTION_DELIVERY_FEE_EXEMPT"
+        if economics.delivery_fee_native == 0
+        else "DERIBIT_STANDARD_DELIVERY_FEE"
+    )
+    hold = ShadowExitCounterfactual(
+        kind=ExitCounterfactualKind.HOLD_TO_EXPIRY,
+        status=CounterfactualStatus.EVALUABLE,
+        known_at=settlement.known_at,
+        terminal_evidence_id=settlement.identity,
+        native_result_btc=native_result,
+        boundary_reference_result_usd=native_result * settlement.delivery_price_usd,
+        fee_model_id=fee_model_id,
+        reason=None,
+    )
+    explanation = replace(outcome.explanation, hold_to_expiry=hold, complete=True)
+    return replace(case, outcome=replace(outcome, explanation=explanation))
 
 
 def _apply_entry_evaluation(
@@ -1404,6 +2607,7 @@ def _apply_entry_evaluation(
     *,
     pricing: Btc0DteCondorPricing | None,
     observation: MarketObservation | None = None,
+    policy: BtcShortVolPolicy,
 ) -> TradeCase:
     outcome: ShadowCaseOutcome | None = None
     position_id: str | None = None
@@ -1412,8 +2616,6 @@ def _apply_entry_evaluation(
     entry_credit: Decimal | None = None
     entry_index: Decimal | None = None
     entry_vrp: Decimal | None = None
-    if evaluation.final and evaluation.status is not ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE:
-        outcome = _no_position_outcome(evaluation)
     if pricing is not None and observation is not None:
         entry_pricing_json = _json_text(
             {
@@ -1441,8 +2643,59 @@ def _apply_entry_evaluation(
             entry_credit = pricing.native_net_credit
             entry_index = pricing.boundary_index_price_usd
             entry_vrp = evaluation.entry_metrics.vrp_proxy_ratio
+    explanation_path = case.explanation_path
+    if observation is not None and observation.identity != explanation_path.last_observation_id:
+        evaluable = evaluation.status is ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE
+        point = _market_path_point(
+            structure=case.selected_structure,
+            expiry=_structure_expiry(case),
+            observation=observation,
+            phase=ShadowPathPhase.ENTRY,
+            reunderwriting_id=evaluation.identity,
+            native_result_btc=Decimal(0) if evaluable else None,
+            boundary_reference_result_usd=Decimal(0) if evaluable else None,
+            combo_fee_native=(pricing.combo_standard_fee_native if evaluable and pricing else None),
+            valuation_method_id=SHADOW_ENTRY_BASELINE_METHOD_ID if evaluable else None,
+            valuation_reason=None if evaluable else evaluation.reason or "NO_SHADOW_POSITION",
+            unknown_reason=(
+                evaluation.reason
+                if evaluation.status is ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN
+                else None
+            ),
+        )
+        explanation_path = _path_with_point(explanation_path, point)
+    if evaluation.status is ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN:
+        gap = ShadowPathGap(
+            known_at=evaluation.known_at,
+            reason=evaluation.reason or "ENTRY_EVIDENCE_UNKNOWN",
+            source="ENTRY_EVALUATION",
+            observation_id=observation.identity if observation is not None else None,
+            observed_at=observation.observed_at if observation is not None else None,
+            reunderwriting_id=evaluation.identity,
+        )
+        if gap.identity not in {item.identity for item in explanation_path.gaps}:
+            explanation_path = replace(
+                explanation_path,
+                gaps=(*explanation_path.gaps, gap),
+            )
+    explanation_path = replace(
+        explanation_path,
+        alternative_entry_bases=_alternative_entry_bases(
+            case,
+            evaluation=evaluation,
+            observation=observation,
+            policy=policy,
+        ),
+    )
+    if evaluation.final and evaluation.status is not ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE:
+        outcome = _no_position_outcome(
+            case,
+            evaluation=evaluation,
+            explanation_path=explanation_path,
+        )
     return replace(
         case,
+        explanation_path=explanation_path,
         entry_status=evaluation.status,
         entry_final=evaluation.final,
         entry_observation_id=evaluation.observation_id,
@@ -1458,8 +2711,6 @@ def _apply_entry_evaluation(
         entry_vrp_proxy_ratio=entry_vrp,
         last_observation_id=evaluation.observation_id or case.last_observation_id,
         last_observed_at=evaluation.observed_at or case.last_observed_at,
-        gap_observed=case.gap_observed
-        or (evaluation.status is ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN),
         outcome=outcome,
     )
 
@@ -1669,6 +2920,273 @@ def _entry_allocation_blockers(
     return tuple(dict.fromkeys(blockers))
 
 
+def _alternative_entry_bases(
+    case: TradeCase,
+    *,
+    evaluation: ShadowEntryReunderwriting,
+    observation: MarketObservation | None,
+    policy: BtcShortVolPolicy,
+) -> tuple[ShadowAlternativeEntryBasis, ...]:
+    alternatives = _structure_alternatives(case)
+    if not evaluation.final:
+        return ()
+    if evaluation.status is not ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE:
+        return tuple(
+            ShadowAlternativeEntryBasis(
+                candidate_id=_text(alternative, "candidate_id"),
+                status=CounterfactualStatus.NOT_APPLICABLE,
+                route_evidence=None,
+                blockers=(),
+                reason="PRIMARY_SHADOW_ENTRY_NOT_OPENED",
+            )
+            for alternative in alternatives
+        )
+    if observation is None:
+        raise ValueError("evaluable primary Entry requires an observation")
+    expiry = _structure_expiry(case)
+    bases: list[ShadowAlternativeEntryBasis] = []
+    for alternative in alternatives:
+        candidate_id = _text(alternative, "candidate_id")
+        amount = _decimal(alternative, "option_amount")
+        instruments = tuple(leg[0] for leg in _structure_legs_from_mapping(alternative))
+        quotes = _quotes_for_structure(
+            alternative,
+            expiry=expiry,
+            observation=observation,
+        )
+        if quotes is None:
+            route = component_synthetic_route_evidence(
+                policy_id=policy.identity,
+                selected_structure_id=candidate_id,
+                evaluated_at=evaluation.known_at,
+                target_amount=amount,
+                instrument_names=instruments,  # type: ignore[arg-type]
+                observation_id=observation.identity,
+                observed_at=observation.observed_at,
+                observation_known_at=observation.known_at,
+                quotes=None,
+                pricing=None,
+                unknown_reason="ALTERNATIVE_ENTRY_QUOTES_MISSING",
+            )
+            bases.append(
+                ShadowAlternativeEntryBasis(
+                    candidate_id=candidate_id,
+                    status=CounterfactualStatus.UNKNOWN,
+                    route_evidence=route,
+                    blockers=(),
+                    reason=route.reason,
+                )
+            )
+            continue
+        underwriting = underwrite_btc_0dte_condor(
+            observation=observation,
+            long_put=quotes[0],
+            short_put=quotes[1],
+            short_call=quotes[2],
+            long_call=quotes[3],
+            amount=amount,
+            policy=policy,
+        )
+        route = component_synthetic_route_evidence(
+            policy_id=policy.identity,
+            selected_structure_id=candidate_id,
+            evaluated_at=evaluation.known_at,
+            target_amount=amount,
+            instrument_names=instruments,  # type: ignore[arg-type]
+            observation_id=observation.identity,
+            observed_at=observation.observed_at,
+            observation_known_at=observation.known_at,
+            quotes=quotes,
+            pricing=underwriting.pricing,
+        )
+        blockers = tuple(
+            dict.fromkeys(
+                underwriting.legal_blockers
+                + underwriting.structure_limit_blockers
+                + underwriting.economics_blockers
+            )
+        )
+        if route.status is RouteEvidenceStatus.NOT_EVALUABLE:
+            bases.append(
+                ShadowAlternativeEntryBasis(
+                    candidate_id=candidate_id,
+                    status=CounterfactualStatus.NOT_EVALUABLE,
+                    route_evidence=route,
+                    blockers=(),
+                    reason=route.reason,
+                )
+            )
+        elif blockers:
+            bases.append(
+                ShadowAlternativeEntryBasis(
+                    candidate_id=candidate_id,
+                    status=CounterfactualStatus.NOT_EVALUABLE,
+                    route_evidence=route,
+                    blockers=blockers,
+                    reason=blockers[0],
+                )
+            )
+        else:
+            bases.append(
+                ShadowAlternativeEntryBasis(
+                    candidate_id=candidate_id,
+                    status=CounterfactualStatus.EVALUABLE,
+                    route_evidence=route,
+                    blockers=(),
+                    reason=None,
+                )
+            )
+    return tuple(bases)
+
+
+def _alternative_outcomes_for_exit(
+    case: TradeCase,
+    *,
+    observation: MarketObservation,
+) -> tuple[ShadowAlternativeOutcome, ...]:
+    alternatives = {_text(item, "candidate_id"): item for item in _structure_alternatives(case)}
+    output: list[ShadowAlternativeOutcome] = []
+    for basis in case.explanation_path.alternative_entry_bases:
+        if basis.status is not CounterfactualStatus.EVALUABLE:
+            output.append(
+                ShadowAlternativeOutcome(
+                    candidate_id=basis.candidate_id,
+                    entry_basis_id=basis.identity,
+                    status=basis.status,
+                    terminal_method=TerminalMethod.WHOLE_PRODUCT_EXIT,
+                    terminal_evidence_id=None,
+                    known_at=observation.known_at,
+                    native_result_btc=None,
+                    boundary_reference_result_usd=None,
+                    entry_combo_fee_native=None,
+                    terminal_combo_fee_native=None,
+                    reason=basis.reason,
+                )
+            )
+            continue
+        route = basis.route_evidence
+        assert route is not None
+        alternative = alternatives[basis.candidate_id]
+        quotes = _quotes_for_structure(
+            alternative,
+            expiry=_structure_expiry(case),
+            observation=observation,
+        )
+        if (
+            quotes is not None
+            and route.observation_known_at is not None
+            and not (_quotes_strictly_after(quotes, route.observation_known_at))
+        ):
+            quotes = None
+        close = (
+            project_btc_0dte_condor_close(
+                long_put=quotes[0],
+                short_put=quotes[1],
+                short_call=quotes[2],
+                long_call=quotes[3],
+                amount=_decimal(alternative, "option_amount"),
+                boundary_index_price=observation.context.index_price,
+            )
+            if quotes is not None
+            else None
+        )
+        if close is None:
+            output.append(
+                ShadowAlternativeOutcome(
+                    candidate_id=basis.candidate_id,
+                    entry_basis_id=basis.identity,
+                    status=CounterfactualStatus.UNKNOWN,
+                    terminal_method=TerminalMethod.WHOLE_PRODUCT_EXIT,
+                    terminal_evidence_id=None,
+                    known_at=observation.known_at,
+                    native_result_btc=None,
+                    boundary_reference_result_usd=None,
+                    entry_combo_fee_native=None,
+                    terminal_combo_fee_native=None,
+                    reason="ALTERNATIVE_EXIT_NOT_PRICE_EVALUABLE",
+                )
+            )
+            continue
+        assert route.native_net_credit is not None
+        assert route.standard_combo_fee_projection_native is not None
+        native_result = route.native_net_credit + close.native_net_cashflow
+        output.append(
+            ShadowAlternativeOutcome(
+                candidate_id=basis.candidate_id,
+                entry_basis_id=basis.identity,
+                status=CounterfactualStatus.EVALUABLE,
+                terminal_method=TerminalMethod.WHOLE_PRODUCT_EXIT,
+                terminal_evidence_id=observation.identity,
+                known_at=observation.known_at,
+                native_result_btc=native_result,
+                boundary_reference_result_usd=(native_result * observation.context.index_price),
+                entry_combo_fee_native=route.standard_combo_fee_projection_native,
+                terminal_combo_fee_native=close.combo_standard_fee_native,
+                reason=None,
+            )
+        )
+    return tuple(output)
+
+
+def _alternative_outcomes_for_settlement(
+    case: TradeCase,
+    *,
+    settlement: ExpirySettlementFact,
+) -> tuple[ShadowAlternativeOutcome, ...]:
+    alternatives = {_text(item, "candidate_id"): item for item in _structure_alternatives(case)}
+    output: list[ShadowAlternativeOutcome] = []
+    for basis in case.explanation_path.alternative_entry_bases:
+        if basis.status is not CounterfactualStatus.EVALUABLE:
+            output.append(
+                ShadowAlternativeOutcome(
+                    candidate_id=basis.candidate_id,
+                    entry_basis_id=basis.identity,
+                    status=basis.status,
+                    terminal_method=TerminalMethod.CONTRACT_SETTLEMENT,
+                    terminal_evidence_id=None,
+                    known_at=settlement.known_at,
+                    native_result_btc=None,
+                    boundary_reference_result_usd=None,
+                    entry_combo_fee_native=None,
+                    terminal_combo_fee_native=None,
+                    reason=basis.reason,
+                )
+            )
+            continue
+        route = basis.route_evidence
+        assert route is not None
+        alternative = alternatives[basis.candidate_id]
+        legs = _structure_legs_from_mapping(alternative)
+        economics = settle_btc_0dte_condor(
+            long_put_strike=legs[0][1],
+            short_put_strike=legs[1][1],
+            short_call_strike=legs[2][1],
+            long_call_strike=legs[3][1],
+            amount=_decimal(alternative, "option_amount"),
+            delivery_price=settlement.delivery_price_usd,
+            daily_delivery_fee_exempt=all(leg[3] for leg in legs),
+        )
+        assert route.native_net_credit is not None
+        assert route.standard_combo_fee_projection_native is not None
+        native_result = route.native_net_credit + economics.native_net_cashflow
+        output.append(
+            ShadowAlternativeOutcome(
+                candidate_id=basis.candidate_id,
+                entry_basis_id=basis.identity,
+                status=CounterfactualStatus.EVALUABLE,
+                terminal_method=TerminalMethod.CONTRACT_SETTLEMENT,
+                terminal_evidence_id=settlement.identity,
+                known_at=settlement.known_at,
+                native_result_btc=native_result,
+                boundary_reference_result_usd=(native_result * settlement.delivery_price_usd),
+                entry_combo_fee_native=route.standard_combo_fee_projection_native,
+                terminal_combo_fee_native=None,
+                reason=None,
+            )
+        )
+    return tuple(output)
+
+
 def _position_triggers(
     case: TradeCase,
     observation: MarketObservation,
@@ -1730,13 +3248,25 @@ def _selected_quotes(
     case: TradeCase,
     observation: MarketObservation,
 ) -> tuple[OptionQuote, OptionQuote, OptionQuote, OptionQuote] | None:
+    return _quotes_for_structure(
+        case.selected_structure,
+        expiry=_structure_expiry(case),
+        observation=observation,
+    )
+
+
+def _quotes_for_structure(
+    structure: dict[str, object],
+    *,
+    expiry: datetime,
+    observation: MarketObservation,
+) -> tuple[OptionQuote, OptionQuote, OptionQuote, OptionQuote] | None:
     by_name = {quote.instrument_name: quote for quote in observation.quotes}
-    frozen_legs = _structure_legs(case)
+    frozen_legs = _structure_legs_from_mapping(structure)
     names = tuple(leg[0] for leg in frozen_legs)
     if any(name not in by_name for name in names):
         return None
     quotes = tuple(by_name[name] for name in names)
-    expiry = _parse_iso(_text(case.selected_structure, "expiry"), "expiry")
     if any(
         quote.product != BTC
         or quote.strike != frozen[1]
@@ -1749,6 +3279,303 @@ def _selected_quotes(
     return quotes  # type: ignore[return-value]
 
 
+def _market_path_point(
+    *,
+    structure: dict[str, object],
+    expiry: datetime,
+    observation: MarketObservation,
+    phase: ShadowPathPhase,
+    reunderwriting_id: str | None = None,
+    native_result_btc: Decimal | None = None,
+    boundary_reference_result_usd: Decimal | None = None,
+    combo_fee_native: Decimal | None = None,
+    valuation_method_id: str | None = None,
+    valuation_reason: str | None = None,
+    unknown_reason: str | None = None,
+) -> ShadowPathPoint:
+    reason = unknown_reason or (
+        observation.data_health_blockers[0] if observation.data_health_blockers else None
+    )
+    legs = None
+    if reason is None:
+        legs = _quotes_for_structure(structure, expiry=expiry, observation=observation)
+        if legs is None:
+            reason = "SELECTED_STRUCTURE_QUOTES_MISSING"
+    if reason is not None:
+        return ShadowPathPoint(
+            phase=phase,
+            observation_status=ObservationStatus.UNKNOWN,
+            observation_id=observation.identity,
+            observed_at=observation.observed_at,
+            known_at=observation.known_at,
+            reunderwriting_id=reunderwriting_id,
+            index_price_usd=None,
+            native_result_btc=None,
+            boundary_reference_result_usd=None,
+            combo_fee_native=None,
+            short_put_abs_delta=None,
+            short_call_abs_delta=None,
+            net_delta=None,
+            put_short_distance_usd=None,
+            call_short_distance_usd=None,
+            long_put_mark_iv=None,
+            short_put_mark_iv=None,
+            short_call_mark_iv=None,
+            long_call_mark_iv=None,
+            same_session_implied_variance_proxy=None,
+            trailing_realized_variance_proxy=None,
+            rv_acceleration=None,
+            jump_share=None,
+            directional_persistence=None,
+            event_state=None,
+            valuation_method_id=None,
+            valuation_reason=None,
+            reason=reason,
+        )
+    assert legs is not None
+    context = observation.context
+    return ShadowPathPoint(
+        phase=phase,
+        observation_status=ObservationStatus.KNOWN,
+        observation_id=observation.identity,
+        observed_at=observation.observed_at,
+        known_at=observation.known_at,
+        reunderwriting_id=reunderwriting_id,
+        index_price_usd=context.index_price,
+        native_result_btc=native_result_btc,
+        boundary_reference_result_usd=boundary_reference_result_usd,
+        combo_fee_native=combo_fee_native,
+        short_put_abs_delta=abs(legs[1].signed_delta),
+        short_call_abs_delta=abs(legs[2].signed_delta),
+        net_delta=(
+            legs[0].signed_delta
+            - legs[1].signed_delta
+            - legs[2].signed_delta
+            + legs[3].signed_delta
+        ),
+        put_short_distance_usd=context.index_price - legs[1].strike,
+        call_short_distance_usd=legs[2].strike - context.index_price,
+        long_put_mark_iv=legs[0].mark_iv,
+        short_put_mark_iv=legs[1].mark_iv,
+        short_call_mark_iv=legs[2].mark_iv,
+        long_call_mark_iv=legs[3].mark_iv,
+        same_session_implied_variance_proxy=context.same_session_implied_variance_proxy,
+        trailing_realized_variance_proxy=context.trailing_realized_variance_proxy,
+        rv_acceleration=context.rv_acceleration,
+        jump_share=context.jump_share,
+        directional_persistence=context.directional_persistence,
+        event_state=context.event_state,
+        valuation_method_id=valuation_method_id,
+        valuation_reason=valuation_reason,
+        reason=None,
+    )
+
+
+def _append_path_point(
+    case: TradeCase,
+    point: ShadowPathPoint,
+    *,
+    terminal: bool = False,
+) -> TradeCase:
+    return replace(
+        case,
+        explanation_path=_path_with_point(
+            case.explanation_path,
+            point,
+            terminal=terminal,
+        ),
+        last_observation_id=point.observation_id,
+        last_observed_at=point.observed_at,
+    )
+
+
+def _path_with_point(
+    path: ShadowExplanationPath,
+    point: ShadowPathPoint,
+    *,
+    terminal: bool = False,
+) -> ShadowExplanationPath:
+    if point.observation_id == path.last_observation_id:
+        if point.observed_at != path.last_observed_at:
+            raise ValueError("repeated explanation observation has a different boundary")
+        return path
+    if point.observed_at <= path.last_observed_at:
+        raise ValueError("explanation observations must be strictly chronological")
+    retain = len(path.points) < MAX_RETAINED_EXPLANATION_POINTS - 1
+    if terminal:
+        if point.phase is not ShadowPathPhase.EXIT:
+            raise ValueError("only a terminal exit may consume the reserved path point")
+        if len(path.points) >= MAX_RETAINED_EXPLANATION_POINTS:
+            raise ValueError("explanation path did not reserve its terminal point")
+        retain = True
+    return replace(
+        path,
+        observation_count=path.observation_count + 1,
+        last_observation_id=point.observation_id,
+        last_observed_at=point.observed_at,
+        points=(*path.points, point) if retain else path.points,
+        statistics=_updated_path_statistics(path.statistics, point),
+    )
+
+
+def _updated_path_statistics(
+    statistics: tuple[ShadowPathStatistic, ...],
+    point: ShadowPathPoint,
+) -> tuple[ShadowPathStatistic, ...]:
+    current = {statistic.kind: statistic for statistic in statistics}
+    for kind, value in _path_statistic_values(point):
+        previous = current.get(kind)
+        replace_extreme = previous is None or (
+            value < previous.value
+            if kind
+            in {
+                ShadowPathStatisticKind.MINIMUM_PUT_SHORT_DISTANCE_USD,
+                ShadowPathStatisticKind.MINIMUM_CALL_SHORT_DISTANCE_USD,
+                ShadowPathStatisticKind.MINIMUM_IMPLIED_VARIANCE_PROXY,
+                ShadowPathStatisticKind.MINIMUM_TRAILING_RV_PROXY,
+                ShadowPathStatisticKind.MINIMUM_SHORT_MARK_IV,
+            }
+            else value > previous.value
+        )
+        if replace_extreme:
+            current[kind] = ShadowPathStatistic(
+                kind=kind,
+                value=value,
+                observation_id=point.observation_id,
+                observed_at=point.observed_at,
+                known_at=point.known_at,
+            )
+    return tuple(current[kind] for kind in sorted(current, key=lambda item: item.value))
+
+
+def _path_statistic_values(
+    point: ShadowPathPoint,
+) -> tuple[tuple[ShadowPathStatisticKind, Decimal], ...]:
+    if point.observation_status is ObservationStatus.UNKNOWN:
+        return ()
+    values: list[tuple[ShadowPathStatisticKind, Decimal]] = []
+    if point.native_result_btc is not None:
+        values.extend(
+            (
+                (
+                    ShadowPathStatisticKind.MAXIMUM_FAVORABLE_EXCURSION_BTC,
+                    max(Decimal(0), point.native_result_btc),
+                ),
+                (
+                    ShadowPathStatisticKind.MAXIMUM_ADVERSE_EXCURSION_BTC,
+                    max(Decimal(0), -point.native_result_btc),
+                ),
+            )
+        )
+    if point.boundary_reference_result_usd is not None:
+        values.extend(
+            (
+                (
+                    ShadowPathStatisticKind.MAXIMUM_FAVORABLE_EXCURSION_BOUNDARY_USD,
+                    max(Decimal(0), point.boundary_reference_result_usd),
+                ),
+                (
+                    ShadowPathStatisticKind.MAXIMUM_ADVERSE_EXCURSION_BOUNDARY_USD,
+                    max(Decimal(0), -point.boundary_reference_result_usd),
+                ),
+            )
+        )
+    assert point.short_put_abs_delta is not None
+    assert point.short_call_abs_delta is not None
+    assert point.put_short_distance_usd is not None
+    assert point.call_short_distance_usd is not None
+    assert point.same_session_implied_variance_proxy is not None
+    assert point.trailing_realized_variance_proxy is not None
+    assert point.short_put_mark_iv is not None
+    assert point.short_call_mark_iv is not None
+    assert point.rv_acceleration is not None
+    assert point.jump_share is not None
+    assert point.directional_persistence is not None
+    if point.phase is not ShadowPathPhase.DECISION:
+        values.extend(
+            (
+                (
+                    ShadowPathStatisticKind.MAXIMUM_SHORT_ABS_DELTA,
+                    max(point.short_put_abs_delta, point.short_call_abs_delta),
+                ),
+                (
+                    ShadowPathStatisticKind.MINIMUM_PUT_SHORT_DISTANCE_USD,
+                    point.put_short_distance_usd,
+                ),
+                (
+                    ShadowPathStatisticKind.MINIMUM_CALL_SHORT_DISTANCE_USD,
+                    point.call_short_distance_usd,
+                ),
+            )
+        )
+    values.extend(
+        (
+            (
+                ShadowPathStatisticKind.MINIMUM_IMPLIED_VARIANCE_PROXY,
+                point.same_session_implied_variance_proxy,
+            ),
+            (
+                ShadowPathStatisticKind.MAXIMUM_IMPLIED_VARIANCE_PROXY,
+                point.same_session_implied_variance_proxy,
+            ),
+            (
+                ShadowPathStatisticKind.MINIMUM_TRAILING_RV_PROXY,
+                point.trailing_realized_variance_proxy,
+            ),
+            (
+                ShadowPathStatisticKind.MAXIMUM_TRAILING_RV_PROXY,
+                point.trailing_realized_variance_proxy,
+            ),
+            (
+                ShadowPathStatisticKind.MINIMUM_SHORT_MARK_IV,
+                min(point.short_put_mark_iv, point.short_call_mark_iv),
+            ),
+            (
+                ShadowPathStatisticKind.MAXIMUM_SHORT_MARK_IV,
+                max(point.short_put_mark_iv, point.short_call_mark_iv),
+            ),
+            (
+                ShadowPathStatisticKind.MAXIMUM_RV_ACCELERATION,
+                point.rv_acceleration,
+            ),
+            (ShadowPathStatisticKind.MAXIMUM_JUMP_SHARE, point.jump_share),
+            (
+                ShadowPathStatisticKind.MAXIMUM_DIRECTIONAL_PERSISTENCE,
+                point.directional_persistence,
+            ),
+        )
+    )
+    return tuple(values)
+
+
+def record_shadow_gap(
+    case: TradeCase,
+    *,
+    known_at: datetime,
+    reason: str,
+    source: str,
+    observation: MarketObservation | None = None,
+    reunderwriting_id: str | None = None,
+) -> TradeCase:
+    gap = ShadowPathGap(
+        known_at=known_at,
+        reason=reason,
+        source=source,
+        observation_id=observation.identity if observation is not None else None,
+        observed_at=observation.observed_at if observation is not None else None,
+        reunderwriting_id=reunderwriting_id,
+    )
+    if gap.identity in {item.identity for item in case.explanation_path.gaps}:
+        return case
+    return replace(
+        case,
+        explanation_path=replace(
+            case.explanation_path,
+            gaps=(*case.explanation_path.gaps, gap),
+        ),
+    )
+
+
 def _structure_legs(
     case: TradeCase,
 ) -> tuple[
@@ -1757,7 +3584,17 @@ def _structure_legs(
     tuple[str, Decimal, str, bool],
     tuple[str, Decimal, str, bool],
 ]:
-    structure = case.selected_structure
+    return _structure_legs_from_mapping(case.selected_structure)
+
+
+def _structure_legs_from_mapping(
+    structure: dict[str, object],
+) -> tuple[
+    tuple[str, Decimal, str, bool],
+    tuple[str, Decimal, str, bool],
+    tuple[str, Decimal, str, bool],
+    tuple[str, Decimal, str, bool],
+]:
     legs = _mapping(structure.get("legs"), "selected_structure.legs")
     output: list[tuple[str, Decimal, str, bool]] = []
     for role in ("long_put", "short_put", "short_call", "long_call"):
@@ -1771,6 +3608,13 @@ def _structure_legs(
             )
         )
     return tuple(output)  # type: ignore[return-value]
+
+
+def _structure_alternatives(case: TradeCase) -> tuple[dict[str, object], ...]:
+    return tuple(
+        _mapping(member, "retained_alternative")
+        for member in _object_sequence(case.selected_structure, "retained_alternatives")
+    )
 
 
 def _structure_instrument_names(case: TradeCase) -> tuple[str, str, str, str]:
@@ -1821,14 +3665,11 @@ def _quotes_strictly_after(
 def _advance_observation(
     case: TradeCase,
     observation: MarketObservation,
-    *,
-    gap: bool,
 ) -> TradeCase:
     return replace(
         case,
         last_observation_id=observation.identity,
         last_observed_at=observation.observed_at,
-        gap_observed=case.gap_observed or gap,
     )
 
 
@@ -1859,6 +3700,130 @@ def _require_open_position(case: TradeCase, policy: BtcShortVolPolicy) -> None:
         raise ValueError("Shadow Position is already terminal")
 
 
+def _pending_hold_counterfactual(known_at: datetime) -> ShadowExitCounterfactual:
+    return ShadowExitCounterfactual(
+        kind=ExitCounterfactualKind.HOLD_TO_EXPIRY,
+        status=CounterfactualStatus.UNKNOWN,
+        known_at=known_at,
+        terminal_evidence_id=None,
+        native_result_btc=None,
+        boundary_reference_result_usd=None,
+        fee_model_id=None,
+        reason="OFFICIAL_EXPIRY_SETTLEMENT_PENDING",
+    )
+
+
+def _outcome_explanation(
+    case: TradeCase,
+    *,
+    explanation_path: ShadowExplanationPath,
+    evaluation: ShadowEntryReunderwriting,
+    terminal_method: TerminalMethod,
+    terminal_at: datetime,
+    terminal_native_result: Decimal | None,
+    terminal_boundary_result: Decimal | None,
+    terminal_combo_fee_native: Decimal | None,
+    alternative_outcomes: tuple[ShadowAlternativeOutcome, ...],
+    primary_exit_category: str,
+    primary_exit_reason: str,
+    hold_to_expiry: ShadowExitCounterfactual,
+) -> ShadowOutcomeExplanation:
+    statistic_values = {
+        statistic.kind: statistic.value for statistic in explanation_path.statistics
+    }
+    maximum_favorable_excursion_btc = statistic_values.get(
+        ShadowPathStatisticKind.MAXIMUM_FAVORABLE_EXCURSION_BTC
+    )
+    maximum_adverse_excursion_btc = statistic_values.get(
+        ShadowPathStatisticKind.MAXIMUM_ADVERSE_EXCURSION_BTC
+    )
+    maximum_favorable_excursion_boundary_usd = statistic_values.get(
+        ShadowPathStatisticKind.MAXIMUM_FAVORABLE_EXCURSION_BOUNDARY_USD
+    )
+    maximum_adverse_excursion_boundary_usd = statistic_values.get(
+        ShadowPathStatisticKind.MAXIMUM_ADVERSE_EXCURSION_BOUNDARY_USD
+    )
+    if terminal_method is TerminalMethod.CONTRACT_SETTLEMENT:
+        assert terminal_native_result is not None and terminal_boundary_result is not None
+        maximum_favorable_excursion_btc = max(
+            maximum_favorable_excursion_btc or Decimal(0),
+            terminal_native_result,
+            Decimal(0),
+        )
+        maximum_adverse_excursion_btc = max(
+            maximum_adverse_excursion_btc or Decimal(0),
+            -terminal_native_result,
+            Decimal(0),
+        )
+        maximum_favorable_excursion_boundary_usd = max(
+            maximum_favorable_excursion_boundary_usd or Decimal(0),
+            terminal_boundary_result,
+            Decimal(0),
+        )
+        maximum_adverse_excursion_boundary_usd = max(
+            maximum_adverse_excursion_boundary_usd or Decimal(0),
+            -terminal_boundary_result,
+            Decimal(0),
+        )
+    maximum_short_abs_delta = statistic_values.get(ShadowPathStatisticKind.MAXIMUM_SHORT_ABS_DELTA)
+    minimum_put_short_distance_usd = statistic_values.get(
+        ShadowPathStatisticKind.MINIMUM_PUT_SHORT_DISTANCE_USD
+    )
+    minimum_call_short_distance_usd = statistic_values.get(
+        ShadowPathStatisticKind.MINIMUM_CALL_SHORT_DISTANCE_USD
+    )
+    entry_fee = (
+        evaluation.combo_fee_native
+        if evaluation.status is ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE
+        else None
+    )
+    return ShadowOutcomeExplanation(
+        method_id=SHADOW_OUTCOME_EXPLANATION_METHOD_ID,
+        path_id=explanation_path.identity,
+        entry_reunderwriting_id=evaluation.identity,
+        decision_metrics=evaluation.decision_metrics,
+        entry_metrics=evaluation.entry_metrics,
+        maximum_favorable_excursion_btc=maximum_favorable_excursion_btc,
+        maximum_adverse_excursion_btc=maximum_adverse_excursion_btc,
+        maximum_favorable_excursion_boundary_usd=(maximum_favorable_excursion_boundary_usd),
+        maximum_adverse_excursion_boundary_usd=(maximum_adverse_excursion_boundary_usd),
+        maximum_short_abs_delta=maximum_short_abs_delta,
+        minimum_put_short_distance_usd=minimum_put_short_distance_usd,
+        minimum_call_short_distance_usd=minimum_call_short_distance_usd,
+        put_short_breached=(
+            minimum_put_short_distance_usd <= 0
+            if minimum_put_short_distance_usd is not None
+            else None
+        ),
+        call_short_breached=(
+            minimum_call_short_distance_usd <= 0
+            if minimum_call_short_distance_usd is not None
+            else None
+        ),
+        gap_ids=tuple(gap.identity for gap in explanation_path.gaps),
+        alternative_outcomes=alternative_outcomes,
+        entry_combo_fee_native=entry_fee,
+        terminal_combo_fee_native=terminal_combo_fee_native,
+        total_combo_fee_native=(
+            entry_fee + (terminal_combo_fee_native or Decimal(0)) if entry_fee is not None else None
+        ),
+        primary_exit_category=primary_exit_category,
+        primary_exit_reason=primary_exit_reason,
+        no_entry=ShadowExitCounterfactual(
+            kind=ExitCounterfactualKind.NO_ENTRY,
+            status=CounterfactualStatus.EVALUABLE,
+            known_at=terminal_at,
+            terminal_evidence_id=None,
+            native_result_btc=Decimal(0),
+            boundary_reference_result_usd=Decimal(0),
+            fee_model_id=None,
+            reason=None,
+        ),
+        hold_to_expiry=hold_to_expiry,
+        complete=hold_to_expiry.status is not CounterfactualStatus.UNKNOWN,
+    )
+
+
 def _position_outcome(
     case: TradeCase,
     *,
@@ -1869,6 +3834,9 @@ def _position_outcome(
     boundary_result: Decimal,
     fee_model_id: str,
     source: str,
+    terminal_combo_fee_native: Decimal | None,
+    alternative_outcomes: tuple[ShadowAlternativeOutcome, ...],
+    hold_to_expiry: ShadowExitCounterfactual,
 ) -> ShadowCaseOutcome:
     continuity = False if case.gap_observed else None
     eligibility = OutcomeEligibility(
@@ -1890,6 +3858,29 @@ def _position_outcome(
             "DATA_GAP_OBSERVED" if case.gap_observed else "POLICY_NOT_QUALIFIED",
         ),
     )
+    evaluation = case.entry_reunderwriting
+    if evaluation is None or (
+        case.exit_intent is None and method is TerminalMethod.WHOLE_PRODUCT_EXIT
+    ):
+        raise ValueError("Position Outcome requires final Entry and terminal reason truth")
+    primary_category = case.exit_intent.category if case.exit_intent is not None else "TIME"
+    primary_reason = (
+        case.exit_intent.reason if case.exit_intent is not None else "EXPIRY_SETTLEMENT"
+    )
+    explanation = _outcome_explanation(
+        case,
+        explanation_path=case.explanation_path,
+        evaluation=evaluation,
+        terminal_method=method,
+        terminal_at=terminal_at,
+        terminal_native_result=native_result,
+        terminal_boundary_result=boundary_result,
+        terminal_combo_fee_native=terminal_combo_fee_native,
+        alternative_outcomes=alternative_outcomes,
+        primary_exit_category=primary_category,
+        primary_exit_reason=primary_reason,
+        hold_to_expiry=hold_to_expiry,
+    )
     return ShadowCaseOutcome(
         terminal_method=method,
         terminal_at=terminal_at,
@@ -1904,10 +3895,16 @@ def _position_outcome(
         data_gap_observed=case.gap_observed,
         reason=None,
         eligibility=eligibility,
+        explanation=explanation,
     )
 
 
-def _no_position_outcome(evaluation: ShadowEntryReunderwriting) -> ShadowCaseOutcome:
+def _no_position_outcome(
+    case: TradeCase,
+    *,
+    evaluation: ShadowEntryReunderwriting,
+    explanation_path: ShadowExplanationPath,
+) -> ShadowCaseOutcome:
     known = evaluation.status is not ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN
     eligibility = OutcomeEligibility(
         decision_evaluable=EligibilityFact(True, "CANDIDATE_DECISION_EVALUABLE"),
@@ -1922,6 +3919,45 @@ def _no_position_outcome(evaluation: ShadowEntryReunderwriting) -> ShadowCaseOut
         strategy_population_eligible=EligibilityFact(None, "WINDOW_OUTCOME_REQUIRED"),
         qualification_eligible=EligibilityFact(None, "POLICY_NOT_QUALIFIED"),
     )
+    alternative_outcomes = tuple(
+        ShadowAlternativeOutcome(
+            candidate_id=basis.candidate_id,
+            entry_basis_id=basis.identity,
+            status=CounterfactualStatus.NOT_APPLICABLE,
+            terminal_method=TerminalMethod.NO_POSITION,
+            terminal_evidence_id=None,
+            known_at=evaluation.known_at,
+            native_result_btc=None,
+            boundary_reference_result_usd=None,
+            entry_combo_fee_native=None,
+            terminal_combo_fee_native=None,
+            reason=basis.reason or "NO_SHADOW_POSITION",
+        )
+        for basis in explanation_path.alternative_entry_bases
+    )
+    explanation = _outcome_explanation(
+        case,
+        explanation_path=explanation_path,
+        evaluation=evaluation,
+        terminal_method=TerminalMethod.NO_POSITION,
+        terminal_at=evaluation.known_at,
+        terminal_native_result=None,
+        terminal_boundary_result=None,
+        terminal_combo_fee_native=None,
+        alternative_outcomes=alternative_outcomes,
+        primary_exit_category="ENTRY",
+        primary_exit_reason=evaluation.reason or evaluation.status.value,
+        hold_to_expiry=ShadowExitCounterfactual(
+            kind=ExitCounterfactualKind.HOLD_TO_EXPIRY,
+            status=CounterfactualStatus.NOT_APPLICABLE,
+            known_at=evaluation.known_at,
+            terminal_evidence_id=None,
+            native_result_btc=None,
+            boundary_reference_result_usd=None,
+            fee_model_id=None,
+            reason="NO_SHADOW_POSITION",
+        ),
+    )
     return ShadowCaseOutcome(
         terminal_method=TerminalMethod.NO_POSITION,
         terminal_at=evaluation.known_at,
@@ -1933,9 +3969,10 @@ def _no_position_outcome(evaluation: ShadowEntryReunderwriting) -> ShadowCaseOut
         fee_model_id=None,
         shadow_model_id=evaluation.route_evidence.model_id,
         terminal_source="ENTRY_EVALUATION",
-        data_gap_observed=evaluation.status is ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN,
+        data_gap_observed=bool(explanation_path.gaps),
         reason=evaluation.reason,
         eligibility=eligibility,
+        explanation=explanation,
     )
 
 
@@ -1975,6 +4012,13 @@ def _mapping(value: object, field: str) -> dict[str, object]:
     if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
         raise ValueError(f"{field} must be an object")
     return value
+
+
+def _object_sequence(value: dict[str, object], field: str) -> tuple[object, ...]:
+    member = value.get(field)
+    if not isinstance(member, list):
+        raise ValueError(f"{field} must be an array")
+    return tuple(member)
 
 
 def _text(value: dict[str, object], field: str) -> str:

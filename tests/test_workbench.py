@@ -568,6 +568,22 @@ def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_cas
     assert outcome_values["boundary_reference_result_usd"] == str(
         trade_case.outcome.boundary_reference_result_usd
     )
+    explanation = cast(Mapping[str, object], case_view["outcome_explanation"])
+    assert explanation["available"] is True
+    assert explanation["complete"] is False
+    explanation_rows = cast(Sequence[Mapping[str, str]], explanation["summary"])
+    explanation_values = {row["key"]: row["value"] for row in explanation_rows}
+    assert explanation_values["path_id"] == trade_case.explanation_path.identity
+    assert explanation_values["entry_reunderwriting_id"] == (
+        trade_case.entry_reunderwriting.identity
+    )
+    assert explanation_values["primary_exit_reason"] == trade_case.exit_intent.reason
+    assert len(cast(Sequence[object], explanation["path"])) == 4
+    assert explanation["gaps"] == []
+    assert len(cast(Sequence[object], explanation["counterfactuals"])) == 2
+    assert len(cast(Sequence[object], explanation["alternative_outcomes"])) == len(
+        trade_case.explanation_path.alternative_entry_bases
+    )
 
     exported = write_workbench(
         snapshot,
@@ -578,6 +594,8 @@ def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_cas
     data_script = exported.data_path.read_text(encoding="utf-8")
     assert "四腿" in app_script
     assert "入场结果" in app_script
+    assert "Decision → Entry → Outcome" in exported.index_path.read_text(encoding="utf-8")
+    assert "等待官方交割补全" in app_script
     assert trade_case.selected_structure_id in data_script
     assert trade_case.entry_observation_id in data_script
     assert trade_case.outcome.terminal_evidence_id in data_script

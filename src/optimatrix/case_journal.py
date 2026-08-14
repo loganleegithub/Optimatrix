@@ -2,10 +2,22 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 
 from optimatrix.identity import require_identity
-from optimatrix.lifecycle import TradeCase
+from optimatrix.lifecycle import ShadowPathStatistic, ShadowPathStatisticKind, TradeCase
+
+
+@dataclass(frozen=True)
+class _JournalTail:
+    snapshot_count: int
+    case: TradeCase
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    inode: int
 
 
 class CaseJournal:
@@ -13,6 +25,7 @@ class CaseJournal:
 
     def __init__(self, root: Path) -> None:
         self.root = root
+        self._tails: dict[str, _JournalTail] = {}
 
     def path_for(self, trade_case_id: str) -> Path:
         require_identity(trade_case_id, "trade_case_id")
@@ -20,16 +33,16 @@ class CaseJournal:
         return self.root / "cases" / f"{digest}.jsonl"
 
     def append(self, case: TradeCase) -> bool:
-        snapshots = self.read(case.identity)
-        if snapshots and snapshots[-1] == case:
+        tail = self._tail_for_append(case.identity)
+        if tail is not None and tail.case == case:
             return False
-        if snapshots:
-            _validate_transition(snapshots[-1], case)
+        if tail is not None:
+            _validate_transition(tail.case, case)
         path = self.path_for(case.identity)
         path.parent.mkdir(parents=True, exist_ok=True)
         record = {
-            "sequence": len(snapshots),
-            "previous_snapshot_id": snapshots[-1].snapshot_identity if snapshots else None,
+            "sequence": tail.snapshot_count if tail is not None else 0,
+            "previous_snapshot_id": tail.case.snapshot_identity if tail is not None else None,
             "case": case.as_object(),
         }
         line = json.dumps(
@@ -51,7 +64,45 @@ class CaseJournal:
             handle.write(line + "\n")
             handle.flush()
             os.fsync(handle.fileno())
+        self._remember_tail(
+            case.identity,
+            (tail.snapshot_count if tail is not None else 0) + 1,
+            case,
+        )
         return True
+
+    def _tail_for_append(self, trade_case_id: str) -> _JournalTail | None:
+        path = self.path_for(trade_case_id)
+        cached = self._tails.get(trade_case_id)
+        if cached is not None and path.exists():
+            metadata = path.stat()
+            if (
+                metadata.st_size == cached.size
+                and metadata.st_mtime_ns == cached.mtime_ns
+                and metadata.st_ctime_ns == cached.ctime_ns
+                and metadata.st_ino == cached.inode
+            ):
+                return cached
+        snapshots = self.read(trade_case_id)
+        if not snapshots:
+            return None
+        return self._tails[trade_case_id]
+
+    def _remember_tail(
+        self,
+        trade_case_id: str,
+        snapshot_count: int,
+        case: TradeCase,
+    ) -> None:
+        metadata = self.path_for(trade_case_id).stat()
+        self._tails[trade_case_id] = _JournalTail(
+            snapshot_count=snapshot_count,
+            case=case,
+            size=metadata.st_size,
+            mtime_ns=metadata.st_mtime_ns,
+            ctime_ns=metadata.st_ctime_ns,
+            inode=metadata.st_ino,
+        )
 
     def read(self, trade_case_id: str) -> tuple[TradeCase, ...]:
         return self._read(trade_case_id, recover_truncated_tail=False)
@@ -64,6 +115,7 @@ class CaseJournal:
     ) -> tuple[TradeCase, ...]:
         path = self.path_for(trade_case_id)
         if not path.exists():
+            self._tails.pop(trade_case_id, None)
             return ()
         output: list[TradeCase] = []
         previous_snapshot_id: str | None = None
@@ -75,6 +127,10 @@ class CaseJournal:
             if index == len(lines) - 1 and not raw_line.endswith(b"\n"):
                 if recover_truncated_tail:
                     _truncate(path, accepted_bytes)
+                    if output:
+                        self._remember_tail(trade_case_id, len(output), output[-1])
+                    else:
+                        self._tails.pop(trade_case_id, None)
                     return tuple(output)
                 raise ValueError(f"invalid CaseJournal line {line_number}: unterminated write")
             try:
@@ -98,6 +154,10 @@ class CaseJournal:
             output.append(case)
             previous_snapshot_id = case.snapshot_identity
             accepted_bytes += len(raw_line)
+        if output:
+            self._remember_tail(trade_case_id, len(output), output[-1])
+        else:
+            self._tails.pop(trade_case_id, None)
         return tuple(output)
 
     def recover(self, trade_case_id: str) -> TradeCase:
@@ -142,6 +202,7 @@ class CaseJournal:
                 if trade_case_id not in recoverable_empty_case_ids:
                     raise ValueError(f"CaseJournal file has no accepted snapshot: {path.name}")
                 path.unlink()
+                self._tails.pop(trade_case_id, None)
                 continue
             snapshots = self._read(trade_case_id, recover_truncated_tail=True)
             if not snapshots:
@@ -161,7 +222,9 @@ def _validate_transition(previous: TradeCase, current: TradeCase) -> None:
     if previous.identity != current.identity:
         raise ValueError("TradeCase identity cannot change")
     if previous.outcome is not None:
-        raise ValueError("terminal TradeCase cannot append another snapshot")
+        if _is_settlement_explanation_enrichment(previous, current):
+            return
+        raise ValueError("terminal TradeCase permits only settlement explanation enrichment")
     stable = (
         "channel_id",
         "truth_layer",
@@ -182,6 +245,37 @@ def _validate_transition(previous: TradeCase, current: TradeCase) -> None:
     )
     if any(getattr(previous, field) != getattr(current, field) for field in stable):
         raise ValueError("frozen TradeCase facts cannot change")
+    previous_path = previous.explanation_path
+    current_path = current.explanation_path
+    if current_path.observation_count < previous_path.observation_count:
+        raise ValueError("TradeCase explanation observation count cannot decrease")
+    if current_path.observation_count == previous_path.observation_count:
+        if (
+            current_path.last_observation_id != previous_path.last_observation_id
+            or current_path.last_observed_at != previous_path.last_observed_at
+            or current_path.statistics != previous_path.statistics
+        ):
+            raise ValueError("TradeCase explanation cursor changed without a new observation")
+    elif (
+        current_path.observation_count != previous_path.observation_count + 1
+        or current_path.last_observed_at <= previous_path.last_observed_at
+    ):
+        raise ValueError("TradeCase explanation cursor must advance by one observation")
+    _validate_path_statistics(
+        previous_path.statistics,
+        current_path.statistics,
+        current_observation_id=current_path.last_observation_id,
+        current_observed_at=current_path.last_observed_at,
+    )
+    if (
+        current_path.points[: len(previous_path.points)] != previous_path.points
+        or current_path.gaps[: len(previous_path.gaps)] != previous_path.gaps
+    ):
+        raise ValueError("TradeCase explanation path must preserve its accepted prefix")
+    if previous_path.alternative_entry_bases and (
+        current_path.alternative_entry_bases != previous_path.alternative_entry_bases
+    ):
+        raise ValueError("frozen alternative Entry bases cannot change")
     if previous.entry_final and (
         current.entry_status != previous.entry_status
         or current.entry_final != previous.entry_final
@@ -218,10 +312,79 @@ def _validate_transition(previous: TradeCase, current: TradeCase) -> None:
         and not (
             (not previous.entry_final and current.entry_final)
             or (previous.outcome is None and current.outcome is not None)
-            or (not previous.gap_observed and current.gap_observed)
+            or (len(current_path.gaps) > len(previous_path.gaps))
             or (previous.exit_intent is None and current.exit_intent is not None)
         )
     ):
         raise ValueError("CaseJournal duplicate observation needs a final Entry transition")
     if previous.gap_observed and not current.gap_observed:
         raise ValueError("CaseJournal cannot erase a known DataHealth gap")
+
+
+def _validate_path_statistics(
+    previous: tuple[ShadowPathStatistic, ...],
+    current: tuple[ShadowPathStatistic, ...],
+    *,
+    current_observation_id: str,
+    current_observed_at: datetime,
+) -> None:
+    prior_by_kind = {statistic.kind: statistic for statistic in previous}
+    current_by_kind = {statistic.kind: statistic for statistic in current}
+    if not prior_by_kind.keys() <= current_by_kind.keys():
+        raise ValueError("TradeCase explanation statistics cannot erase an accepted extreme")
+    minimum_kinds = {
+        ShadowPathStatisticKind.MINIMUM_PUT_SHORT_DISTANCE_USD,
+        ShadowPathStatisticKind.MINIMUM_CALL_SHORT_DISTANCE_USD,
+        ShadowPathStatisticKind.MINIMUM_IMPLIED_VARIANCE_PROXY,
+        ShadowPathStatisticKind.MINIMUM_TRAILING_RV_PROXY,
+        ShadowPathStatisticKind.MINIMUM_SHORT_MARK_IV,
+    }
+    for kind, prior in prior_by_kind.items():
+        updated = current_by_kind[kind]
+        if kind in minimum_kinds:
+            monotonic = updated.value <= prior.value
+        else:
+            monotonic = updated.value >= prior.value
+        if not monotonic or (updated.value == prior.value and updated != prior):
+            raise ValueError("TradeCase explanation statistic is not a monotonic extreme")
+    for kind, updated in current_by_kind.items():
+        previous_statistic = prior_by_kind.get(kind)
+        if updated != previous_statistic and (
+            updated.observation_id != current_observation_id
+            or updated.observed_at != current_observed_at
+        ):
+            raise ValueError("TradeCase explanation extreme must bind the advancing observation")
+
+
+def _is_settlement_explanation_enrichment(
+    previous: TradeCase,
+    current: TradeCase,
+) -> bool:
+    previous_outcome = previous.outcome
+    current_outcome = current.outcome
+    if previous_outcome is None or current_outcome is None:
+        return False
+    prior_explanation = previous_outcome.explanation
+    current_explanation = current_outcome.explanation
+    if (
+        previous_outcome.terminal_method.value != "WHOLE_PRODUCT_EXIT"
+        or prior_explanation.complete
+        or prior_explanation.hold_to_expiry.status.value != "UNKNOWN"
+        or not current_explanation.complete
+        or current_explanation.hold_to_expiry.status.value != "EVALUABLE"
+    ):
+        return False
+    try:
+        same_case = replace(current, outcome=previous_outcome) == previous
+        same_outcome = replace(current_outcome, explanation=prior_explanation) == previous_outcome
+        same_explanation = (
+            replace(
+                current_explanation,
+                hold_to_expiry=prior_explanation.hold_to_expiry,
+                complete=prior_explanation.complete,
+            )
+            == prior_explanation
+        )
+    except ValueError:
+        return False
+    return same_case and same_outcome and same_explanation

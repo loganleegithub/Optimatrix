@@ -40,6 +40,7 @@ from optimatrix.lifecycle import (
     WindowOutcome,
     freeze_latest_exit_on_time_boundary,
     open_trade_case,
+    record_shadow_gap,
     window_outcome_eligibility,
 )
 from optimatrix.market import EventState, ExpirySettlementFact, SettlementEvidenceKind
@@ -57,7 +58,7 @@ AUTHORIZED_RUNTIME_POLICY_IDENTITY = (
     "sha256:e5dbee6192a1d76696f88bfd30584924f22cbbd041a28f593109962a67618c5f"
 )
 AUTHORIZED_WORKBENCH_PORT = 8765
-ROOT_SCHEMA_VERSION = 1
+ROOT_SCHEMA_VERSION = 2
 RUNTIME_SCHEMA_VERSION = 2
 PREFLIGHT_LEAD = timedelta(minutes=5)
 SETTLEMENT_DELAY = timedelta(minutes=5)
@@ -776,7 +777,7 @@ class BtcPublicShadowRuntime:
             and outcomes.complete
             and self.settlement_fact is not None
             and all(
-                case.outcome is not None
+                case.outcome is not None and case.outcome.explanation.complete
                 for case in self.cases.values()
                 if self._case_session(case).session_id == self.session.session_id
             )
@@ -1382,8 +1383,18 @@ class BtcPublicShadowRuntime:
                 case.last_observed_at or case.decision_boundary,
                 attempts.get(case_id, case.decision_boundary),
             )
-            gap_detected = gap_boundary > boundary + cadence * 2 and not case.gap_observed
-            updated = replace(case, gap_observed=True) if gap_detected else case
+            gap_known_at = boundary + cadence * 2
+            gap_detected = gap_boundary > gap_known_at
+            updated = (
+                record_shadow_gap(
+                    case,
+                    known_at=gap_known_at,
+                    reason="LIFECYCLE_CADENCE_GAP",
+                    source="RUNTIME_CADENCE",
+                )
+                if gap_detected
+                else case
+            )
             if (
                 updated.entry_final
                 and updated.position_id is not None
@@ -1432,14 +1443,14 @@ class BtcPublicShadowRuntime:
         for case_id, case in tuple(self.cases.items()):
             attempted_at = attempts.get(case_id)
             accepted_at = case.last_observed_at or case.decision_boundary
-            if (
-                attempted_at is None
-                or attempted_at <= accepted_at
-                or case.outcome is not None
-                or case.gap_observed
-            ):
+            if attempted_at is None or attempted_at <= accepted_at or case.outcome is not None:
                 continue
-            gapped = replace(case, gap_observed=True)
+            gapped = record_shadow_gap(
+                case,
+                known_at=attempted_at,
+                reason="RESTART_INTERRUPTED_CAUSAL_CUT",
+                source="RUNTIME_RECOVERY",
+            )
             self.journal.append(gapped)
             self.cases[case_id] = gapped
             recovery_details.append(f"case={case_id}")
@@ -1454,10 +1465,14 @@ class BtcPublicShadowRuntime:
             case_session = self._case_session(case)
             if case.entry_final or now < case_session.end:
                 continue
-            if not case.gap_observed:
-                case = replace(case, gap_observed=True)
-                self.journal.append(case)
-                self.cases[case_id] = case
+            case = record_shadow_gap(
+                case,
+                known_at=now,
+                reason="ENTRY_SESSION_EXPIRED_WITHOUT_CAUSAL_CUT",
+                source="RUNTIME_ENTRY_EXPIRY",
+            )
+            self.journal.append(case)
+            self.cases[case_id] = case
             known_at = max(now, case.entry_deadline)
             terminal, _evaluation = self.engine.evaluate_entry(
                 journal=self.journal,
@@ -1476,9 +1491,15 @@ class BtcPublicShadowRuntime:
     def _required_instruments(self, cases: Sequence[TradeCase]) -> tuple[str, ...]:
         names: set[str] = set()
         for case in cases:
-            legs = _mapping(case.selected_structure.get("legs"), "selected structure legs")
-            for member in legs.values():
-                names.add(_text(_mapping(member, "selected structure leg"), "instrument_name"))
+            structures: list[Mapping[str, object]] = [case.selected_structure]
+            alternatives = case.selected_structure.get("retained_alternatives")
+            if not isinstance(alternatives, list):
+                raise ValueError("selected structure alternatives must be an array")
+            structures.extend(_mapping(member, "retained alternative") for member in alternatives)
+            for structure in structures:
+                legs = _mapping(structure.get("legs"), "selected structure legs")
+                for member in legs.values():
+                    names.add(_text(_mapping(member, "selected structure leg"), "instrument_name"))
         return tuple(sorted(names))
 
     def _advance_cases(
@@ -1497,8 +1518,13 @@ class BtcPublicShadowRuntime:
                 quote.expiry != case_session.end for quote in observation.quotes
             ):
                 raise ValueError("market cut expiry does not match the frozen TradeCase Session")
-            if observation is None and not case.gap_observed:
-                case = replace(case, gap_observed=True)
+            if observation is None:
+                case = record_shadow_gap(
+                    case,
+                    known_at=now,
+                    reason="PUBLIC_MARKET_CUT_UNAVAILABLE",
+                    source="RUNTIME_CAPTURE",
+                )
             if (
                 observation is None
                 and case.entry_final
@@ -1524,8 +1550,15 @@ class BtcPublicShadowRuntime:
                 and last_observed_at is not None
                 and observation.observed_at <= last_observed_at
             ):
-                if not case.gap_observed:
-                    case = replace(case, gap_observed=True)
+                prior_case = case
+                case = record_shadow_gap(
+                    case,
+                    known_at=observation.known_at,
+                    reason="LIFECYCLE_MARKET_BOUNDARY_NOT_ADVANCING",
+                    source="RUNTIME_CAUSAL_BOUNDARY",
+                    observation=observation,
+                )
+                if case != prior_case:
                     self.journal.append(case)
                     self.cases[case.identity] = case
                 self._audit(
@@ -1551,8 +1584,15 @@ class BtcPublicShadowRuntime:
                 if observation is None:
                     continue
                 elif observation.observed_at >= case_session.end:
-                    if not case.gap_observed:
-                        case = replace(case, gap_observed=True)
+                    prior_case = case
+                    case = record_shadow_gap(
+                        case,
+                        known_at=observation.known_at,
+                        reason="CASE_SESSION_OBSERVATION_MISMATCH",
+                        source="RUNTIME_SESSION_BOUNDARY",
+                        observation=observation,
+                    )
+                    if case != prior_case:
                         self.journal.append(case)
                         self.cases[case.identity] = case
                     continue
@@ -1585,7 +1625,7 @@ class BtcPublicShadowRuntime:
         sessions_with_cases = {
             self._case_session(case).session_id
             for case in self.cases.values()
-            if case.outcome is None
+            if case.outcome is None or not case.outcome.explanation.complete
         }
         for session in sorted(self._sessions.values(), key=lambda item: item.end):
             if (
@@ -1706,17 +1746,26 @@ class BtcPublicShadowRuntime:
         if fact is None:
             return
         for case_id, case in tuple(self.cases.items()):
-            if (
-                self._case_session(case).session_id == session.session_id
-                and case.outcome is None
-                and case.position_id is not None
-            ):
+            if self._case_session(case).session_id != session.session_id:
+                continue
+            if case.outcome is None and case.position_id is not None:
                 terminal = self.engine.settle_position(
                     journal=self.journal,
                     case=case,
                     settlement=fact,
                 )
                 self.cases[case_id] = terminal
+            elif (
+                case.outcome is not None
+                and case.position_id is not None
+                and not case.outcome.explanation.complete
+            ):
+                enriched = self.engine.enrich_exit_outcome(
+                    journal=self.journal,
+                    case=case,
+                    settlement=fact,
+                )
+                self.cases[case_id] = enriched
 
     def _settlement_resolved(self, session: DeribitSession) -> bool:
         return session.session_id in self.settlement_facts

@@ -10,7 +10,7 @@ from optimatrix.channels import CHANNELS, ChannelId
 from optimatrix.lifecycle import TradeCase
 from optimatrix.route import ShadowRouteEvidence
 
-WORKBENCH_SCHEMA_VERSION = 6
+WORKBENCH_SCHEMA_VERSION = 7
 _ASSET_ROOT = Path(__file__).with_name("workbench_static")
 _STATIC_ASSETS = ("index.html", "styles.css", "app.js")
 
@@ -261,6 +261,27 @@ _OUTCOME_LABELS = {
     "terminal_source": "Terminal evidence source",
     "data_gap_observed": "DataHealth gap observed",
     "reason": "Terminal reason",
+}
+_OUTCOME_EXPLANATION_LABELS = {
+    "outcome_explanation_id": "Outcome explanation identity",
+    "method_id": "Explanation method identity",
+    "path_id": "Causal explanation path identity",
+    "entry_reunderwriting_id": "Final Entry reunderwriting identity",
+    "complete": "Explanation complete",
+    "maximum_favorable_excursion_btc": "MFE (BTC)",
+    "maximum_adverse_excursion_btc": "MAE loss magnitude (BTC)",
+    "maximum_favorable_excursion_boundary_usd": "Boundary-valued MFE (USD)",
+    "maximum_adverse_excursion_boundary_usd": "Boundary-valued MAE loss (USD)",
+    "maximum_short_abs_delta": "Maximum short absolute Delta",
+    "minimum_put_short_distance_usd": "Minimum Put short distance (USD)",
+    "minimum_call_short_distance_usd": "Minimum Call short distance (USD)",
+    "put_short_breached": "Put short strike breached",
+    "call_short_breached": "Call short strike breached",
+    "entry_combo_fee_native": "Entry Combo fee projection (BTC)",
+    "terminal_combo_fee_native": "Terminal Combo fee projection (BTC)",
+    "total_combo_fee_native": "Total Combo fee projection (BTC)",
+    "primary_exit_category": "Primary terminal category",
+    "primary_exit_reason": "Primary terminal reason",
 }
 _STRUCTURE_METRIC_LABELS = {
     "boundary_net_credit_usd": "Boundary-valued four-leg net credit",
@@ -528,6 +549,7 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
             "entry_economics": [],
             "exit_intent": [],
             "outcome": [],
+            "outcome_explanation": _empty_outcome_explanation_projection(),
             "eligibility": [],
             "display": None,
         }
@@ -604,6 +626,7 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
         else None
     )
     outcome = case.outcome
+    outcome_explanation = _outcome_explanation_projection(case)
     outcome_values = (
         {
             "outcome_id": outcome.identity,
@@ -682,6 +705,7 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
         "entry_economics": _display_rows(entry_economics, _ENTRY_ECONOMICS_LABELS),
         "exit_intent": _optional_display_rows(intent, _EXIT_INTENT_LABELS),
         "outcome": _optional_display_rows(outcome_values, _OUTCOME_LABELS),
+        "outcome_explanation": outcome_explanation,
         "eligibility": eligibility,
         "display": _case_display_projection(
             case,
@@ -843,6 +867,72 @@ def _empty_entry_reunderwriting_projection() -> dict[str, object]:
         "decision_metrics": [],
         "entry_metrics": [],
         "blockers": [],
+    }
+
+
+def _empty_outcome_explanation_projection() -> dict[str, object]:
+    return {
+        "available": False,
+        "complete": None,
+        "summary": [],
+        "decision_metrics": [],
+        "entry_metrics": [],
+        "observation_count": 0,
+        "path": [],
+        "statistics": [],
+        "gaps": [],
+        "alternative_entry_bases": [],
+        "alternative_outcomes": [],
+        "counterfactuals": [],
+    }
+
+
+def _outcome_explanation_projection(case: TradeCase) -> dict[str, object]:
+    path = getattr(case, "explanation_path", None)
+    if path is None:
+        return _empty_outcome_explanation_projection()
+    outcome = getattr(case, "outcome", None)
+    explanation = outcome.explanation if outcome is not None else None
+    summary: list[dict[str, str]] = []
+    decision_metrics: list[dict[str, str]] = []
+    entry_metrics: list[dict[str, str]] = []
+    alternative_outcomes: list[dict[str, object]] = []
+    counterfactuals: list[dict[str, object]] = []
+    if explanation is not None:
+        value = explanation.as_object()
+        value.pop("decision_metrics")
+        value.pop("entry_metrics")
+        value.pop("alternative_outcomes")
+        value.pop("no_entry")
+        value.pop("hold_to_expiry")
+        value.pop("gap_ids")
+        summary = _display_rows(value, _OUTCOME_EXPLANATION_LABELS)
+        decision_metrics = _display_rows(
+            explanation.decision_metrics.as_object(),
+            _ENTRY_METRIC_LABELS,
+        )
+        entry_metrics = _display_rows(
+            explanation.entry_metrics.as_object(),
+            _ENTRY_METRIC_LABELS,
+        )
+        alternative_outcomes = [item.as_object() for item in explanation.alternative_outcomes]
+        counterfactuals = [
+            explanation.no_entry.as_object(),
+            explanation.hold_to_expiry.as_object(),
+        ]
+    return {
+        "available": True,
+        "complete": explanation.complete if explanation is not None else None,
+        "summary": summary,
+        "decision_metrics": decision_metrics,
+        "entry_metrics": entry_metrics,
+        "observation_count": path.observation_count,
+        "path": [point.as_object() for point in path.points],
+        "statistics": [statistic.as_object() for statistic in path.statistics],
+        "gaps": [gap.as_object() for gap in path.gaps],
+        "alternative_entry_bases": [basis.as_object() for basis in path.alternative_entry_bases],
+        "alternative_outcomes": alternative_outcomes,
+        "counterfactuals": counterfactuals,
     }
 
 

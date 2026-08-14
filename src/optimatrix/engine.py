@@ -14,6 +14,7 @@ from optimatrix.lifecycle import (
     ShadowExitEvaluation,
     ShadowMonitorEvaluation,
     TradeCase,
+    enrich_shadow_exit_outcome_at_settlement,
     evaluate_shadow_entry,
     evaluate_shadow_exit,
     monitor_shadow_position,
@@ -144,6 +145,21 @@ class Btc0DteShortVolEngine:
         settlement: ExpirySettlementFact,
     ) -> TradeCase:
         updated = settle_shadow_position(
+            case,
+            settlement=settlement,
+            policy=self.policy,
+        )
+        journal.append(updated)
+        return updated
+
+    def enrich_exit_outcome(
+        self,
+        *,
+        journal: CaseJournal,
+        case: TradeCase,
+        settlement: ExpirySettlementFact,
+    ) -> TradeCase:
+        updated = enrich_shadow_exit_outcome_at_settlement(
             case,
             settlement=settlement,
             policy=self.policy,
