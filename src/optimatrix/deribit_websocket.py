@@ -405,6 +405,7 @@ class BtcWebSocketCache:
                 return self._cut_locked(
                     names=names,
                     known_at_ms=known_at_ms,
+                    minimum_source_watermark_ms=0,
                     maximum_age_ms=maximum_age_ms,
                     maximum_source_span_ms=maximum_source_span_ms,
                     maximum_receive_span_ms=maximum_receive_span_ms,
@@ -417,6 +418,7 @@ class BtcWebSocketCache:
         *,
         instrument_names: Sequence[str],
         known_at_ms: Callable[[], int],
+        minimum_source_watermark_ms: int,
         maximum_age_ms: int,
         maximum_source_span_ms: int,
         maximum_receive_span_ms: int,
@@ -424,6 +426,7 @@ class BtcWebSocketCache:
     ) -> BtcWebSocketCut:
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError("WebSocket cut timeout must be finite and positive")
+        _boundary(minimum_source_watermark_ms, "WebSocket cut minimum source watermark")
         names = tuple(sorted(instrument_names))
         deadline = monotonic() + timeout_seconds
         with self._condition:
@@ -434,6 +437,7 @@ class BtcWebSocketCache:
                     return self._cut_locked(
                         names=names,
                         known_at_ms=known_at_ms(),
+                        minimum_source_watermark_ms=minimum_source_watermark_ms,
                         maximum_age_ms=maximum_age_ms,
                         maximum_source_span_ms=maximum_source_span_ms,
                         maximum_receive_span_ms=maximum_receive_span_ms,
@@ -569,6 +573,7 @@ class BtcWebSocketCache:
         *,
         names: tuple[str, ...],
         known_at_ms: int,
+        minimum_source_watermark_ms: int,
         maximum_age_ms: int,
         maximum_source_span_ms: int,
         maximum_receive_span_ms: int,
@@ -649,6 +654,8 @@ class BtcWebSocketCache:
         received_watermark = max(received_boundaries)
         if source_watermark > known_at_ms or received_watermark > known_at_ms:
             raise ForwardObservationGap("WEBSOCKET_CUT_BOUNDARY_IN_FUTURE")
+        if source_watermark < minimum_source_watermark_ms:
+            raise _CutNotReady("WEBSOCKET_CUT_SOURCE_BEFORE_REQUIRED_BOUNDARY")
         if known_at_ms - source_floor > maximum_age_ms:
             raise _CutNotReady("WEBSOCKET_CUT_SOURCE_STALE")
         if known_at_ms - received_floor > maximum_age_ms:
@@ -747,6 +754,7 @@ class DeribitPublicWebSocketFeed:
         self,
         *,
         instrument_names: Sequence[str],
+        minimum_source_watermark_ms: int,
         maximum_age_ms: int,
         maximum_source_span_ms: int,
         maximum_receive_span_ms: int,
@@ -754,6 +762,7 @@ class DeribitPublicWebSocketFeed:
         return self.cache.wait_for_cut(
             instrument_names=instrument_names,
             known_at_ms=self.received_timestamp_ms,
+            minimum_source_watermark_ms=minimum_source_watermark_ms,
             maximum_age_ms=maximum_age_ms,
             maximum_source_span_ms=maximum_source_span_ms,
             maximum_receive_span_ms=maximum_receive_span_ms,

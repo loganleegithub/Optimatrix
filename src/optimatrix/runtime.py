@@ -197,6 +197,7 @@ class DeribitPublicRuntimeSource:
             feed.configure_instruments(selected_names)
             cut = feed.wait_for_cut(
                 instrument_names=selected_names,
+                minimum_source_watermark_ms=int(target_window.starts_at.timestamp() * 1_000),
                 maximum_age_ms=self.policy.observation.maximum_age_ms,
                 maximum_source_span_ms=self.policy.observation.maximum_source_span_ms,
                 maximum_receive_span_ms=self.policy.observation.maximum_receive_span_ms,

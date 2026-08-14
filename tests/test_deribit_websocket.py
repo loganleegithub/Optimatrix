@@ -310,6 +310,38 @@ def test_unchanged_book_remains_current_under_its_verified_change_chain() -> Non
     assert result["bids"] == [["0.0010", "1"]]
 
 
+def test_cut_waits_for_a_source_watermark_inside_the_target_window() -> None:
+    cache, _metadata, boundary_ms = _ready_cache()
+    required_boundary_ms = boundary_ms + 500
+    bounds = {
+        "instrument_names": NAMES,
+        "known_at_ms": lambda: boundary_ms + 1_000,
+        "minimum_source_watermark_ms": required_boundary_ms,
+        "maximum_age_ms": 8_000,
+        "maximum_source_span_ms": 6_000,
+        "maximum_receive_span_ms": 8_000,
+    }
+
+    with pytest.raises(
+        ForwardObservationGap,
+        match="WEBSOCKET_CUT_SOURCE_BEFORE_REQUIRED_BOUNDARY",
+    ):
+        cache.wait_for_cut(**bounds, timeout_seconds=0.001)
+
+    cache.accept_subscription(
+        channel="deribit_price_index.btc_usd",
+        data={
+            "index_name": "btc_usd",
+            "price": "100010",
+            "timestamp": required_boundary_ms,
+        },
+        received_timestamp_ms=required_boundary_ms + 50,
+    )
+
+    cut = cache.wait_for_cut(**bounds, timeout_seconds=1.0)
+    assert cut.source_watermark_ms == required_boundary_ms
+
+
 def test_transport_subscribes_only_public_aggregated_btc_channels() -> None:
     boundary_ms = int(NOW.timestamp() * 1_000)
     cache = BtcWebSocketCache()
@@ -384,6 +416,7 @@ def test_runtime_source_consumes_cache_without_http_market_polling(policy, monke
         source.close()
 
     assert fake_feed.configure_calls == [tuple(sorted(NAMES))]
+    assert fake_feed.minimum_source_watermark_ms == [int(window.starts_at.timestamp() * 1_000)]
     assert evaluation.context.evidence.market_data_source is (
         MarketDataSource.DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1
     )
@@ -587,6 +620,7 @@ class _PreparedFeed:
         self.cache = cache
         self.known_at_ms = known_at_ms
         self.configure_calls: list[tuple[str, ...]] = []
+        self.minimum_source_watermark_ms: list[int] = []
 
     def configure_instruments(self, instrument_names: Sequence[str]) -> None:
         names = tuple(sorted(instrument_names))
@@ -597,10 +631,12 @@ class _PreparedFeed:
         self,
         *,
         instrument_names: Sequence[str],
+        minimum_source_watermark_ms: int,
         maximum_age_ms: int,
         maximum_source_span_ms: int,
         maximum_receive_span_ms: int,
     ):
+        self.minimum_source_watermark_ms.append(minimum_source_watermark_ms)
         return self.cache.cut(
             instrument_names=instrument_names,
             known_at_ms=self.known_at_ms,

@@ -115,23 +115,27 @@ launches on the same root, and `604800` monotonic seconds per launch
   verified change chain remain intact. Each option contributes the later book/ticker source and
   receive boundary to cross-instrument freshness and span checks; a last content-change timestamp is
   not itself a continuity failure.
+- A scheduled Window may consume its one public cut only after the source watermark reaches that
+  Window's start. The existing bounded cache wait owns this lower boundary; retained pre-Window
+  state cannot consume the attempt while the input grace remains available.
 - Disconnect, incomplete initialization, staleness, and sequence loss fail through the exact
   Runtime Gap path. One affected-book REST snapshot may seed resynchronization, but that instrument
   rejoins only after a matching WebSocket continuation or a new full WebSocket snapshot.
 - HTTP remains limited to clock preflight/re-anchor, Session instrument metadata, initial index-path
   recovery seed, official settlement, and explicit affected-book recovery fallback. The feed adds
   no durable store, database, bus, replay framework, private method, or authenticated `raw` channel.
-- The complete repository gate passes: `224` tests and `8` deterministic business scenarios. This
+- The complete repository gate passes: `225` tests and `8` deterministic business scenarios. This
   is offline implementation evidence, not current market, execution, or profitability evidence.
 - Outside the exact active-task command, live runtime, stable-root writes, and market calls remain
   disabled. Private facts, orders, capital, and deployment remain unconditionally disabled.
 
-**Primary blocker:** `NATURAL_FORWARD_CHAIN_UNVERIFIED` — launch `2/3` on the preserved v2 root
-recorded one natural `ABSTAIN` and directly falsified the old content-change freshness assumption.
-The effective-member correction now passes `224` tests and all `8` business scenarios. The sole
-remaining launch must resume that exact root and still naturally prove Candidate, later Entry,
-Position, repeated monitoring, trigger, strictly later terminality, and explanatory Outcome. Policy,
-ranking, lifecycle, route, risk, and Outcome semantics remain unchanged.
+**Primary blocker:** `NATURAL_FORWARD_CHAIN_UNVERIFIED` — launch `3/3` directly falsified a
+steady-Window boundary race, while correctly failing that Window closed as
+`UNKNOWN/OBSERVATION_OUTSIDE_WINDOW`. The source-watermark lower bound now passes `225` tests and all
+`8` business scenarios, but the already running process loaded commit `9a065cd` and cannot acquire
+that correction without a forbidden fourth launch. It remains running on the preserved root and
+must still naturally prove the complete chain. Policy, ranking, lifecycle, route, risk, and Outcome
+semantics remain unchanged.
 
 ## Maturity ladder
 
@@ -145,6 +149,6 @@ ranking, lifecycle, route, risk, and Outcome semantics remain unchanged.
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Active closure boundary:** repair only the live-falsified public feed semantics, pass the repository
-gate, then resume `B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE` on the same root. Private facts, orders,
-old-root reuse, threshold changes, Edge claims, and B4 remain forbidden.
+**Active closure boundary:** keep launch `3/3` on the same root and close only on the exact natural
+chain. No restart or fourth launch is authorized. Private facts, orders, old-root reuse, threshold
+changes, Edge claims, and B4 remain forbidden.

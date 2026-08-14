@@ -115,7 +115,7 @@ active non-template task.
 
 ## Closure
 
-**Given:** the corrected current Policy and WebSocket-forward Runtime pass `224` tests and `8`
+**Given:** the corrected current Policy and WebSocket-forward Runtime pass `225` tests and `8`
 deterministic business scenarios; the isolated v2 root began absent, now preserves only its exact
 launch-2 natural evidence, and the lost v1 root is excluded for the reason recorded below
 
@@ -170,14 +170,15 @@ accounts, orders, fills, capital, deployment, Edge or profitability claims, and 
 
 **Complexity added / deleted:** add no abstraction or option; delete only the disproven strict
 ticker-timestamp assumption, source-state coercion that caused the first-cut side loss, and the
-conflation of retained book content-change time with its verified continuity watermark
+conflation of retained book content-change time with its verified continuity watermark; require the
+existing cut wait to reach its owning Window's source boundary before consuming the one attempt
 
 ## Verification and closure
 
 **Cheapest falsification:** public clock preflight plus first naturally enrolled Window must produce
 either one strict current-Policy DecisionRecord or an exact `UNKNOWN`/Gap without HTTP market polling
 
-**Repository gate:** `make check` passes `224` tests and all `8` deterministic business scenarios;
+**Repository gate:** `make check` passes `225` tests and all `8` deterministic business scenarios;
 rerun it after the live process stops and before closure
 
 **External evidence:** REQUIRED — the isolated root must recover the complete natural chain and the
@@ -239,6 +240,22 @@ command must emit `B3_NATURAL_FORWARD_CHAIN_ACCEPTED`; absence remains unverifie
 - The effective-member correction passes its focused WebSocket tests and the complete repository
   gate: `224` tests and all `8` deterministic business scenarios. The v2 root still contains its one
   Decision and `57` runtime audit events, is unlocked, and was not touched by clean-build.
+- Launch `3/3` resumed v2 without migration, recorded the interrupted `12:00–12:15` Window as
+  `UNKNOWN/NO_OBSERVATION`, then obtained a complete in-Window cut and recorded a natural `ABSTAIN`
+  for `12:15–12:30`. The prior live ticker and effective-watermark failures did not recur.
+- Its steady-state `12:30–12:45` attempt completed a cut at `2026-08-14T12:30:01.486000Z`, but that
+  retained cut's source watermark still preceded the Window start. At finalization the Window
+  correctly failed closed as `UNKNOWN/OBSERVATION_OUTSIDE_WINDOW`; no Case was created.
+- This directly falsifies the one-shot scheduling assumption: after marking a Window attempted, the
+  Runtime must use the existing bounded wait to require a source watermark at or after the Window
+  start. It may not consume a pre-Window cache state and then leave the full input grace unused.
+  Launch `3/3` remains running on commit `9a065cd`; it is not restarted and no fourth launch is
+  authorized.
+- The Window-source lower bound passes its focused cache/source tests and the complete repository
+  gate: `225` tests and all `8` deterministic business scenarios. The already running launch cannot
+  load this correction. Its next `12:45–13:00` cut happened naturally to fall inside the Window at
+  `2026-08-14T12:45:00.389000Z`; this confirms the old behavior is a boundary race, not that the
+  `12:30` falsification was harmless.
 
 Close only after directly observing the declared delta. Replace Stage with the post-task snapshot
 and remove this file; do not append completion history.

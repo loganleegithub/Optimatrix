@@ -82,12 +82,15 @@ pair share the current connection epoch and satisfy the Policy's source and rece
 book snapshot remains the current depth state through silence while that verified chain and epoch
 remain intact. The effective member watermark is the later boundary of the retained book/ticker
 pair, so content-change time is not confused with continuity time; cross-instrument freshness and
-span checks still apply to the index and every effective instrument member. Disconnect or sequence
-loss is an exact Gap. A bounded REST book snapshot may seed recovery, but the instrument cannot
-rejoin the incremental cut until a later matching WebSocket continuation or new full snapshot
-proves continuity. HTTP remains the clock, Session metadata, initial index-history recovery seed,
-official settlement, and explicit resynchronization path; it is not the continuous Runtime
-market-cut path. The cache is transient and creates no new durable record owner.
+span checks still apply to the index and every effective instrument member. For a scheduled Window,
+the cache also waits until the source watermark reaches the Window start instead of consuming the
+retained pre-Window cut; that wait remains bounded by the existing source timeout and Window input
+grace. Disconnect or sequence loss is an exact Gap. A bounded REST book snapshot may seed recovery,
+but the instrument cannot rejoin the incremental cut until a later matching WebSocket continuation
+or new full snapshot proves continuity. HTTP remains the clock, Session metadata, initial
+index-history recovery seed, official settlement, and explicit resynchronization path; it is not
+the continuous Runtime market-cut path. The cache is transient and creates no new durable record
+owner.
 
 ## Record boundaries
 

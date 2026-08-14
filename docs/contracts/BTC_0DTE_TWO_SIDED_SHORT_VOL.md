@@ -36,7 +36,9 @@ initialized book remains the current depth state while its connection epoch and 
 chain remain intact; absence of a content-changing book notification is not itself staleness. Each
 instrument therefore contributes the later source and receive boundary of its retained book/ticker
 pair, while the BTC index contributes its own boundary. The cut still applies freshness and span
-bounds across those effective members.
+bounds across those effective members. At a scheduled Window boundary the forward source waits,
+within the unchanged input grace, until the cut's source watermark is at or after that Window start;
+it never consumes a retained pre-Window state as that Window's one attempted observation.
 
 A disconnect, missing initial snapshot, sequence mismatch, stale effective index/instrument member,
 incomplete ticker/book pair, or source/receive span outside Policy invalidates the cut and yields
