@@ -104,7 +104,7 @@ def evaluate_btc_short_vol_window(
     vrp_ratio = (
         context.same_session_implied_variance_proxy / context.trailing_realized_variance_proxy
     )
-    environment_blockers = _environment_blockers(
+    environment_blockers = btc_environment_blockers(
         phase=observed_session.phase,
         vrp_ratio=vrp_ratio,
         observation=observation,
@@ -167,7 +167,7 @@ def evaluate_btc_short_vol_window(
     return BtcWindowAssessment(record, selection, allocation, observed_session.phase, vrp_ratio)
 
 
-def _environment_blockers(
+def btc_environment_blockers(
     *,
     phase: SessionPhase,
     vrp_ratio: Decimal,
@@ -290,6 +290,7 @@ def _leg_record(quote: OptionQuote) -> dict[str, object]:
         "instrument_name": quote.instrument_name,
         "strike": quote.strike,
         "option_type": quote.option_type,
+        "signed_delta": quote.signed_delta,
         "delivery_fee_exempt": quote.delivery_fee_exempt,
     }
 

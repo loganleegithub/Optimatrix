@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 PUBLIC SHADOW RUNTIME — ACTIVE
+**Status:** B3 ENTRY REUNDERWRITING — CLOSED
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -8,32 +8,29 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `NONE`
 
-**Sole authorized closure:** [`../../tasks/B3_PUBLIC_SHADOW_RUNTIME.md`](../../tasks/B3_PUBLIC_SHADOW_RUNTIME.md)
+**Sole authorized closure:** `NONE`
 
 ## Current permissions
 
 Stage is the permission ceiling; a future active task may only narrow it.
 
-**Offline checks and simulation:** authorized in disposable ignored `build/` roots
+**Offline checks and simulation:** authorized only in caller-supplied ignored roots
 
-**Public market calls:** production Deribit public methods and exact bounds authorized only by the
-active task
+**Public market calls:** `NONE_AUTHORIZED`
 
-**Stable ObservationLedger root:** `/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1`
-for one process-exclusive, cross-Session append history during the active task only
+**Stable ObservationLedger root:** `NONE_AUTHORIZED`
 
 **Disposable offline ObservationLedger:** authorized only under caller-supplied ignored roots
 
-**Stable CaseJournal root:** the same cross-Session active-task root, isolated from every legacy or
-foreign root
+**Stable CaseJournal root:** `NONE_AUTHORIZED`
 
-**Continuous runtime:** one local Python process that rolls the active Deribit Session in place at
-each `08:00 UTC` boundary, plus one loopback-only Workbench, authorized by the active task
+**Frozen prior evidence:** `/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1`
+is retained without migration or mutation. Its records use the retired Policy identity and are not
+eligible for current Base Policy evaluation or AI training.
 
-**Backend time authority:** validated Deribit UTC only for every absolute business boundary;
-monotonic process time only for elapsed waits, and browser-local time only for presentation
+**Continuous runtime:** `NONE`
 
 **Private read-only account permission:** `NONE`
 
@@ -41,99 +38,45 @@ monotonic process time only for elapsed waits, and browser-local time only for p
 
 **Policy qualification / Edge claim:** `NONE`
 
-**B3 Policy correction:** current numeric filters and trigger thresholds are provisional research
-hypotheses, not Authority. The active task may correct a value only when primary-source mechanism
-evidence or a causal-market falsification shows the current value is internally inconsistent or
-unsafe; every correction must preserve the prior value in Git, rerun the same tape before and after,
-and may not be tuned to manufacture Candidates, Outcomes, win rate, or an Edge claim.
-
 ## Current implementation truth
 
-- `DecisionWindow` is a Policy-scheduled, Session-aligned denominator. The current 15-minute
-  schedule produces 96 immutable Windows per Deribit Session. An encountered Window produces at
-  most one DecisionRecord; a pre-enrollment Window remains missing, while an attempted unhealthy
-  observation produces `UNKNOWN`.
-- `MarketObservation` binds one bounded universe, causal timestamps, DataHealth Policy, public
-  facts, and named proxies. `ObservationLedger` appends at most one DecisionRecord and one distinct
-  WindowOutcome per Window under a caller-supplied root.
-- Deribit UTC is the backend clock authority. Session rollover is anchored at `08:00 UTC`;
-  source/observed and causal-known boundaries retain separate meanings in that one domain. Host
-  wall time cannot select or advance business state, monotonic time measures only durations, and
-  the Workbench browser owns local-time display conversion.
-- BTC selection directly evaluates whole same-Session four-leg structures. It separately reports
-  legal, price-evaluable, and Policy-eligible populations, freezes bounded comparable alternatives,
-  uses standard Combo fee projection, and treats current close depth as a diagnostic rather than an
-  Entry veto.
-- Current environment, leg-selection, underwriting, allocation, and exit numerics are unqualified
-  B3 hypotheses. Their identities are frozen per Decision/Case for causal comparison, but the active
-  implementation may replace an obviously incoherent value under the correction rule above; no
-  present value is called optimal, portable across markets, or profitable.
-- A Candidate requires one `AVAILABLE` ShadowRiskAllocation with explicit USD contractual-payoff
-  budget, native-BTC economics, inverse delivery-price stresses, capacity boundary, expiry, and
-  release rule.
-- A Candidate opens one `truth_layer=SHADOW_PROJECTION` TradeCase. Entry is strictly later and only
-  `SHADOW_ATOMIC_EVALUABLE` creates one whole-product Shadow Position; missing or shallow component
-  facts never create partial exposure or remediation states.
-- Position monitoring uses the frozen structure expiry and Policy cadence. DataHealth gaps preserve
-  the Position and existing intent; the first known whole-product ExitIntent is immutable; only a
-  strictly later whole-product estimate or a matching typed expiry-settlement fact terminalizes it.
-- `CaseJournal` stores an append-only accepted TradeCase prefix under a caller-supplied root and can
-  discard only an unterminated final write. `ShadowCaseOutcome` keeps terminal economics separate
-  from enrolled-Window future-path truth and exposes eight independent eligibility facts.
-- `runtime.py` implements one production-public BTC process whose root manifest preserves immutable
-  first-enrollment provenance rather than binding the root forever to one Session. A new empty root
-  records the Session, current Window, and boundary first encountered at process start; earlier
-  Windows remain absent rather than being backfilled. The same process rolls to the next Session at
-  each `08:00 UTC` boundary, appends that Session's Window facts to the same Ledger, recovers every
-  accepted unresolved Case across prior Sessions, and continues monitoring or official settlement
-  alongside the current Session. Restart preserves first-enrollment provenance, resumes the Session
-  then active without inventing missed facts, reconstructs only that Session's Shadow capacity, and
-  continuously rewrites one loopback-only Workbench. Its public method allowlist, exact stable root,
-  Policy identity, bounds, and port are fail-closed to the active task.
-- The deterministic acceptance population contains `96/96` DecisionRecords and `96/96`
-  WindowOutcomes. In addition to fault-injected restart recovery, an append-only causal tape of raw
-  Deribit-shaped responses now drives every Window through the production public translator. It
-  proves frozen four-leg risk, Entry, monitoring, public-market triggers, strictly later atomic
-  exit or official-settlement fallback, capacity recovery/release, and their trader-visible Case
-  evidence. These simulations falsify the runtime implementation but are not production market
-  evidence.
+- B1 Window observation, B2 whole-four-leg selection, all-Window Ledger records, atomic Public
+  Shadow lifecycle, strictly later exit valuation, settlement fallback, and cross-Session runtime
+  mechanics exist and pass deterministic repository evidence.
+- Production-public v1 operation produced real Decision records but no naturally occurring
+  Candidate-to-terminal chain. That runtime is stopped and its stable root remains frozen.
+- Policy schema 6 gives new Decisions and Cases an identity distinct from the frozen v1 evidence.
+- Decision and Entry call the same environment and exact-four-leg underwriting calculations.
+  Entry evaluates only the Candidate's frozen legs; it cannot reselect a better later structure.
+- Entry now freezes one typed reunderwriting result containing Decision-to-Entry phase, VRP,
+  short-Delta, net-Delta, body-distance, credit/payoff, reference-loss, fee-burden, allocation, and
+  route evidence. `CaseJournal` recovers it exactly and the Workbench exposes it.
+- A Position is created only when later evidence is causal and healthy, phase and environment still
+  admit new Entry, frozen structure limits still pass, full-amount pricing exists, current economics
+  pass, and the frozen allocation remains valid. Known failures terminalize without a Position;
+  missing evidence stays provisional until the Entry deadline.
+- Shadow allocation still computes exit and inverse-delivery stresses while admission and capacity
+  use only nominal contractual-payoff sum. Therefore the recorded budget can say `AVAILABLE` even
+  when its own declared stressed loss exhausts the Session limit.
+- The complete repository gate passes: `190` tests and `7` deterministic business scenarios. This
+  is offline implementation evidence, not current market or profitability evidence.
 
-The component-Vertical acquisition path, public-Combo discovery gate, buyback-depth hard veto,
-partial/remediation graph, residual-wing lifecycle, and pre-A0 journal codec are absent.
-
-The continuous runtime and stable-root implementation now exist, but current production market
-operation and trader page acceptance have not yet been directly observed. A full 24-hour sample and
-a deliberately forced restart are not product prerequisites. No private account truth, real Combo
-order or fill lifecycle, account capital reservation, qualified Policy, Edge, Alpha, win-rate, or
-profitability evidence exists.
-
-**Primary blocker:** `CURRENT_PUBLIC_SHADOW_NOT_OBSERVED` — source can express the complete research
-loop, but current production Deribit facts have not yet been driven into the runtime and accepted on
-the trader page. The active task must close this before C1 may be activated.
+**Primary blocker:** `STRESS_RISK_NOT_RESERVED` — `ShadowRiskAllocation` records stress but does not
+use one conservative stress amount for admission, aggregation, recovery, and release.
 
 ## Maturity ladder
 
-This is the only maturity ladder. A stage name describes evidence maturity; it grants no permission.
-Entry into a later stage requires a new active task, exact permissions, and measured acceptance of
-its predecessor.
+- `A0_AUTHORITY_CORRECTION` — one owner per concept, explicit truth layers, and no cross-layer
+  inference.
+- `B1_WINDOW_OBSERVATION` — causal all-Window ObservationLedger and measured reachability.
+- `B2_STRUCTURE_PRICING` — route-independent whole-four-leg discovery and inverse-unit economics.
+- `B3_ATOMIC_PUBLIC_SHADOW` — complete whole-product Shadow Case, monitoring, terminality, and
+  explanatory Outcome without fill claims.
+- `C1_PRIVATE_READ_ONLY` — authenticated account truth with no order permission.
+- `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
+- `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-- `A0_AUTHORITY_CORRECTION` — one owner per concept, four online identities plus one optional
-  derived Episode grouping, explicit truth layers, and no cross-layer inference.
-- `B1_WINDOW_OBSERVATION` — pre-registered public DecisionWindows, causal DataHealth, all-Window
-  ObservationLedger, measured denominator, and blocker/Candidate reachability.
-- `B2_STRUCTURE_PRICING` — route-independent four-leg discovery, bounded alternatives, inverse-unit
-  correctness, Combo fees, and measured liquidity/stress evidence.
-- `B3_ATOMIC_PUBLIC_SHADOW` — complete whole-product public Shadow TradeCase, monitoring, exit or
-  settlement, Outcome, and future-path population without fill claims.
-- `C1_PRIVATE_READ_ONLY` — authenticated account, margin, order, fill, fee, and Position
-  reconciliation with no order permission.
-- `C2_AUTHORIZED_COMBO_EXECUTION` — bounded Deribit Combo execution beginning on testnet; any real
-  capital requires separate exact authorization and acceptance.
-- `D1_OFFLINE_AI_CHALLENGER` — sufficient forward Outcomes support frozen chronological or
-  walk-forward Base-versus-Challenger recommendations with human promotion only.
-
-**Next upgrade condition:** only after current production public market operation and explicit trader
-Workbench acceptance close the active runtime task may a bounded `C1_PRIVATE_READ_ONLY` task be
-activated. That task must name an exact private read-only permission, authenticated evidence source,
-redaction boundary, and reconciliation acceptance. It may not place, edit, cancel, or simulate an
-order, reserve capital, promote Policy, or infer real Position truth from Public Shadow records.
+**Next closure:** a bounded `B3_STRESS_RISK_RESERVATION` task must replace nominal-only admission
+with one explicit conservative stress metric used consistently by Decision, allocation record,
+capacity reconstruction, recovery, and release. It may not change market thresholds, Entry
+reunderwriting, runtime permissions, private facts, orders, capital, or Policy qualification.

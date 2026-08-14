@@ -15,7 +15,7 @@ from optimatrix.deribit_snapshot import (
     DeribitClockReading,
     PublicClockPreflight,
 )
-from optimatrix.policy import DEFAULT_BTC_SHORT_VOL_POLICY_PATH
+from optimatrix.policy import DEFAULT_BTC_SHORT_VOL_POLICY_PATH, load_btc_short_vol_policy
 from optimatrix.session import current_deribit_session
 
 
@@ -161,7 +161,7 @@ def test_runtime_rejects_foreign_policy_identity_before_source_construction(
     assert "policy identity" in json.loads(capsys.readouterr().out)["error"]
 
 
-def test_runtime_accepts_an_alternate_path_with_the_frozen_policy_identity_without_network(
+def test_runtime_rejects_the_new_entry_policy_without_network(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -173,30 +173,12 @@ def test_runtime_accepts_an_alternate_path_with_the_frozen_policy_identity_witho
         DEFAULT_BTC_SHORT_VOL_POLICY_PATH.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    observed: dict[str, object] = {}
+    constructions = _forbid_runtime_source(monkeypatch)
 
-    def fake_source(**kwargs: object) -> object:
-        observed["source"] = kwargs
-        return object()
+    assert cli.main(_runtime_command(authorized_root, policy_path=policy_copy)) == 2
 
-    class FakeRuntime:
-        def __init__(self, **kwargs: object) -> None:
-            observed["runtime"] = kwargs
-            self.session = SimpleNamespace(session_id="2026-08-14T08:00:00Z")
-
-        def run_forever(self, *, port: int) -> int:
-            observed["port"] = port
-            return 0
-
-    monkeypatch.setattr(cli, "DeribitPublicRuntimeSource", fake_source)
-    monkeypatch.setattr(cli, "BtcPublicShadowRuntime", FakeRuntime)
-
-    assert cli.main(_runtime_command(authorized_root, policy_path=policy_copy)) == 0
-
-    assert observed["port"] == 8765
-    assert cast(dict[str, object], observed["runtime"])["root"] == authorized_root
-    output = json.loads(capsys.readouterr().out)
-    assert output["root"] == str(authorized_root)
+    assert constructions == []
+    assert "policy identity" in json.loads(capsys.readouterr().out)["error"]
 
 
 def _clock_reading(at: datetime) -> DeribitClockReading:
@@ -242,6 +224,11 @@ def test_runtime_cli_delegates_time_authority_without_reading_host_wall(
             return 0
 
     monkeypatch.setattr(cli, "AUTHORIZED_RUNTIME_ROOT", authorized_root)
+    monkeypatch.setattr(
+        cli,
+        "AUTHORIZED_RUNTIME_POLICY_IDENTITY",
+        load_btc_short_vol_policy(DEFAULT_BTC_SHORT_VOL_POLICY_PATH).identity,
+    )
     monkeypatch.setattr(cli, "DeribitPublicRuntimeSource", FakeSource)
     monkeypatch.setattr(cli, "BtcPublicShadowRuntime", FakeRuntime)
 

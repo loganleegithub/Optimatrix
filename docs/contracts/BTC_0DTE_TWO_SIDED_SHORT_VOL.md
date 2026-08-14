@@ -161,23 +161,45 @@ Position.
 ## Public Shadow Entry
 
 Public Shadow evaluates the selected four legs as one indivisible counterfactual product from one
-causal market cut. Its result is one of:
+causal market cut. Entry does not call the structure selector: a different or better structure in
+the later universe cannot replace the Candidate's exact frozen legs. Before a Position may exist,
+the later cut reruns the same frozen Policy dimensions used by the Decision:
+
+- current Session phase and environment proxies, including the phase-specific VRP threshold;
+- exact frozen-leg product, expiry, strike geometry, amount, short-leg Delta, whole-product net
+  Delta, and body distance;
+- full-amount whole-product component-book pricing and the same credit, payoff-cap, reference-loss,
+  and Combo-fee underwriting limits; and
+- the frozen Shadow allocation's `AVAILABLE` result, identity, Policy, Candidate, Channel, amount,
+  Session, known-at boundary, structure expiry, and coverage of the Entry deadline.
+
+The typed reunderwriting result freezes the Decision and Entry Session phases; Decision-to-Entry
+VRP, short-leg Delta, net Delta, body-distance, credit/payoff, reference-loss, and fee-burden
+metrics; each dimension's blockers; the exact observation boundaries; and the Entry result. Its
+result is one of:
 
 ```text
-SHADOW_ATOMIC_EVALUABLE       full-amount whole-product economics are known
-SHADOW_ATOMIC_NOT_EVALUABLE   complete facts show the declared estimate cannot be formed
-UNKNOWN                       required facts are missing or causally invalid
+SHADOW_ATOMIC_EVALUABLE          every reunderwriting dimension and route pass
+SHADOW_ATOMIC_NOT_EVALUABLE      complete facts show the declared estimate cannot be formed
+ENTRY_EVIDENCE_UNKNOWN           required facts are missing or causally invalid
+ENTRY_THESIS_EXPIRED             current phase or environment rejects new Entry
+ENTRY_STRUCTURE_LIMIT_BREACHED   the frozen four legs breach a current structure limit
+ENTRY_PRICE_DETERIORATED         current whole-product economics fail underwriting
+RISK_RESERVATION_INVALID         the frozen Shadow allocation no longer validates
 ```
 
 `SHADOW_ATOMIC_EVALUABLE` means the frozen four legs at the same ratios and full target amount can
-be priced by the declared Shadow model from one causal cut. It is not a Combo-executability or fill
-claim. It may open a `truth_layer=SHADOW_PROJECTION` Position for research.
+be priced by the declared Shadow model from one causal cut and still satisfy every Policy dimension
+above. It is not a Combo-executability or fill claim. It may open a
+`truth_layer=SHADOW_PROJECTION` Position for research.
 
 `SHADOW_ATOMIC_NOT_EVALUABLE` means complete facts prove that the declared Shadow model cannot
 price the whole target product; it does not prove a real Combo cannot trade. Missing, stale,
-discontinuous, or incoherent facts remain `UNKNOWN`. Public component-book failure, one evaluable
-side, or smaller-amount depth cannot create a partial acquisition, live short risk, leg remediation,
-or a Position.
+discontinuous, incoherent, or causally invalid facts remain provisional `ENTRY_EVIDENCE_UNKNOWN`
+until the Entry deadline and become terminal `ENTRY_EVIDENCE_UNKNOWN` at that deadline. A known
+Policy or allocation rejection is terminal immediately and is not relabelled as missing evidence.
+Public component-book failure, one evaluable side, or smaller-amount depth cannot create a partial
+acquisition, live short risk, leg remediation, or a Position.
 
 The estimate labels its pricing basis. A synthetic four-leg component-book estimate is distinct
 from an observed Combo book and neither reserves future liquidity.

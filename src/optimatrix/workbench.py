@@ -9,7 +9,7 @@ from pathlib import Path
 from optimatrix.channels import CHANNELS, ChannelId
 from optimatrix.lifecycle import TradeCase
 
-WORKBENCH_SCHEMA_VERSION = 3
+WORKBENCH_SCHEMA_VERSION = 4
 _ASSET_ROOT = Path(__file__).with_name("workbench_static")
 _STATIC_ASSETS = ("index.html", "styles.css", "app.js")
 
@@ -21,6 +21,7 @@ _TIMESTAMP_ROW_KEYS = frozenset(
         "ends_at",
         "entry_deadline",
         "entry_known_at",
+        "observation_known_at",
         "entry_observed_at",
         "event_state_known_at_ms",
         "expires_at",
@@ -177,6 +178,32 @@ _ENTRY_ECONOMICS_LABELS = {
     "entry_native_net_credit": "Frozen Case entry net credit (BTC)",
     "entry_index_price_usd": "Frozen Case entry index (USD)",
     "entry_vrp_proxy_ratio": "Entry VRP proxy ratio",
+}
+_ENTRY_REUNDERWRITING_LABELS = {
+    "entry_reunderwriting_id": "Entry reunderwriting identity",
+    "status": "Entry reunderwriting result",
+    "final": "Entry reunderwriting final",
+    "policy_id": "Frozen Policy identity",
+    "selected_structure_id": "Frozen Candidate identity",
+    "risk_allocation_id": "Frozen Shadow allocation identity",
+    "market_session_id": "Entry Market Session",
+    "decision_session_phase": "Decision Session phase",
+    "entry_session_phase": "Entry Session phase",
+    "observation_known_at": "Entry observation known at",
+    "known_at": "Reunderwriting evaluated at",
+    "reason": "Owning blocker",
+}
+_ENTRY_METRIC_LABELS = {
+    "vrp_proxy_ratio": "VRP proxy ratio",
+    "short_put_abs_delta": "Short Put absolute Delta",
+    "short_call_abs_delta": "Short Call absolute Delta",
+    "net_delta": "Four-leg net Delta",
+    "put_body_distance_sigma": "Put body distance",
+    "call_body_distance_sigma": "Call body distance",
+    "boundary_net_credit_usd": "Boundary net credit (USD)",
+    "credit_to_payoff_cap": "Credit / contractual payoff cap",
+    "boundary_reference_loss_usd": "Boundary reference loss (USD)",
+    "combo_fee_fraction_of_credit": "Combo fee / gross credit",
 }
 _EXIT_INTENT_LABELS = {
     "exit_intent_id": "Exit Intent identity",
@@ -443,6 +470,7 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
             "selected_structure": _empty_case_structure_projection(),
             "risk_allocation": [],
             "entry_evidence": [],
+            "entry_reunderwriting": _empty_entry_reunderwriting_projection(),
             "entry_economics": [],
             "exit_intent": [],
             "outcome": [],
@@ -471,6 +499,7 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
     selected_structure = _case_structure_projection(case)
     risk_allocation = _case_mapping(case, "risk_allocation", "TradeCase.risk_allocation")
     entry_pricing = _case_mapping(case, "entry_pricing", "TradeCase.entry_pricing")
+    entry_reunderwriting = _entry_reunderwriting_projection(case)
     entry_evidence = {
         "decision_record_id": getattr(case, "decision_record_id", None),
         "decision_policy_id": getattr(case, "decision_policy_id", None),
@@ -582,6 +611,7 @@ def build_case_projection(case: TradeCase | None) -> dict[str, object]:
             _RISK_ALLOCATION_LABELS,
         ),
         "entry_evidence": _display_rows(entry_evidence, _ENTRY_EVIDENCE_LABELS),
+        "entry_reunderwriting": entry_reunderwriting,
         "entry_economics": _display_rows(entry_economics, _ENTRY_ECONOMICS_LABELS),
         "exit_intent": _optional_display_rows(intent, _EXIT_INTENT_LABELS),
         "outcome": _optional_display_rows(outcome_values, _OUTCOME_LABELS),
@@ -734,6 +764,79 @@ def _case_display_projection(
         "gap_observed": case.gap_observed,
         "responsibility": responsibility,
         "timeline": timeline,
+    }
+
+
+def _empty_entry_reunderwriting_projection() -> dict[str, object]:
+    return {
+        "available": False,
+        "comparison": None,
+        "entry_vrp": None,
+        "summary": [],
+        "decision_metrics": [],
+        "entry_metrics": [],
+        "blockers": [],
+    }
+
+
+def _entry_reunderwriting_projection(case: TradeCase) -> dict[str, object]:
+    result = getattr(case, "entry_reunderwriting", None)
+    if result is None:
+        return _empty_entry_reunderwriting_projection()
+    summary = {
+        "entry_reunderwriting_id": result.identity,
+        "status": result.status.value,
+        "final": result.final,
+        "policy_id": result.policy_id,
+        "selected_structure_id": result.selected_structure_id,
+        "risk_allocation_id": result.risk_allocation_id,
+        "market_session_id": result.market_session_id,
+        "decision_session_phase": result.decision_session_phase.value,
+        "entry_session_phase": (
+            result.entry_session_phase.value if result.entry_session_phase is not None else None
+        ),
+        "observation_known_at": (
+            result.observation_known_at.isoformat()
+            if result.observation_known_at is not None
+            else None
+        ),
+        "known_at": result.known_at.isoformat(),
+        "reason": result.reason,
+    }
+    blocker_groups = (
+        ("EVIDENCE", result.evidence_blockers),
+        ("ENVIRONMENT", result.environment_blockers),
+        ("STRUCTURE", result.structure_blockers),
+        ("ECONOMICS", result.economics_blockers),
+        ("ALLOCATION", result.allocation_blockers),
+        ("ROUTE", result.route_blockers),
+    )
+    return {
+        "available": True,
+        "comparison": (
+            "VRP "
+            f"{_display_loose(result.decision_metrics.vrp_proxy_ratio)} → "
+            f"{_display_loose(result.entry_metrics.vrp_proxy_ratio)}, 净 Delta "
+            f"{_display_loose(result.decision_metrics.net_delta)} → "
+            f"{_display_loose(result.entry_metrics.net_delta)}, 边界净权利金 "
+            f"{_display_loose(result.decision_metrics.boundary_net_credit_usd)} → "
+            f"{_display_loose(result.entry_metrics.boundary_net_credit_usd)} USD"
+        ),
+        "entry_vrp": _display_loose(result.entry_metrics.vrp_proxy_ratio),
+        "summary": _display_rows(summary, _ENTRY_REUNDERWRITING_LABELS),
+        "decision_metrics": _display_rows(
+            result.decision_metrics.as_object(),
+            _ENTRY_METRIC_LABELS,
+        ),
+        "entry_metrics": _display_rows(
+            result.entry_metrics.as_object(),
+            _ENTRY_METRIC_LABELS,
+        ),
+        "blockers": [
+            {"dimension": dimension, "code": blocker, "tone": "danger"}
+            for dimension, blockers in blocker_groups
+            for blocker in blockers
+        ],
     }
 
 
@@ -1194,7 +1297,9 @@ def _structure_population_projection(
     return {
         "legal": "UNKNOWN",
         "price_evaluable": "UNKNOWN",
-        "policy_eligible": "0" if "NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE" in blockers else "UNKNOWN",
+        "policy_eligible": "0"
+        if "NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE" in blockers
+        else "UNKNOWN",
         "known": False,
     }
 

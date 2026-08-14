@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "policy_name": "BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1",
   "channel_id": "INVERSE_BTC_SHORT_VOL",
   "status": "PUBLIC_SHADOW_UNQUALIFIED",

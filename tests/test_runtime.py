@@ -1342,6 +1342,10 @@ def test_fixed_runtime_preflight_retries_without_consulting_host_wall(
 
     monkeypatch.setattr("optimatrix.runtime.datetime", ForbiddenHostWall)
     monkeypatch.setattr("optimatrix.runtime.preflight_public_clock", fake_preflight)
+    monkeypatch.setattr(
+        "optimatrix.runtime.AUTHORIZED_RUNTIME_POLICY_IDENTITY",
+        policy.identity,
+    )
     source = DeribitPublicRuntimeSource(policy=policy, event_state=EventState.NONE)
     runtime = BtcPublicShadowRuntime(
         root=tmp_path / "stable",
@@ -1974,7 +1978,7 @@ def test_authorized_root_rejects_nonproduction_source_before_creation(
     authorized_root = tmp_path / "authorized"
     monkeypatch.setattr("optimatrix.runtime.AUTHORIZED_RUNTIME_ROOT", authorized_root)
 
-    with pytest.raises(ValueError, match="production public source"):
+    with pytest.raises(ValueError, match="authorized frozen Policy"):
         BtcPublicShadowRuntime(
             root=authorized_root,
             policy=policy,

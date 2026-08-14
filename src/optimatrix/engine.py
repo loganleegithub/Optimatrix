@@ -10,7 +10,7 @@ from optimatrix.decision import (
     schedule_decision_windows,
 )
 from optimatrix.lifecycle import (
-    ShadowEntryEvaluation,
+    ShadowEntryReunderwriting,
     ShadowExitEvaluation,
     ShadowMonitorEvaluation,
     TradeCase,
@@ -89,7 +89,7 @@ class Btc0DteShortVolEngine:
         case: TradeCase,
         observation: MarketObservation | None,
         known_at: datetime,
-    ) -> tuple[TradeCase, ShadowEntryEvaluation]:
+    ) -> tuple[TradeCase, ShadowEntryReunderwriting]:
         updated, evaluation = evaluate_shadow_entry(
             case,
             observation=observation,

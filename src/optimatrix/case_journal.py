@@ -169,6 +169,8 @@ def _validate_transition(previous: TradeCase, current: TradeCase) -> None:
         "decision_window_id",
         "decision_policy_id",
         "decision_boundary",
+        "decision_session_phase",
+        "decision_vrp_proxy_ratio",
         "selected_structure_id",
         "selected_structure_json",
         "risk_allocation_id",
@@ -186,6 +188,7 @@ def _validate_transition(previous: TradeCase, current: TradeCase) -> None:
         or current.entry_observed_at != previous.entry_observed_at
         or current.entry_known_at != previous.entry_known_at
         or current.entry_reason != previous.entry_reason
+        or current.entry_reunderwriting_json != previous.entry_reunderwriting_json
         or current.entry_pricing_json != previous.entry_pricing_json
         or current.entry_native_net_credit != previous.entry_native_net_credit
         or current.entry_index_price_usd != previous.entry_index_price_usd

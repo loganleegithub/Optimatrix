@@ -486,6 +486,27 @@ def test_case_card_projects_frozen_structure_budget_and_causal_evidence_from_cas
     assert entry_pricing is not None
     assert economics_values["native_net_credit"] == entry_pricing["native_net_credit"]
     assert economics_values["entry_native_net_credit"] == str(trade_case.entry_native_net_credit)
+    reunderwriting = cast(Mapping[str, object], case_view["entry_reunderwriting"])
+    assert reunderwriting["available"] is True
+    summary_rows = cast(Sequence[Mapping[str, str]], reunderwriting["summary"])
+    summary_values = {row["key"]: row["value"] for row in summary_rows}
+    assert trade_case.entry_reunderwriting is not None
+    assert summary_values["entry_reunderwriting_id"] == trade_case.entry_reunderwriting.identity
+    assert summary_values["status"] == "SHADOW_ATOMIC_EVALUABLE"
+    decision_metric_rows = cast(
+        Sequence[Mapping[str, str]],
+        reunderwriting["decision_metrics"],
+    )
+    entry_metric_rows = cast(
+        Sequence[Mapping[str, str]],
+        reunderwriting["entry_metrics"],
+    )
+    decision_metrics = {row["key"]: row["value"] for row in decision_metric_rows}
+    entry_metrics = {row["key"]: row["value"] for row in entry_metric_rows}
+    assert decision_metrics["vrp_proxy_ratio"] == "1.5"
+    assert entry_metrics["vrp_proxy_ratio"] == "1.5"
+    assert reunderwriting["blockers"] == []
+    assert "VRP 1.5 → 1.5" in str(reunderwriting["comparison"])
 
     assert trade_case.exit_intent is not None
     exit_rows = cast(Sequence[Mapping[str, str]], case_view["exit_intent"])

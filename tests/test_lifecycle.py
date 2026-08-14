@@ -35,7 +35,13 @@ from optimatrix.market import (
 from optimatrix.observation_ledger import ObservationLedger
 from optimatrix.products import BTC
 from optimatrix.risk import ShadowCapacity
-from optimatrix.scenarios import base_chain, current_expiry, market_context
+from optimatrix.scenarios import (
+    all_joint_adversarial_chain,
+    base_chain,
+    current_expiry,
+    market_context,
+)
+from optimatrix.structure import select_btc_0dte_condor
 from optimatrix.workbench import build_case_projection
 
 
@@ -66,7 +72,15 @@ def _candidate(policy, tmp_path, *, decision_at=None):
     return engine, assessment.record, case
 
 
-def _observation(engine, at, *, event=EventState.NONE, quotes=None, evidence=None):
+def _observation(
+    engine,
+    at,
+    *,
+    event=EventState.NONE,
+    quotes=None,
+    evidence=None,
+    context_overrides=None,
+):
     bound_quotes = quotes or base_chain(expiry=current_expiry(at), observed_at=at)
     return engine.capture_observation(
         quotes=bound_quotes,
@@ -75,6 +89,7 @@ def _observation(engine, at, *, event=EventState.NONE, quotes=None, evidence=Non
             event=event,
             evidence=evidence,
             book_names=tuple(quote.instrument_name for quote in bound_quotes),
+            **(context_overrides or {}),
         ),
     )
 
@@ -97,6 +112,15 @@ def test_atomic_entry_creates_one_whole_product_shadow_position(policy, tmp_path
     _engine, case = _entered_case(policy, tmp_path)
 
     assert case.entry_final
+    assert case.entry_reunderwriting is not None
+    assert case.entry_reunderwriting.status is ShadowEntryStatus.SHADOW_ATOMIC_EVALUABLE
+    assert case.entry_reunderwriting.environment_blockers == ()
+    assert case.entry_reunderwriting.structure_blockers == ()
+    assert case.entry_reunderwriting.economics_blockers == ()
+    assert case.entry_reunderwriting.allocation_blockers == ()
+    assert case.entry_reunderwriting.route_blockers == ()
+    assert case.entry_reunderwriting.decision_metrics.vrp_proxy_ratio == Decimal("1.5")
+    assert case.entry_reunderwriting.entry_metrics.vrp_proxy_ratio == Decimal("1.5")
     assert case.position_id is not None
     assert case.position_state is PositionState.MONITORING
     assert case.entry_native_net_credit is not None
@@ -117,7 +141,7 @@ def test_entry_requires_frozen_legs_and_strictly_future_quote_boundaries(
         policy=policy,
         known_at=boundary_observation.known_at,
     )
-    assert evaluation.status is ShadowEntryStatus.UNKNOWN
+    assert evaluation.status is ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN
     assert evaluation.reason == "ENTRY_QUOTES_NOT_STRICTLY_FUTURE"
     assert unknown.position_id is None
 
@@ -135,7 +159,7 @@ def test_entry_requires_frozen_legs_and_strictly_future_quote_boundaries(
         policy=policy,
         known_at=altered_observation.known_at,
     )
-    assert evaluation.status is ShadowEntryStatus.UNKNOWN
+    assert evaluation.status is ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN
     assert evaluation.reason == "SELECTED_STRUCTURE_QUOTES_MISSING"
     assert unknown.position_id is None
 
@@ -155,7 +179,7 @@ def test_missing_leg_stays_unknown_and_terminalizes_without_position_at_deadline
         policy=policy,
         known_at=observation.known_at,
     )
-    assert first.status is ShadowEntryStatus.UNKNOWN
+    assert first.status is ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN
     assert not first.final
     assert provisional.position_id is None
 
@@ -165,7 +189,7 @@ def test_missing_leg_stays_unknown_and_terminalizes_without_position_at_deadline
         policy=policy,
         known_at=case.entry_deadline,
     )
-    assert final.status is ShadowEntryStatus.UNKNOWN
+    assert final.status is ShadowEntryStatus.ENTRY_EVIDENCE_UNKNOWN
     assert final.final
     assert terminal.position_id is None
     assert terminal.outcome is not None
@@ -196,6 +220,225 @@ def test_complete_but_shallow_entry_is_not_evaluable_and_never_partial(
     assert terminal.position_id is None
     assert terminal.outcome is not None
     assert terminal.outcome.eligibility.shadow_entry_evaluable.value is False
+
+
+def test_entry_reunderwriting_rejects_later_vrp_failure(policy, tmp_path) -> None:
+    engine, record, case = _candidate(policy, tmp_path)
+    entry_at = record.known_at + timedelta(seconds=30)
+    observation = _observation(
+        engine,
+        entry_at,
+        context_overrides={
+            "implied_variance": Decimal("0.00100"),
+            "realized_variance": Decimal("0.00160"),
+        },
+    )
+
+    rejected, result = evaluate_shadow_entry(
+        case,
+        observation=observation,
+        policy=policy,
+        known_at=observation.known_at,
+    )
+
+    assert result.status is ShadowEntryStatus.ENTRY_THESIS_EXPIRED
+    assert result.environment_blockers == ("SESSION_VRP_PROXY_BELOW_THRESHOLD",)
+    assert result.decision_metrics.vrp_proxy_ratio == Decimal("1.5")
+    assert result.entry_metrics.vrp_proxy_ratio == Decimal("0.625")
+    assert rejected.position_id is None
+    assert rejected.outcome is not None
+
+
+def test_entry_reunderwriting_rejects_phase_that_closed_after_decision(
+    policy,
+    tmp_path,
+) -> None:
+    decision_at = datetime(2026, 8, 13, 6, 28, tzinfo=UTC)
+    engine, record, case = _candidate(policy, tmp_path, decision_at=decision_at)
+    entry_at = record.known_at + timedelta(seconds=30)
+    observation = _observation(engine, entry_at)
+
+    rejected, result = evaluate_shadow_entry(
+        case,
+        observation=observation,
+        policy=policy,
+        known_at=observation.known_at,
+    )
+
+    assert result.status is ShadowEntryStatus.ENTRY_THESIS_EXPIRED
+    assert result.decision_session_phase.value == "LATE_THETA"
+    assert result.entry_session_phase is not None
+    assert result.entry_session_phase.value == "EXIT_ONLY"
+    assert result.environment_blockers == ("NEW_ENTRY_WINDOW_CLOSED",)
+    assert rejected.position_id is None
+
+
+@pytest.mark.parametrize(
+    ("instrument_suffix", "signed_delta", "expected_blocker"),
+    (
+        ("95000-P", Decimal("-0.30"), "SHORT_PUT_DELTA_OUTSIDE_POLICY"),
+        ("93000-P", Decimal("-0.30"), "NET_DELTA_TOO_DIRECTIONAL"),
+    ),
+)
+def test_entry_reunderwriting_rejects_current_delta_limits(
+    policy,
+    tmp_path,
+    instrument_suffix,
+    signed_delta,
+    expected_blocker,
+) -> None:
+    engine, record, case = _candidate(policy, tmp_path)
+    entry_at = record.known_at + timedelta(seconds=30)
+    quotes = tuple(
+        replace(quote, signed_delta=signed_delta)
+        if quote.instrument_name.endswith(instrument_suffix)
+        else quote
+        for quote in base_chain(expiry=current_expiry(entry_at), observed_at=entry_at)
+    )
+    observation = _observation(engine, entry_at, quotes=quotes)
+
+    rejected, result = evaluate_shadow_entry(
+        case,
+        observation=observation,
+        policy=policy,
+        known_at=observation.known_at,
+    )
+
+    assert result.status is ShadowEntryStatus.ENTRY_STRUCTURE_LIMIT_BREACHED
+    assert expected_blocker in result.structure_blockers
+    assert rejected.position_id is None
+
+
+def test_entry_reunderwriting_rejects_current_body_distance(policy, tmp_path) -> None:
+    engine, record, case = _candidate(policy, tmp_path)
+    entry_at = record.known_at + timedelta(seconds=30)
+    observation = _observation(
+        engine,
+        entry_at,
+        context_overrides={
+            "implied_variance": Decimal("0.015"),
+            "realized_variance": Decimal("0.01"),
+        },
+    )
+
+    rejected, result = evaluate_shadow_entry(
+        case,
+        observation=observation,
+        policy=policy,
+        known_at=observation.known_at,
+    )
+
+    assert result.status is ShadowEntryStatus.ENTRY_STRUCTURE_LIMIT_BREACHED
+    assert result.structure_blockers == ("BODY_DISTANCE_TOO_SMALL",)
+    assert result.entry_metrics.put_body_distance_sigma is not None
+    assert result.entry_metrics.put_body_distance_sigma < (
+        policy.structure.minimum_body_distance_sigma
+    )
+    assert rejected.position_id is None
+
+
+def test_entry_reunderwriting_rejects_credit_payoff_and_fee_deterioration(
+    policy,
+    tmp_path,
+) -> None:
+    engine, record, case = _candidate(policy, tmp_path)
+    entry_at = record.known_at + timedelta(seconds=30)
+    quotes = tuple(
+        replace(quote, bid=(PriceLevel(Decimal("0.0016"), Decimal("1")),))
+        if quote.instrument_name.endswith(("95000-P", "105000-C"))
+        else quote
+        for quote in base_chain(expiry=current_expiry(entry_at), observed_at=entry_at)
+    )
+    observation = _observation(engine, entry_at, quotes=quotes)
+
+    rejected, result = evaluate_shadow_entry(
+        case,
+        observation=observation,
+        policy=policy,
+        known_at=observation.known_at,
+    )
+
+    assert result.status is ShadowEntryStatus.ENTRY_PRICE_DETERIORATED
+    assert result.economics_blockers == (
+        "BOUNDARY_NET_CREDIT_TOO_SMALL",
+        "CREDIT_TO_PAYOFF_CAP_TOO_SMALL",
+        "COMBO_FEE_BURDEN_TOO_HIGH",
+    )
+    assert result.entry_metrics.boundary_net_credit_usd == Decimal("6.25000000")
+    assert rejected.position_id is None
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected_blocker"),
+    (
+        ("market_session_id", "FOREIGN_SESSION", "ALLOCATION_SESSION_MISMATCH"),
+        ("expires_at", "2026-08-12T18:16:30+00:00", "ALLOCATION_EXPIRED_AT_ENTRY"),
+    ),
+)
+def test_entry_reunderwriting_rejects_allocation_mismatch_or_expiry(
+    policy,
+    tmp_path,
+    field,
+    value,
+    expected_blocker,
+) -> None:
+    engine, record, case = _candidate(policy, tmp_path)
+    allocation = dict(case.risk_allocation)
+    allocation[field] = value
+    altered_case = replace(
+        case,
+        risk_allocation_json=json.dumps(
+            allocation,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    )
+    entry_at = record.known_at + timedelta(seconds=30)
+    observation = _observation(engine, entry_at)
+
+    rejected, result = evaluate_shadow_entry(
+        altered_case,
+        observation=observation,
+        policy=policy,
+        known_at=observation.known_at,
+    )
+
+    assert result.status is ShadowEntryStatus.RISK_RESERVATION_INVALID
+    assert expected_blocker in result.allocation_blockers
+    assert "ALLOCATION_IDENTITY_MISMATCH" in result.allocation_blockers
+    assert rejected.position_id is None
+
+
+def test_entry_never_reselects_a_better_structure(policy, tmp_path) -> None:
+    engine, record, case = _candidate(policy, tmp_path)
+    entry_at = record.known_at + timedelta(seconds=30)
+    quotes = tuple(
+        replace(quote, signed_delta=Decimal("-0.30"))
+        if quote.instrument_name.endswith("95000-P")
+        else quote
+        for quote in all_joint_adversarial_chain(
+            expiry=current_expiry(entry_at),
+            observed_at=entry_at,
+        )
+    )
+    observation = _observation(engine, entry_at, quotes=quotes)
+    replacement = select_btc_0dte_condor(observation=observation, policy=policy)
+    assert replacement.selected is not None
+    assert replacement.selected.identity != case.selected_structure_id
+
+    rejected, result = evaluate_shadow_entry(
+        case,
+        observation=observation,
+        policy=policy,
+        known_at=observation.known_at,
+    )
+
+    assert result.selected_structure_id == case.selected_structure_id
+    assert result.status is ShadowEntryStatus.ENTRY_STRUCTURE_LIMIT_BREACHED
+    assert result.structure_blockers == ("SHORT_PUT_DELTA_OUTSIDE_POLICY",)
+    assert rejected.position_id is None
 
 
 def test_data_gap_preserves_position_and_cannot_create_exit_intent(policy, tmp_path) -> None:
@@ -466,14 +709,33 @@ def test_case_journal_is_idempotent_recovers_prefix_and_rejects_tampering(
     assert journal.append(case)
     assert not journal.append(case)
     entry_at = record.known_at + timedelta(seconds=30)
-    entered, _ = engine.evaluate_entry(
+    entered, entry_result = engine.evaluate_entry(
         journal=journal,
         case=case,
         observation=_observation(engine, entry_at),
         known_at=entry_at,
     )
     assert journal.recover(case.identity) == entered
+    assert journal.recover(case.identity).entry_reunderwriting == entry_result
     assert len(journal.read(case.identity)) == 2
+
+    changed_result = replace(
+        entry_result,
+        known_at=entry_result.known_at + timedelta(microseconds=1),
+    )
+    changed_case = replace(
+        entered,
+        entry_known_at=changed_result.known_at,
+        entry_reunderwriting_json=json.dumps(
+            changed_result.as_object(),
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    )
+    with pytest.raises(ValueError, match="final Entry truth"):
+        journal.append(changed_case)
 
     path = journal.path_for(case.identity)
     with path.open("ab") as handle:

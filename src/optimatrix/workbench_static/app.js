@@ -2,7 +2,7 @@
   'use strict';
 
   const workbench = window.OPTIMATRIX_WORKBENCH;
-  if (!workbench || workbench.schema_version !== 3) {
+  if (!workbench || workbench.schema_version !== 4) {
     document.body.textContent = 'Workbench 数据缺失或版本不受支持。';
     return;
   }
@@ -16,6 +16,7 @@
     cases: (document.cases || []).map(item => ({
       tradeCaseId: item.trade_case_id,
       entryStatus: item.entry_status,
+      entryReunderwritingId: item.entry_reunderwriting?.summary?.find(row => row.key === 'entry_reunderwriting_id')?.value,
       positionState: item.position_state,
       terminalAt: item.display?.terminal_at,
       gapObserved: item.display?.gap_observed
@@ -116,6 +117,11 @@
     TAKE_PROFIT: '止盈',
     SHADOW_ATOMIC_EVALUABLE: '完整组合可估价',
     SHADOW_ATOMIC_NOT_EVALUABLE: '完整事实证明无法估价',
+    ENTRY_EVIDENCE_UNKNOWN: '入场证据未知',
+    ENTRY_THESIS_EXPIRED: '入场论点已失效',
+    ENTRY_STRUCTURE_LIMIT_BREACHED: '入场结构限制已突破',
+    ENTRY_PRICE_DETERIORATED: '入场经济性已恶化',
+    RISK_RESERVATION_INVALID: '冻结研究预算无效',
     MONITORING: '管理中',
     EXIT_INTENT_FROZEN: '退出意图已冻结',
     TERMINAL: '终局已冻结',
@@ -481,10 +487,15 @@
     target.replaceChildren();
     const context = valueMap(workbench.context);
     const allocation = valueMap(caseView.risk_allocation);
+    const reunderwriting = caseView.entry_reunderwriting || {};
+    const reunderwritingSummary = valueMap(reunderwriting.summary);
     const blocks = [
       ['为什么发现', `本窗口状态为 ${translate(workbench.projection.state)}；IV/RV、跳跃占比与事件状态都是具名公开代理，不是 Edge 或预测。`],
       ['为什么选它', `四腿作为一个不可拆的铁鹰整体冻结。短腿、翼宽与 Combo 费都属于同一候选，不能拆成两笔 Vertical。`],
-      ['为什么允许打开 Case', `Shadow 风险预算结果为 ${translate(allocation.result)}；市场上下文为 ${translate(context.knowledge)}。这是研究名义限额，不是保证金或资本预留。`]
+      ['为什么允许打开 Case', `Shadow 风险预算结果为 ${translate(allocation.result)}；市场上下文为 ${translate(context.knowledge)}。这是研究名义限额，不是保证金或资本预留。`],
+      ['Entry 二次承销', reunderwriting.available === false
+        ? '尚未取得严格更晚的 Entry 证据。'
+        : `结果为 ${translate(reunderwritingSummary.status)}；${reunderwriting.comparison || '指标对比未知'}。冻结四腿与预算未被替换。`]
     ];
     blocks.forEach(([title, copy]) => {
       const block = create('article', 'story-block');
@@ -498,9 +509,11 @@
     const display = caseView.display;
     const entry = valueMap(caseView.entry_evidence);
     const outcome = valueMap(caseView.outcome);
+    const entryReunderwriting = caseView.entry_reunderwriting || {};
     const summary = byId('management-summary');
     summary.replaceChildren(
       metricItem('入场结果', translate(display.entry_status)),
+      metricItem('Entry VRP', entryReunderwriting.entry_vrp || '未知'),
       metricItem('Position 状态', translate(display.position_state), display.tone),
       metricItem('最后生命周期观察', formatTimestamp(valueMap(caseView.facts).last_observed_at)),
       metricItem('首次退出原因', translate(display.exit_reason)),
