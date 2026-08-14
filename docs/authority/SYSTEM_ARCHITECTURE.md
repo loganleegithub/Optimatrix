@@ -28,6 +28,7 @@ channels.py          fixed Channel descriptors
 session.py           Deribit Session and phase classification
 market.py            typed market facts, settlement facts, and evidence validation
 deribit_snapshot.py  bounded public-response translation
+deribit_websocket.py BTC-only public incremental cache, continuity, watermark, and REST resync
 pricing.py           neutral depth projections plus fee, payoff, valuation, and settlement math
 policy.py            fixed launch hypotheses and causal budgets
 structure.py         BTC 0DTE whole-four-leg discovery and ranking
@@ -55,7 +56,9 @@ are never selected from the host wall clock or a browser timezone. Deribit sourc
 when a market fact occurred. A distinct `known_at` states when that fact was causally available to
 Optimatrix, but it is mapped into the same Deribit UTC clock domain from validated response timing.
 Keeping those two meanings separate prevents look-ahead; it does not create a second business
-clock.
+clock. Public WebSocket notifications have no HTTP response envelope, so their receipt boundary is
+the conservative latest value of that already validated and monotonically projected Deribit clock
+at frame receipt. This projection does not turn local elapsed time into a market timestamp.
 
 Elapsed request time, retry delay, and process sleep use a suspend-aware monotonic clock and are
 never serialized as market facts. On the authorized macOS runtime that elapsed clock must continue
@@ -71,6 +74,16 @@ change an identity or backend calculation.
 `TradingRisk` describes known market or Position exposure. Missing or unhealthy data produces
 `UNKNOWN` or a Gap; it cannot synthesize a market-risk trigger, Entry, Position, close, or terminal
 fact. Only the owning contract may define how a known risk fact changes a Decision or Position.
+
+The production forward-observation owner is one BTC-specific in-memory public WebSocket cache.
+Each option book verifies its own ordered change chain; cross-instrument notifications remain
+asynchronous and become one immutable cut only when the BTC index and every requested book/ticker
+pair share the current connection epoch and satisfy the Policy's source and receive watermarks.
+Disconnect or sequence loss is an exact Gap. A bounded REST book snapshot may seed recovery, but
+the instrument cannot rejoin the incremental cut until a later matching WebSocket continuation or
+new full snapshot proves continuity. HTTP remains the clock, Session metadata, initial index-history
+recovery seed, official settlement, and explicit resynchronization path; it is not the continuous
+Runtime market-cut path. The cache is transient and creates no new durable record owner.
 
 ## Record boundaries
 

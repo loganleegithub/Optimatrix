@@ -29,6 +29,7 @@ from optimatrix.market import (
     ImpliedVarianceMethod,
     MarketContext,
     MarketContextEvidence,
+    MarketDataSource,
     OptionBookUnavailableReason,
     OptionQuote,
     OptionType,
@@ -280,6 +281,37 @@ class PublicRpcResponse:
 
 
 @dataclass(frozen=True)
+class PublicStreamResponse:
+    """One immutable result assembled from a validated WebSocket continuity epoch."""
+
+    result: object
+    source_timestamp_min_ms: int
+    source_timestamp_max_ms: int
+    received_timestamp_min_ms: int
+    received_timestamp_max_ms: int
+    continuity_epoch: int
+
+    def __post_init__(self) -> None:
+        for value, field_name in (
+            (self.source_timestamp_min_ms, "source_timestamp_min_ms"),
+            (self.source_timestamp_max_ms, "source_timestamp_max_ms"),
+            (self.received_timestamp_min_ms, "received_timestamp_min_ms"),
+            (self.received_timestamp_max_ms, "received_timestamp_max_ms"),
+            (self.continuity_epoch, "continuity_epoch"),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+        if self.continuity_epoch == 0:
+            raise ValueError("stream continuity_epoch must be positive")
+        if self.source_timestamp_min_ms > self.source_timestamp_max_ms:
+            raise ValueError("stream source boundaries are invalid")
+        if self.received_timestamp_min_ms > self.received_timestamp_max_ms:
+            raise ValueError("stream receipt boundaries are invalid")
+        if self.source_timestamp_max_ms > self.received_timestamp_max_ms:
+            raise ValueError("stream source boundary follows receipt")
+
+
+@dataclass(frozen=True)
 class PublicClockPreflight:
     server_time_ms: int
     request_round_trip_ms: int
@@ -362,6 +394,11 @@ class PublicSnapshotEvaluation:
                 "event_state_source": (
                     self.context.evidence.event_state_source.value
                     if self.context.evidence.event_state_source is not None
+                    else None
+                ),
+                "market_data_source": (
+                    self.context.evidence.market_data_source.value
+                    if self.context.evidence.market_data_source is not None
                     else None
                 ),
                 **self.methodology.as_object(),
@@ -491,6 +528,7 @@ class PublicSnapshotEvaluation:
                     "gamma": str(quote.gamma),
                     "source_timestamp_ms": quote.source_timestamp_ms,
                     "received_timestamp_ms": quote.received_timestamp_ms,
+                    "continuity_epoch": quote.continuity_epoch,
                     "delivery_fee_exempt": quote.delivery_fee_exempt,
                 }
                 for quote in self.quotes
@@ -663,6 +701,44 @@ def fetch_btc_index_history(
     return history
 
 
+def fetch_btc_option_metadata(
+    client: PublicRpcClient,
+    *,
+    session_end: datetime,
+) -> tuple[dict[str, object], ...]:
+    """Read and validate the active BTC option metadata for one exact Session expiry."""
+
+    response = client.call(
+        "public/get_instruments",
+        {"currency": BTC.public_currency, "kind": "option", "expired": False},
+    )
+    return _instrument_metadata(
+        _rpc_result(response),
+        session_end_ms=_datetime_to_floor_ms(_utc(session_end)),
+    )
+
+
+def shortlist_btc_option_metadata(
+    instruments: tuple[dict[str, object], ...],
+    *,
+    index_price: Decimal,
+    maximum_books: int,
+    required_instrument_names: Sequence[str] = (),
+) -> tuple[dict[str, object], ...]:
+    """Apply the production evaluator's exact bounded BTC strike shortlist."""
+
+    required_names = _required_instrument_names(
+        required_instrument_names,
+        maximum_books=maximum_books,
+    )
+    return _shortlist_instruments(
+        instruments,
+        index_price=index_price,
+        maximum_books=maximum_books,
+        required_instrument_names=required_names,
+    )
+
+
 def _fetch_btc_index_history_with_boundary(
     client: PublicRpcClient,
     *,
@@ -802,6 +878,8 @@ def evaluate_live_btc_snapshot(
     depth: int = 20,
     target_window: DecisionWindow | None = None,
     required_instrument_names: Sequence[str] = (),
+    market_data_source: MarketDataSource = MarketDataSource.DERIBIT_PUBLIC_HTTP_BOUNDED_SNAPSHOT,
+    book_fetch_mode: str | None = None,
 ) -> PublicSnapshotEvaluation:
     """Evaluate one current-session public snapshot without opening a Case."""
 
@@ -898,7 +976,14 @@ def evaluate_live_btc_snapshot(
         delta_method="DERIBIT_ORDER_BOOK_GREEKS",
         concentration_method=("SHORTLISTED_PUBLIC_OPEN_INTEREST_TIMES_ABSOLUTE_GAMMA"),
         index_history_cadence_ms=history_cadence_ms,
-        book_fetch_mode="BOUNDED_CONCURRENT_PUBLIC_GET_ORDER_BOOK",
+        book_fetch_mode=(
+            book_fetch_mode
+            or (
+                "PUBLIC_WEBSOCKET_BOOK_TICKER_100MS_INCREMENTAL"
+                if market_data_source is MarketDataSource.DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1
+                else "BOUNDED_CONCURRENT_PUBLIC_GET_ORDER_BOOK"
+            )
+        ),
     )
     input_response_boundaries_ms = (
         _response_known_at_ms(index_response, fallback_ms=request_boundary_ms),
@@ -906,11 +991,28 @@ def evaluate_live_btc_snapshot(
         history_known_at_ms,
         *book_response_boundaries_ms,
     )
-    current_market_source_boundaries_ms = (
-        _response_source_upper_bound_ms(index_response, fallback_ms=request_boundary_ms),
-        _response_source_upper_bound_ms(instrument_response, fallback_ms=request_boundary_ms),
-        *book_source_boundaries_ms,
-    )
+    if market_data_source is MarketDataSource.DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1:
+        current_market_source_boundaries_ms = (
+            *_response_source_boundaries_ms(
+                index_response,
+                fallback_ms=request_boundary_ms,
+            ),
+            *book_source_boundaries_ms,
+        )
+        current_market_response_boundaries_ms = (
+            *_response_received_boundaries_ms(
+                index_response,
+                fallback_ms=request_boundary_ms,
+            ),
+            *book_response_boundaries_ms,
+        )
+    else:
+        current_market_source_boundaries_ms = (
+            _response_source_upper_bound_ms(index_response, fallback_ms=request_boundary_ms),
+            _response_source_upper_bound_ms(instrument_response, fallback_ms=request_boundary_ms),
+            *book_source_boundaries_ms,
+        )
+        current_market_response_boundaries_ms = input_response_boundaries_ms
     known_at_ms = max(
         request_boundary_ms,
         *input_response_boundaries_ms,
@@ -943,14 +1045,15 @@ def evaluate_live_btc_snapshot(
             ImpliedVarianceMethod.NEAREST_ATM_CALL_PUT_MARK_IV_SQUARED_TIMES_RISK_HORIZON
         ),
         event_state_source=EventStateSource.B3_RUNTIME_FIXED_NONE_NO_LIVE_EVENT_SOURCE,
+        market_data_source=market_data_source,
         required_history_start_ms=history[-1][0] - horizon_minutes * 60_000,
         history_coverage_start_ms=history[0][0],
         history_coverage_end_ms=history[-1][0],
         history_cadence_ms=history_cadence_ms,
         market_source_min_ms=min(current_market_source_boundaries_ms),
         market_source_max_ms=max(current_market_source_boundaries_ms),
-        market_received_min_ms=min(input_response_boundaries_ms),
-        market_received_max_ms=max(input_response_boundaries_ms),
+        market_received_min_ms=min(current_market_response_boundaries_ms),
+        market_received_max_ms=max(current_market_response_boundaries_ms),
         event_state_known_at_ms=request_boundary_ms,
         maximum_market_age_ms=policy.observation.maximum_age_ms,
         requested_books=requested_books,
@@ -1032,23 +1135,23 @@ def _fetch_books(
     source_boundaries_ms: list[int] = []
     response_boundaries_ms: list[int] = []
     unbounded_request_failures: list[str] = []
+    completed_books = 0
 
     def fetch_one(
         item: dict[str, object],
-    ) -> tuple[dict[str, object], object, int, int | None]:
+    ) -> tuple[dict[str, object], object, int, int | None, object]:
         response = client.call(
             "public/get_order_book",
             {"instrument_name": item["instrument_name"], "depth": depth},
         )
-        received_at_ms = (
-            response.causal_received_at_ms
-            if isinstance(response, PublicRpcResponse)
-            else fallback_received_at_ms
+        received_at_ms = _response_known_at_ms(
+            response,
+            fallback_ms=fallback_received_at_ms,
         )
         server_sent_at_us = (
             response.server_sent_at_us if isinstance(response, PublicRpcResponse) else None
         )
-        return item, _rpc_result(response), received_at_ms, server_sent_at_us
+        return item, _rpc_result(response), received_at_ms, server_sent_at_us, response
 
     workers = min(32, max(1, len(metadata)))
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="deribit-book") as executor:
@@ -1062,6 +1165,7 @@ def _fetch_books(
                     raw_result,
                     received_timestamp_ms,
                     server_sent_at_us,
+                    raw_response,
                 ) = future.result()
             except (DeribitSourceError, OSError, ValueError) as exc:
                 warning = f"BOOK_REQUEST_FAILED:{instrument_name}:{type(exc).__name__}"
@@ -1071,6 +1175,7 @@ def _fetch_books(
                     unbounded_request_failures.append(warning)
                     continue
                 response_boundaries_ms.append(failure_known_at_ms)
+                completed_books += 1
                 unavailable_books.append(
                     _unavailable_option_book(
                         item,
@@ -1078,7 +1183,13 @@ def _fetch_books(
                     )
                 )
                 continue
-            response_boundaries_ms.append(received_timestamp_ms)
+            response_boundaries_ms.extend(
+                _response_received_boundaries_ms(
+                    raw_response,
+                    fallback_ms=received_timestamp_ms,
+                )
+            )
+            completed_books += 1
             try:
                 result = _mapping(raw_result, "order book result")
                 source_boundary_ms = _book_source_upper_bound_ms(
@@ -1091,15 +1202,16 @@ def _fetch_books(
                     result=result,
                     received_timestamp_ms=received_timestamp_ms,
                     server_sent_at_us=server_sent_at_us,
+                    continuity_epoch=_response_continuity_epoch(raw_response),
                 )
             except BookCausalError:
                 raise
             except (DeribitSourceError, ValueError) as exc:
                 warnings.append(f"BOOK_RESPONSE_INVALID:{instrument_name}:{type(exc).__name__}")
-                source_boundaries_ms.append(
-                    _book_response_source_upper_bound_ms(
+                source_boundaries_ms.extend(
+                    _response_source_boundaries_ms(
+                        raw_response,
                         fallback_ms=fallback_received_at_ms,
-                        server_sent_at_us=server_sent_at_us,
                     )
                 )
                 unavailable_books.append(
@@ -1109,7 +1221,15 @@ def _fetch_books(
                     )
                 )
                 continue
-            source_boundaries_ms.append(source_boundary_ms)
+            if isinstance(raw_response, PublicStreamResponse):
+                source_boundaries_ms.extend(
+                    (
+                        raw_response.source_timestamp_min_ms,
+                        raw_response.source_timestamp_max_ms,
+                    )
+                )
+            else:
+                source_boundaries_ms.append(source_boundary_ms)
             warnings.extend(f"{instrument_name}:{warning}" for warning in quote_warnings)
             if quote is not None:
                 quotes.append(quote)
@@ -1130,7 +1250,7 @@ def _fetch_books(
         )
     quotes.sort(key=lambda quote: (quote.strike, quote.option_type.value, quote.instrument_name))
     unavailable_books.sort(key=lambda book: book.instrument_name)
-    if len(response_boundaries_ms) != len(metadata):
+    if completed_books != len(metadata):
         raise DeribitSourceError("requested option book response boundaries are incomplete")
     return (
         quotes,
@@ -1164,14 +1284,6 @@ def _client_clock_known_at_ms(client: PublicRpcClient) -> int | None:
     if not isinstance(clock, DeribitClock) or not clock.initialized:
         return None
     return _datetime_to_ceil_ms(clock.read().latest_at)
-
-
-def _book_response_source_upper_bound_ms(
-    *,
-    fallback_ms: int,
-    server_sent_at_us: int | None,
-) -> int:
-    return _ceil_div(server_sent_at_us, 1_000) if server_sent_at_us is not None else fallback_ms
 
 
 def _instrument_metadata(value: object, *, session_end_ms: int) -> tuple[dict[str, object], ...]:
@@ -1274,6 +1386,7 @@ def _quote_from_public_book(
     result: Mapping[str, object],
     received_timestamp_ms: int,
     server_sent_at_us: int | None = None,
+    continuity_epoch: int = 1,
 ) -> tuple[OptionQuote | None, Decimal | None, tuple[str, ...]]:
     warnings: list[str] = []
     instrument_name = _text(result.get("instrument_name"), "book.instrument_name")
@@ -1314,7 +1427,7 @@ def _quote_from_public_book(
         ),
         source_timestamp_ms=source_timestamp_ms,
         received_timestamp_ms=received_timestamp_ms,
-        continuity_epoch=1,
+        continuity_epoch=continuity_epoch,
         delivery_fee_exempt=settlement_period == "day",
         open_interest=max(
             Decimal(0),
@@ -1608,19 +1721,43 @@ def _validated_public_rpc_response(
 
 
 def _rpc_result(value: object) -> object:
-    return value.result if isinstance(value, PublicRpcResponse) else value
+    return value.result if isinstance(value, (PublicRpcResponse, PublicStreamResponse)) else value
 
 
 def _response_known_at_ms(value: object, *, fallback_ms: int) -> int:
-    return (
-        max(fallback_ms, value.causal_received_at_ms)
-        if isinstance(value, PublicRpcResponse)
-        else fallback_ms
-    )
+    if isinstance(value, PublicRpcResponse):
+        return max(fallback_ms, value.causal_received_at_ms)
+    if isinstance(value, PublicStreamResponse):
+        return max(fallback_ms, value.received_timestamp_max_ms)
+    return fallback_ms
+
+
+def _response_received_boundaries_ms(value: object, *, fallback_ms: int) -> tuple[int, int]:
+    if isinstance(value, PublicRpcResponse):
+        return (value.causal_received_at_ms, value.causal_received_at_ms)
+    if isinstance(value, PublicStreamResponse):
+        return (value.received_timestamp_min_ms, value.received_timestamp_max_ms)
+    return (fallback_ms, fallback_ms)
 
 
 def _response_source_upper_bound_ms(value: object, *, fallback_ms: int) -> int:
-    return value.server_sent_at_ms if isinstance(value, PublicRpcResponse) else fallback_ms
+    if isinstance(value, PublicRpcResponse):
+        return value.server_sent_at_ms
+    if isinstance(value, PublicStreamResponse):
+        return value.source_timestamp_max_ms
+    return fallback_ms
+
+
+def _response_source_boundaries_ms(value: object, *, fallback_ms: int) -> tuple[int, int]:
+    if isinstance(value, PublicRpcResponse):
+        return (value.server_sent_at_ms, value.server_sent_at_ms)
+    if isinstance(value, PublicStreamResponse):
+        return (value.source_timestamp_min_ms, value.source_timestamp_max_ms)
+    return (fallback_ms, fallback_ms)
+
+
+def _response_continuity_epoch(value: object) -> int:
+    return value.continuity_epoch if isinstance(value, PublicStreamResponse) else 1
 
 
 def _book_source_upper_bound_ms(

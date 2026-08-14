@@ -15,6 +15,7 @@ from optimatrix.market import (
     ImpliedVarianceMethod,
     MarketContext,
     MarketContextEvidence,
+    MarketDataSource,
     OptionBookUnavailableReason,
     OptionQuote,
     OptionType,
@@ -177,7 +178,7 @@ class MarketObservation:
     @property
     def identity(self) -> str:
         return canonical_identity(
-            "MarketObservationV2",
+            "MarketObservationV3",
             self.channel_id,
             self.data_health_policy_id,
             self.observed_at,
@@ -683,6 +684,9 @@ def _market_context_evidence_object(evidence: MarketContextEvidence) -> dict[str
         "event_state_source": (
             evidence.event_state_source.value if evidence.event_state_source is not None else None
         ),
+        "market_data_source": (
+            evidence.market_data_source.value if evidence.market_data_source is not None else None
+        ),
         "required_history_start_ms": evidence.required_history_start_ms,
         "history_coverage_start_ms": evidence.history_coverage_start_ms,
         "history_coverage_end_ms": evidence.history_coverage_end_ms,
@@ -707,6 +711,7 @@ def _market_context_evidence_from_object(value: object) -> MarketContextEvidence
             "realized_variance_method",
             "implied_variance_method",
             "event_state_source",
+            "market_data_source",
             "required_history_start_ms",
             "history_coverage_start_ms",
             "history_coverage_end_ms",
@@ -726,6 +731,7 @@ def _market_context_evidence_from_object(value: object) -> MarketContextEvidence
     realized_method = _optional_text(item, "realized_variance_method")
     implied_method = _optional_text(item, "implied_variance_method")
     event_source = _optional_text(item, "event_state_source")
+    market_data_source = _optional_text(item, "market_data_source")
     return MarketContextEvidence(
         realized_variance_method=(
             RealizedVarianceMethod(realized_method) if realized_method is not None else None
@@ -734,6 +740,9 @@ def _market_context_evidence_from_object(value: object) -> MarketContextEvidence
             ImpliedVarianceMethod(implied_method) if implied_method is not None else None
         ),
         event_state_source=(EventStateSource(event_source) if event_source is not None else None),
+        market_data_source=(
+            MarketDataSource(market_data_source) if market_data_source is not None else None
+        ),
         required_history_start_ms=_optional_integer(item, "required_history_start_ms"),
         history_coverage_start_ms=_optional_integer(item, "history_coverage_start_ms"),
         history_coverage_end_ms=_optional_integer(item, "history_coverage_end_ms"),

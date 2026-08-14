@@ -147,6 +147,12 @@ class EventStateSource(StrEnum):
     B3_RUNTIME_FIXED_NONE_NO_LIVE_EVENT_SOURCE = "B3_RUNTIME_FIXED_NONE_NO_LIVE_EVENT_SOURCE"
 
 
+class MarketDataSource(StrEnum):
+    DETERMINISTIC_SCENARIO = "DETERMINISTIC_SCENARIO"
+    DERIBIT_PUBLIC_HTTP_BOUNDED_SNAPSHOT = "DERIBIT_PUBLIC_HTTP_BOUNDED_SNAPSHOT"
+    DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1 = "DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1"
+
+
 @dataclass(frozen=True)
 class MarketContextEvidence:
     """Transient proof that the numeric MarketContext has a causal public-data basis."""
@@ -154,6 +160,7 @@ class MarketContextEvidence:
     realized_variance_method: RealizedVarianceMethod | None
     implied_variance_method: ImpliedVarianceMethod | None
     event_state_source: EventStateSource | None
+    market_data_source: MarketDataSource | None
     required_history_start_ms: int | None
     history_coverage_start_ms: int | None
     history_coverage_end_ms: int | None
@@ -174,6 +181,7 @@ class MarketContextEvidence:
             realized_variance_method=None,
             implied_variance_method=None,
             event_state_source=None,
+            market_data_source=None,
             required_history_start_ms=None,
             history_coverage_start_ms=None,
             history_coverage_end_ms=None,
@@ -228,6 +236,7 @@ class MarketContextEvidence:
             (self.realized_variance_method, "REALIZED_VARIANCE_METHOD_UNKNOWN"),
             (self.implied_variance_method, "IMPLIED_VARIANCE_METHOD_UNKNOWN"),
             (self.event_state_source, "EVENT_STATE_SOURCE_UNKNOWN"),
+            (self.market_data_source, "MARKET_DATA_SOURCE_UNKNOWN"),
         )
         blockers.extend(code for value, code in required_text if value is None)
         required_boundary = (

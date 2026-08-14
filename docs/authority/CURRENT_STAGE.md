@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 OUTCOME EXPLANATORY PATH — CLOSED
+**Status:** B3 WEBSOCKET FORWARD OBSERVATION — CLOSED
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -94,17 +94,31 @@ is retained without migration or mutation and remains ineligible for the current
 - A strictly later whole-product Shadow exit remains economically terminal and releases its exact
   reserve immediately. Only the matching official settlement may append one hold-counterfactual
   enrichment; it cannot rewrite exit economics, primary reason, path, terminality, or risk state.
-- Runtime root schema 2, `TradeCaseSnapshotV3`, `ShadowExplanationPathV2`, and Workbench schema 7
-  reject the former thin explanatory shape rather than migrating the frozen prior root. Workbench
-  exposes Candidate-local readiness plus the Decision-to-Outcome path, extrema, Gaps, alternatives,
-  fees, and counterfactuals without inventing missing facts.
-- The complete repository gate passes: `214` tests and `8` deterministic business scenarios. This
+- Runtime root schema 3, `MarketObservationV3`, `TradeCaseSnapshotV3`,
+  `ShadowExplanationPathV2`, and Workbench schema 7 reject prior source or explanatory shapes rather
+  than migrating the frozen prior root. Workbench exposes market-source identity, Candidate-local
+  readiness, the Decision-to-Outcome path, extrema, Gaps, alternatives, fees, and counterfactuals
+  without inventing missing facts.
+- The production Runtime source now composes every future market cut from one BTC-only
+  unauthenticated public WebSocket cache over the BTC index and aggregated `100ms` option book and
+  ticker channels. It no longer performs continuous HTTP index or component-book polling.
+- Each option book validates its own `change_id` / `prev_change_id` chain. A cut is available only
+  when every requested book/ticker pair and the index share one connection epoch and satisfy the
+  unchanged source, receive, freshness, and cross-input bounds.
+- Disconnect, incomplete initialization, staleness, and sequence loss fail through the exact
+  Runtime Gap path. One affected-book REST snapshot may seed resynchronization, but that instrument
+  rejoins only after a matching WebSocket continuation or a new full WebSocket snapshot.
+- HTTP remains limited to clock preflight/re-anchor, Session instrument metadata, initial index-path
+  recovery seed, official settlement, and explicit affected-book recovery fallback. The feed adds
+  no durable store, database, bus, replay framework, private method, or authenticated `raw` channel.
+- The complete repository gate passes: `221` tests and `8` deterministic business scenarios. This
   is offline implementation evidence, not current market, execution, or profitability evidence.
 - Live runtime, stable-root writes, market calls, private facts, orders, and capital remain disabled.
 
-**Primary blocker:** `FORWARD_OBSERVATION_HTTP_POLLING_ONLY` — future market observation still
-depends on repeated HTTP snapshots instead of one bounded WebSocket incremental fact stream with
-HTTP limited to metadata, official settlement, and explicit recovery fallback.
+**Primary blocker:** `NATURAL_FORWARD_CHAIN_UNVERIFIED` — the WebSocket path is deterministic and
+offline-verified but has not yet been observed on a new isolated root across a naturally occurring
+Candidate, later reunderwriting, Position, repeated monitoring, trigger, strictly later exit or
+official settlement, and explanatory Outcome.
 
 ## Maturity ladder
 
@@ -118,6 +132,6 @@ HTTP limited to metadata, official settlement, and explicit recovery fallback.
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Next closure:** a bounded `B3_WEBSOCKET_FORWARD_OBSERVATION` task must replace the future primary
-observation path without changing Policy thresholds, ranking, execution truth, live permissions,
-stable-root authority, or B4 scope.
+**Next closure:** a bounded `B3_NATURAL_FORWARD_CHAIN_ACCEPTANCE` task may authorize one new isolated
+root and natural public observation. It must not lower thresholds to manufacture a Candidate,
+reuse the frozen prior root, add private facts or orders, claim Edge, or expand into B4.

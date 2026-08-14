@@ -25,6 +25,22 @@ measure transport and sleep durations but cannot appear in a Decision identity o
 boundaries, continuity identity, universe scope, values, method identities, and DataHealth. It may
 contain many instruments without becoming many opportunities.
 
+For production forward observation, the source identity is the unauthenticated public aggregated
+WebSocket path: BTC index notifications plus `100ms` option book and ticker channels. The first
+book notification is a full snapshot; later changes are accepted only when that instrument's
+`prev_change_id` equals its last accepted `change_id`. Instrument chains are ordered independently,
+so no notification timestamp is treated as a cross-instrument atomic market. One cut instead binds
+the minimum and maximum source boundaries, minimum and maximum receive boundaries, the connection
+continuity epoch, and the causal known-at boundary when the final required member was received.
+
+A disconnect, missing initial snapshot, sequence mismatch, stale member, incomplete ticker/book
+pair, or source/receive span outside Policy invalidates the cut and yields `UNKNOWN` or a lifecycle
+Gap. REST may supply Session instrument metadata, the initial rolling index-history recovery seed,
+official settlement, and one bounded affected-book resynchronization. A REST resync seed is not
+itself proof that the incremental chain resumed: that instrument rejoins only after a matching later
+WebSocket change or a new full WebSocket snapshot. Authenticated `raw` channels, private facts, and
+cross-connection continuity are absent at B3.
+
 `DecisionWindowId` is the sole product and learning denominator:
 
 ```text
@@ -65,6 +81,7 @@ Before environment scoring or structure selection, the Window must know:
 - the bounded instrument universe, every usable component book, and typed metadata and reason for
   every requested component book that was not usable;
 - source, receive, freshness, continuity, and cross-input coherence boundaries;
+- the exact HTTP-bounded-snapshot, deterministic, or public-WebSocket market-source identity;
 - implied-variance and physical-path method identities with aligned horizon and coverage;
 - event-state value, source, and known-at boundary; and
 - exact missing, contradictory, or out-of-bound reasons.

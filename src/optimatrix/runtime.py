@@ -25,12 +25,21 @@ from optimatrix.deribit_snapshot import (
     DeribitHttpClient,
     DeribitSourceError,
     PublicClockPreflight,
+    PublicRpcResponse,
     PublicSnapshotEvaluation,
     evaluate_live_btc_snapshot,
     fetch_btc_expiry_settlement,
     fetch_btc_index_history,
+    fetch_btc_option_metadata,
     preflight_public_clock,
+    shortlist_btc_option_metadata,
     summarize_btc_index_path,
+)
+from optimatrix.deribit_websocket import (
+    BtcWebSocketCache,
+    DeribitPublicWebSocketFeed,
+    ForwardObservationGap,
+    RestBookSnapshot,
 )
 from optimatrix.engine import Btc0DteShortVolEngine
 from optimatrix.identity import canonical_identity
@@ -43,7 +52,12 @@ from optimatrix.lifecycle import (
     record_shadow_gap,
     window_outcome_eligibility,
 )
-from optimatrix.market import EventState, ExpirySettlementFact, SettlementEvidenceKind
+from optimatrix.market import (
+    EventState,
+    ExpirySettlementFact,
+    MarketDataSource,
+    SettlementEvidenceKind,
+)
 from optimatrix.observation_ledger import ObservationLedger
 from optimatrix.policy import BtcShortVolPolicy
 from optimatrix.products import BTC
@@ -58,8 +72,8 @@ AUTHORIZED_RUNTIME_POLICY_IDENTITY = (
     "sha256:e5dbee6192a1d76696f88bfd30584924f22cbbd041a28f593109962a67618c5f"
 )
 AUTHORIZED_WORKBENCH_PORT = 8765
-ROOT_SCHEMA_VERSION = 2
-RUNTIME_SCHEMA_VERSION = 2
+ROOT_SCHEMA_VERSION = 3
+RUNTIME_SCHEMA_VERSION = 3
 PREFLIGHT_LEAD = timedelta(minutes=5)
 SETTLEMENT_DELAY = timedelta(minutes=5)
 _RUNTIME_ALLOWED_ROOT_MEMBERS = {
@@ -139,7 +153,12 @@ class DeribitPublicRuntimeSource:
         self.event_state = event_state
         self.maximum_books = maximum_books
         self.depth = depth
+        self.timeout_seconds = timeout_seconds
         self.client = DeribitHttpClient(timeout_seconds=timeout_seconds)
+        self._feed: DeribitPublicWebSocketFeed | None = None
+        self._cache: BtcWebSocketCache | None = None
+        self._feed_session_id: str | None = None
+        self._instrument_metadata: tuple[dict[str, object], ...] = ()
 
     def preflight(
         self,
@@ -159,8 +178,45 @@ class DeribitPublicRuntimeSource:
         target_window: DecisionWindow,
         required_instrument_names: tuple[str, ...],
     ) -> PublicSnapshotEvaluation:
+        metadata = self._ensure_feed(now=now)
+        feed = self._feed
+        cache = self._cache
+        assert feed is not None and cache is not None
+        cut = None
+        selected_metadata: tuple[dict[str, object], ...] = ()
+        for _attempt in range(2):
+            selected_metadata = shortlist_btc_option_metadata(
+                metadata,
+                index_price=cache.latest_index_price(),
+                maximum_books=self.maximum_books,
+                required_instrument_names=required_instrument_names,
+            )
+            selected_names = tuple(
+                sorted(str(item["instrument_name"]) for item in selected_metadata)
+            )
+            feed.configure_instruments(selected_names)
+            cut = feed.wait_for_cut(
+                instrument_names=selected_names,
+                maximum_age_ms=self.policy.observation.maximum_age_ms,
+                maximum_source_span_ms=self.policy.observation.maximum_source_span_ms,
+                maximum_receive_span_ms=self.policy.observation.maximum_receive_span_ms,
+            )
+            restabilized = shortlist_btc_option_metadata(
+                metadata,
+                index_price=cut.index_price,
+                maximum_books=self.maximum_books,
+                required_instrument_names=required_instrument_names,
+            )
+            restabilized_names = tuple(
+                sorted(str(item["instrument_name"]) for item in restabilized)
+            )
+            if restabilized_names == selected_names:
+                break
+        else:
+            raise ForwardObservationGap("WEBSOCKET_SHORTLIST_DID_NOT_STABILIZE")
+        assert cut is not None
         return evaluate_live_btc_snapshot(
-            client=self.client,
+            client=cut.client(instrument_metadata=selected_metadata, depth=self.depth),
             policy=self.policy,
             now=now,
             event_state=self.event_state,
@@ -168,9 +224,20 @@ class DeribitPublicRuntimeSource:
             depth=self.depth,
             target_window=target_window,
             required_instrument_names=required_instrument_names,
+            market_data_source=MarketDataSource.DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1,
         )
 
     def history(self, *, known_at: datetime) -> IndexHistoryCapture:
+        cache = self._cache
+        if cache is not None:
+            known_at_ms = int(_utc(known_at).timestamp() * 1_000)
+            cached = tuple(point for point in cache.index_history() if point[0] <= known_at_ms)
+            if len(cached) >= 3:
+                return IndexHistoryCapture(
+                    points=cached,
+                    known_at=known_at,
+                    error=None,
+                )
         points = fetch_btc_index_history(self.client, known_at=known_at)
         return IndexHistoryCapture(
             points=points,
@@ -184,6 +251,14 @@ class DeribitPublicRuntimeSource:
     ) -> None:
         self.client.audit_callback = callback
 
+    def close(self) -> None:
+        if self._feed is not None:
+            self._feed.close()
+        self._feed = None
+        self._cache = None
+        self._feed_session_id = None
+        self._instrument_metadata = ()
+
     def settlement(
         self,
         *,
@@ -195,6 +270,73 @@ class DeribitPublicRuntimeSource:
             expiry=expiry,
             known_at=known_at,
         )
+
+    def _ensure_feed(self, *, now: datetime) -> tuple[dict[str, object], ...]:
+        session = current_deribit_session(now, phase_policy=self.policy.session)
+        if self._feed is not None and self._feed_session_id == session.session_id:
+            return self._instrument_metadata
+        self.close()
+        metadata = fetch_btc_option_metadata(self.client, session_end=session.end)
+        if len(metadata) < 4:
+            raise DeribitSourceError("current BTC Session has fewer than four usable instruments")
+        history = fetch_btc_index_history(self.client, known_at=now)
+        cache = BtcWebSocketCache(maximum_instruments=self.maximum_books)
+        cache.seed_index_history(
+            history,
+            received_timestamp_ms=self._received_timestamp_ms(),
+        )
+        initial = shortlist_btc_option_metadata(
+            metadata,
+            index_price=cache.latest_index_price(),
+            maximum_books=self.maximum_books,
+        )
+        cache.configure_instruments(tuple(sorted(str(item["instrument_name"]) for item in initial)))
+        feed = DeribitPublicWebSocketFeed(
+            cache=cache,
+            received_timestamp_ms=self._received_timestamp_ms,
+            rest_resync=self._rest_resync,
+            timeout_seconds=self.timeout_seconds,
+            audit_callback=self._audit_stream_call,
+        )
+        self._instrument_metadata = metadata
+        self._cache = cache
+        self._feed = feed
+        self._feed_session_id = session.session_id
+        feed.start()
+        return metadata
+
+    def _received_timestamp_ms(self) -> int:
+        return _datetime_to_ceil_ms(self.client.clock.read().latest_at)
+
+    def _rest_resync(self, instrument_name: str) -> RestBookSnapshot:
+        response = self.client.call(
+            "public/get_order_book",
+            {"instrument_name": instrument_name, "depth": self.depth},
+        )
+        if not isinstance(response, PublicRpcResponse):
+            raise DeribitSourceError("production REST resync lacks a validated response envelope")
+        result = response.result
+        if not isinstance(result, Mapping):
+            raise DeribitSourceError("production REST resync result must be an object")
+        source_timestamp_ms = result.get("timestamp")
+        if isinstance(source_timestamp_ms, bool) or not isinstance(source_timestamp_ms, int):
+            raise DeribitSourceError("production REST resync lacks a source timestamp")
+        return RestBookSnapshot(
+            instrument_name=instrument_name,
+            result=result,
+            source_timestamp_ms=source_timestamp_ms,
+            received_timestamp_ms=response.causal_received_at_ms,
+        )
+
+    def _audit_stream_call(
+        self,
+        method: str,
+        params: Mapping[str, object],
+        timeout_seconds: float,
+    ) -> None:
+        callback = self.client.audit_callback
+        if callback is not None:
+            callback(method, params, timeout_seconds)
 
 
 @dataclass(frozen=True)
@@ -927,6 +1069,9 @@ class BtcPublicShadowRuntime:
         _atomic_json(self.root_owner.root / "latest-snapshot.json", self.latest_snapshot)
 
     def close(self) -> None:
+        close_source = getattr(self.source, "close", None)
+        if callable(close_source):
+            close_source()
         self.root_owner.release()
 
     def _establish_startup_clock(self) -> tuple[PublicClockPreflight, int]:
@@ -1279,6 +1424,8 @@ class BtcPublicShadowRuntime:
         for attempt in range(1, 4):
             try:
                 return operation()
+            except ForwardObservationGap:
+                raise
             except DeribitSourceError as exc:
                 error = exc
                 self._audit(f"{label}_ATTEMPT_FAILED", now, f"attempt={attempt}:{_safe_error(exc)}")
@@ -2448,6 +2595,13 @@ def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         raise ValueError("runtime datetime must be timezone-aware")
     return value.astimezone(UTC)
+
+
+def _datetime_to_ceil_ms(value: datetime) -> int:
+    normalized = _utc(value)
+    elapsed = normalized - datetime(1970, 1, 1, tzinfo=UTC)
+    epoch_us = (elapsed.days * 24 * 60 * 60 + elapsed.seconds) * 1_000_000 + elapsed.microseconds
+    return -(-epoch_us // 1_000)
 
 
 def _iso(value: datetime) -> str:
