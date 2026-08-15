@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 FORWARD WINDOW OUTCOME EVIDENCE — ACTIVE
+**Status:** B3 COMPLETED SESSION REVIEW — ACTIVE
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -10,16 +10,15 @@
 
 **Current task kind:** `VALIDATION_ONLY`
 
-**Sole authorized closure:** [`B3_FORWARD_WINDOW_OUTCOME_EVIDENCE`](../../tasks/B3_FORWARD_WINDOW_OUTCOME_EVIDENCE.md)
+**Sole authorized closure:** [`B3_COMPLETED_SESSION_REVIEW`](../../tasks/B3_COMPLETED_SESSION_REVIEW.md)
 
 ## Current permissions
 
 Stage is the permission ceiling; a future active task may only narrow it.
 
-**Offline checks and simulation:** one bounded read-only join of the frozen reachability snapshot
-to its actual WindowOutcomes is authorized after the owning Session ends; any temporary output must
-remain in a caller-supplied ignored root, and synthetic future paths or simulated Outcomes are
-forbidden
+**Offline checks and simulation:** one bounded read-only review of the completed Session ending
+`2026-08-15T08:00:00Z` is authorized; any temporary output must remain in a caller-supplied ignored
+root, and synthetic future paths or simulated Outcomes are forbidden
 
 **Public market calls:** only unauthenticated production `wss://www.deribit.com/ws/api/v2` public
 heartbeat, subscribe, unsubscribe, test, BTC index, and aggregated `100ms` BTC option book/ticker
@@ -70,9 +69,11 @@ capital, and private access remain `NONE`
   `9.851412375%`. Both structures above `7%` fail only the separate `$10` credit gate; the five
   structures exposed by removing `7%` have only `3.5183615625%–3.7268570625%` and are not
   near-threshold cases.
-- `filter_forward_value=NOT_YET_MEASURED`: the frozen root had `0` WindowOutcomes at the audit
-  boundary, so the local responsibility result neither supports changing `7%` nor validates its
-  forward risk value.
+- `filter_forward_value=FIXED_WINDOW_PATH_OBSERVED`: all `9/9` frozen audit Windows now have known,
+  continuous actual paths and official settlement. The sole `7%`-only affected Window's path did
+  not breach its `62000` short Put, but reached `63172.323833`, breaching its shared `63000` short
+  Call by `172.323833 USD`; official delivery was `63013.74`. This is path-risk evidence, not a
+  counterfactual Entry, executable route, PnL, Policy qualification, or reason to change `7%`.
 - `policy_qualification=NONE` and `edge_claim=NONE`: deterministic scenarios, a local ablation,
   Candidate frequency, one Session, and natural-chain occurrence cannot qualify the Policy.
 
@@ -168,12 +169,11 @@ capital, and private access remain `NONE`
   disabled. Private facts, orders, capital, and any other local or remote deployment remain
   unconditionally disabled.
 
-**Primary blocker:** `FILTER_FORWARD_VALUE_NOT_YET_MEASURED` — the `7%`-only Window marginal and
-ratio distribution are complete for the frozen snapshot, but it has no actual WindowOutcome yet.
-The active task is bounded to the owning `15AUG26` Session's ordinary post-expiry outcome
-finalization and closes with recorded facts or an exact `UNVERIFIED` reason. It does not wait for a
-Candidate and may not change `7%`, `$10`, sizing, Policy identity, runtime behavior, durable schema,
-or truth.
+**Primary blocker:** `COMPLETED_SESSION_BEHAVIOR_NOT_REVIEWED` — the Session has terminal public
+facts, but its complete enrolled denominator, phase and blocker distributions, causal data failures,
+future paths, settlement, local Policy-frontier evidence, runtime health, and Workbench projection
+have not yet been reconciled as one review. This task may observe and adjudicate those facts only;
+it may not change `7%`, `$10`, sizing, Policy identity, runtime behavior, durable schema, or truth.
 
 ## Maturity ladder
 
@@ -187,10 +187,10 @@ or truth.
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Active closure boundary:** keep the exact deployed launchd job and Policy unchanged through the
-owning Session's existing official-settlement and future-index-path finalization. Then join only the
-frozen audit Windows to actual WindowOutcomes and close whether evidence is known or explicitly
-unavailable; a Candidate is neither required nor awaited. The task may inspect the v2 root and
-loopback Workbench but may not operate, replace, or reconfigure the runtime. Private facts, orders,
-v1 reuse, threshold or sizing changes, simulated future paths, Policy qualification, Edge claims,
-remote deployment, and B4 remain forbidden.
+**Active closure boundary:** review only the completed Session ending `2026-08-15T08:00:00Z`, using
+its immutable DecisionRecords, WindowOutcomes, public future path, official settlement, runtime
+audit, and read-only Workbench projection. The current Session and later appends cannot alter that
+population. A Candidate is neither required nor awaited. The task may inspect but may not operate,
+replace, or reconfigure the runtime. Private facts, orders, v1 reuse, threshold or sizing changes,
+simulated future paths, Policy qualification, Edge claims, remote deployment, and B4 remain
+forbidden.
