@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 RECONNECT INDEX HISTORY RECOVERY — ACTIVE
+**Status:** B3 POST-RECOVERY FORWARD RELIABILITY — ACTIVE
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -8,17 +8,18 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `VALIDATION_ONLY`
 
-**Sole authorized closure:** [`B3_RECONNECT_INDEX_HISTORY_RECOVERY`](../../tasks/B3_RECONNECT_INDEX_HISTORY_RECOVERY.md)
+**Sole authorized closure:** [`B3_POST_RECOVERY_FORWARD_RELIABILITY`](../../tasks/B3_POST_RECOVERY_FORWARD_RELIABILITY.md)
 
 ## Current permissions
 
 Stage is the permission ceiling; a future active task may only narrow it.
 
-**Offline checks and simulation:** deterministic reconnect, history-reseed, causal-boundary, and
-runtime-recovery tests for the exact active task are authorized under caller-supplied ignored roots;
-synthetic market evidence, simulated Policy Outcomes, and durable review artifacts are forbidden
+**Offline checks and simulation:** after Session `2026-08-16T08:00:00Z` ends, one bounded read-only
+reconciliation of the `84` post-deployment Windows is authorized under a caller-supplied ignored
+root; synthetic reconnects against production, simulated market evidence, Policy Outcomes, and
+durable review artifacts are forbidden
 
 **Public market calls:** only unauthenticated production `wss://www.deribit.com/ws/api/v2` public
 heartbeat, subscribe, unsubscribe, test, BTC index, and aggregated `100ms` BTC option book/ticker
@@ -40,9 +41,9 @@ is retained without migration or mutation and remains ineligible for the current
 **Continuous runtime:** only launchd label `com.optimatrix.b3-public-shadow`, executing the
 `origin/main` console script from `/Users/logan/Optimatrix`, with EventState `NONE`, Policy identity
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`, the exact v2 root,
-loopback Workbench port `8765`, and no duration expansion into another process or root; after the
-active task's full repository gate, this exact job may be replaced once by the verified reconnect
-recovery implementation
+loopback Workbench port `8765`, and no duration expansion into another process or root; natural
+WebSocket reconnects and launchd `KeepAlive` may preserve this exact job, but no manual restart,
+replacement, new root, or other process is authorized
 
 **Private read-only account permission:** `NONE`
 
@@ -90,12 +91,18 @@ capital, and private access remain `NONE`
   a known continuous public path and official delivery `63013.74`; `64` Decisions are evaluable,
   all `81` path populations are eligible, and zero is execution-attributable or Policy-qualified.
   Their overlapping horizons are Window facts, not `81` independent trades or PnL observations.
-- `runtime_continuity=RECONNECT_GAP_AMPLIFICATION_OBSERVED`: after the deployed Window-watermark
-  correction, `61/69` Decisions were evaluable. One `04:30 UTC` WebSocket disconnect directly
-  failed its Window and left a material gap in the retained index history that failed five more
-  consecutive Windows through `05:45 UTC`; the cache only seeds index history at initial startup.
-  The disconnected Window remains correctly `UNKNOWN`, but later Windows lack one bounded
-  reconnect reseed that could restore causal history without backfilling Decisions.
+- `reconnect_recovery_capability=DEPLOYED_AND_INITIAL_CUT_ACCEPTED`: commit `9969af3` adds one
+  epoch-scoped index-history recovery attempt, rejects malformed, discontinuous, late, or repeated
+  seeds, and requires a strictly later same-epoch WebSocket index continuation. It passed `228`
+  tests and `8` scenarios, was pushed to `origin/main`, and was deployed once as PID `51093`.
+  Loopback returned HTTP `200`; observation
+  `sha256:ba830878949ef8930642b93ebba52b91cdce5643e209d8fc716931a5145283d2` completed at
+  `2026-08-15T11:00:19.612000Z` with source
+  `DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1`, `21` quotes, and one continuity epoch.
+- `natural_reconnect_recovery=NOT_YET_OBSERVED`: the accepted post-deployment cut belongs to the
+  new process's initial WebSocket epoch, so it proves startup and market-cut health but not the
+  natural reconnect transition. The active validation has exactly `84` scheduled Windows from
+  `2026-08-15T11:00:00Z` through Session end and closes even if no natural reconnect occurs.
 - `workbench_projection=CURRENT_SESSION_TRUTHFUL`: loopback Workbench renders the active Session's
   current counts, Gap state, evidence boundary, public-Shadow disclaimer, and no fabricated
   Challenger results without console errors. It has no completed-Session selector, so the prior
@@ -178,29 +185,32 @@ capital, and private access remain `NONE`
 - A scheduled Window may consume its one public cut only after the source watermark reaches that
   Window's start. The existing bounded cache wait owns this lower boundary; retained pre-Window
   state cannot consume the attempt while the input grace remains available.
-- Merge `a3ba716` deployed that correction under launchd from `/Users/logan/Optimatrix` onto v2.
-  The job exclusively acquired the v2 lock, served loopback HTTP `200`, and appended complete public
-  cut `sha256:a6b09ceaa75803d689fda2169319cc5b493df6c042ee9ccfb19a16453ff4b897` at
-  `2026-08-14T14:45:07.048000Z` without a startup error. The interrupted startup Window still failed
-  closed as `UNKNOWN/NO_OBSERVATION`; this is deployment evidence, not chain acceptance.
+- Commit `9969af3` is deployed under the exact launchd job from `/Users/logan/Optimatrix` onto v2.
+  The one authorized replacement changed PID `22801` to `51093`, retained the exact command, root,
+  Policy, EventState, and port, served HTTP `200`, and produced the healthy `11:00 UTC` public cut.
+  The interrupted `10:45 UTC` Window remained a causal restart Gap; no Decision was backfilled.
 - Disconnect, incomplete initialization, staleness, and sequence loss fail through the exact
   Runtime Gap path. One affected-book REST snapshot may seed resynchronization, but that instrument
   rejoins only after a matching WebSocket continuation or a new full WebSocket snapshot.
-- HTTP remains limited to clock preflight/re-anchor, Session instrument metadata, initial index-path
-  recovery seed, official settlement, and explicit affected-book recovery fallback. The feed adds
-  no durable store, database, bus, replay framework, private method, or authenticated `raw` channel.
-- The complete repository gate passes: `226` tests and `8` deterministic business scenarios. This
+- Each WebSocket epoch after the first attempts at most one validated two-day BTC index-history
+  recovery. A seed alone is not ready: a strictly later same-epoch WebSocket index plus current
+  same-epoch books and tickers remains mandatory. Failure stays a typed Gap with no within-epoch
+  retry, polling loop, durable history, or Decision backfill.
+- HTTP remains limited to clock preflight/re-anchor, Session instrument metadata, initial and
+  epoch-bounded reconnect index-path recovery seeds, official settlement, and explicit affected-book
+  recovery fallback. The feed adds no durable store, database, bus, replay framework, private
+  method, or authenticated `raw` channel.
+- The complete repository gate passes: `228` tests and `8` deterministic business scenarios. This
   is offline implementation evidence, not current market, execution, or profitability evidence.
-- Outside the exact active-task command, live runtime, stable-root writes, and market calls remain
-  disabled. Private facts, orders, capital, and any other local or remote deployment remain
-  unconditionally disabled.
+- The active task is validation-only. Outside the exact existing runtime and bounded post-Session
+  read-only audit, live commands, stable-root mutation, and market calls remain disabled. Private
+  facts, orders, capital, and any other local or remote deployment remain unconditionally disabled.
 
-**Primary blocker:** `RECONNECT_INDEX_HISTORY_GAP_AMPLIFICATION` — the current feed correctly fails
-closed on disconnect, but one missing WebSocket interval remains inside the matched risk horizon and
-turns one transport interruption into multiple later `UNKNOWN` Windows. The active task may add one
-bounded public index-history reseed per new connection epoch and require a later same-epoch
-WebSocket continuation before readiness. It may not backfill a Decision, poll REST continuously,
-change `7%`, `$10`, sizing, Policy identity, durable schema, or truth semantics.
+**Primary blocker:** `POST_RECOVERY_FORWARD_RELIABILITY_UNMEASURED` — deterministic tests and one
+healthy initial-epoch cut prove the implementation/deployment delta, but the bounded post-deployment
+Window population is incomplete. The active validation measures exact coverage, typed Gaps,
+connection epochs, and any amplification after Session end; it does not require a reconnect,
+Candidate, Policy change, or longer observation period.
 
 ## Maturity ladder
 
@@ -214,10 +224,9 @@ change `7%`, `$10`, sizing, Policy identity, durable schema, or truth semantics.
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Active closure boundary:** implement only reconnect index-history recovery for the exact public
-feed: at most one validated historical BTC index seed per new WebSocket connection epoch, followed
-by a strictly later same-epoch WebSocket index continuation before a cut can become ready. Preserve
-the disconnected Window as `UNKNOWN`, all Decision identities, the Policy, root, feed universe,
-component route semantics, and fail-closed behavior. Continuous polling, Decision backfill, generic
-replay, durable history infrastructure, private facts, orders, v1 reuse, threshold or sizing
-changes, Policy qualification, Edge claims, remote deployment, and B4 remain forbidden.
+**Active closure boundary:** after Session `2026-08-16T08:00:00Z` ends, reconcile only the `84`
+scheduled Windows beginning at or after `2026-08-15T11:00:00Z`. Report exact coverage, DataHealth,
+WebSocket epochs, recovery calls, and later-Window amplification without implementation changes or
+backfill. If no natural reconnect occurred, close with `NOT_YET_OBSERVED`; do not extend the task or
+manufacture a Candidate. Policy, `7%`, `$10`, sizing, ranking, durable schema, private facts, orders,
+fills, capital, Policy qualification, Edge claims, D1, remote deployment, and B4 remain forbidden.
