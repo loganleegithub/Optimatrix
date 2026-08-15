@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,7 +12,6 @@ from optimatrix.deribit_private import (
     PrivateRpcResponse,
 )
 from optimatrix.private_cli import CredentialFileReader, PrivateCredentials, run
-from optimatrix.workbench import WorkbenchExport
 
 _CLIENT_ID = "cli-client-id-must-not-leak"
 _CLIENT_SECRET = "cli-client-secret-must-not-leak"
@@ -72,21 +70,8 @@ class _Transport:
         return _response([], 3)
 
 
-def _arguments(snapshot: Path, output_dir: Path) -> list[str]:
-    return [
-        "--environment",
-        "mainnet",
-        "--snapshot",
-        str(snapshot),
-        "--output-dir",
-        str(output_dir),
-    ]
-
-
-def _snapshot(tmp_path: Path) -> Path:
-    path = tmp_path / "snapshot.json"
-    path.write_text(json.dumps({"safe": "snapshot"}), encoding="utf-8")
-    return path
+def _arguments() -> list[str]:
+    return ["--environment", "mainnet"]
 
 
 def _credential_file(tmp_path: Path, content: str, *, mode: int = 0o600) -> Path:
@@ -96,37 +81,11 @@ def _credential_file(tmp_path: Path, content: str, *, mode: int = 0o600) -> Path
     return path
 
 
-def _export(output_dir: Path) -> WorkbenchExport:
-    return WorkbenchExport(
-        output_dir=output_dir,
-        index_path=output_dir / "index.html",
-        data_path=output_dir / "workbench-data.js",
-        stylesheet_path=output_dir / "styles.css",
-        script_path=output_dir / "app.js",
-    )
-
-
 def test_cli_uses_injected_credentials_without_argv_or_output_leakage(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    snapshot = _snapshot(tmp_path)
-    output_dir = tmp_path / "workbench"
-    captured: dict[str, object] = {}
-
-    def fake_write(
-        value: object,
-        destination: Path,
-        **kwargs: object,
-    ) -> WorkbenchExport:
-        captured["snapshot"] = value
-        captured["account"] = kwargs["account_observation"]
-        return _export(destination)
-
-    monkeypatch.setattr("optimatrix.private_cli.write_workbench", fake_write)
     result = run(
-        _arguments(snapshot, output_dir),
+        _arguments(),
         credential_reader=_Reader(),
         transport_factory=lambda environment: _Transport(),
     )
@@ -137,36 +96,19 @@ def test_cli_uses_injected_credentials_without_argv_or_output_leakage(
     assert '"token_scope_normalization": "UNAVAILABLE"' in output
     assert '"application_method_permission": "READ_ONLY_FIXED_ALLOWLIST"' in output
     assert '"orders_executed": "NONE"' in output
+    assert '"summary_status": "KNOWN"' in output
+    assert '"positions_status": "KNOWN"' in output
+    assert '"position_count": 0' in output
     assert _CLIENT_ID not in output
     assert _CLIENT_SECRET not in output
     assert _ACCESS_TOKEN not in output
-    serialized = json.dumps(captured["account"].as_object(), sort_keys=True)  # type: ignore[union-attr]
-    assert _CLIENT_ID not in serialized
-    assert _CLIENT_SECRET not in serialized
-    assert _ACCESS_TOKEN not in serialized
 
 
-def test_cli_partial_capture_writes_truthful_unknown_and_returns_nonzero(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_cli_partial_capture_is_truthful_unknown_and_returns_nonzero(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    snapshot = _snapshot(tmp_path)
-    output_dir = tmp_path / "workbench"
-    captured: dict[str, object] = {}
-
-    def fake_write(
-        value: object,
-        destination: Path,
-        **kwargs: object,
-    ) -> WorkbenchExport:
-        del value
-        captured["account"] = kwargs["account_observation"]
-        return _export(destination)
-
-    monkeypatch.setattr("optimatrix.private_cli.write_workbench", fake_write)
     result = run(
-        _arguments(snapshot, output_dir),
+        _arguments(),
         credential_reader=_Reader(),
         transport_factory=lambda environment: _Transport(position_error=True),
     )
@@ -174,9 +116,9 @@ def test_cli_partial_capture_writes_truthful_unknown_and_returns_nonzero(
     assert result == 2
     output = capsys.readouterr().out
     assert '"status": "UNKNOWN"' in output
+    assert '"positions_status": "UNKNOWN"' in output
+    assert '"position_count": null' in output
     assert "ACCOUNT_POSITIONS_RPC_REJECTED" in output
-    observation = captured["account"]
-    assert observation.as_object()["positions"] is None  # type: ignore[union-attr]
 
 
 def test_cli_rejects_credential_arguments_without_echoing_them(
@@ -190,18 +132,10 @@ def test_cli_rejects_credential_arguments_without_echoing_them(
 
 
 def test_cli_rejects_testnet_before_reading_credentials(
-    tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     result = run(
-        [
-            "--environment",
-            "testnet",
-            "--snapshot",
-            str(_snapshot(tmp_path)),
-            "--output-dir",
-            str(tmp_path / "workbench"),
-        ],
+        ["--environment", "testnet"],
         credential_reader=_Reader(),
     )
 
@@ -210,43 +144,36 @@ def test_cli_rejects_testnet_before_reading_credentials(
 
 
 def test_cli_non_tty_fails_closed_instead_of_echoing_credentials(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    snapshot = _snapshot(tmp_path)
     monkeypatch.setattr(
         "optimatrix.private_cli.sys.stdin",
         SimpleNamespace(isatty=lambda: False),
     )
-    result = run(_arguments(snapshot, tmp_path / "workbench"))
+    result = run(_arguments())
 
     output = capsys.readouterr().out
     assert result == 2
     assert output == '{"error": "CREDENTIALS_NOT_PROVIDED"}\n'
 
 
-def test_cli_redacts_exception_text_from_workbench_failure(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+def test_cli_redacts_exception_text_from_unexpected_capture_failure(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    snapshot = _snapshot(tmp_path)
-
-    def fail_write(*args: object, **kwargs: object) -> WorkbenchExport:
-        del args, kwargs
+    def fail_factory(environment: DeribitAccountEnvironment) -> _Transport:
+        del environment
         raise ValueError(_CLIENT_SECRET)
 
-    monkeypatch.setattr("optimatrix.private_cli.write_workbench", fail_write)
     result = run(
-        _arguments(snapshot, tmp_path / "workbench"),
+        _arguments(),
         credential_reader=_Reader(),
-        transport_factory=lambda environment: _Transport(),
+        transport_factory=fail_factory,
     )
 
     output = capsys.readouterr().out
     assert result == 2
-    assert "PRIVATE_WORKBENCH_WRITE_FAILED" in output
+    assert "PRIVATE_ACCOUNT_CAPTURE_FAILED" in output
     assert _CLIENT_SECRET not in output
 
 
@@ -351,41 +278,24 @@ def test_credential_file_rejects_mode_symlink_nonregular_owner_and_environment_m
         CredentialFileReader(broad).read(DeribitAccountEnvironment.TESTNET)
 
 
-def test_cli_credential_file_success_does_not_write_secrets_to_output_or_workbench(
+def test_cli_credential_file_success_does_not_write_secrets_to_output(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     path = _credential_file(
         tmp_path,
         f"DERIBIT_MAINNET_CLIENT_ID={_CLIENT_ID}\nDERIBIT_MAINNET_CLIENT_SECRET={_CLIENT_SECRET}\n",
     )
-    snapshot = _snapshot(tmp_path)
-    output_dir = tmp_path / "workbench"
-    captured: dict[str, object] = {}
-
-    def fake_write(
-        value: object,
-        destination: Path,
-        **kwargs: object,
-    ) -> WorkbenchExport:
-        del value
-        captured["account"] = kwargs["account_observation"]
-        return _export(destination)
-
-    monkeypatch.setattr("optimatrix.private_cli.write_workbench", fake_write)
     result = run(
-        [*_arguments(snapshot, output_dir), "--credentials-file", str(path)],
+        [*_arguments(), "--credentials-file", str(path)],
         transport_factory=lambda environment: _Transport(),
     )
 
     streams = capsys.readouterr()
     assert result == 0
-    serialized = json.dumps(captured["account"].as_object())  # type: ignore[union-attr]
     for value in (_CLIENT_ID, _CLIENT_SECRET, _ACCESS_TOKEN):
         assert value not in streams.out
         assert value not in streams.err
-        assert value not in serialized
 
 
 def test_cli_credential_file_failure_reports_only_a_safe_code(
@@ -397,11 +307,9 @@ def test_cli_credential_file_failure_reports_only_a_safe_code(
         f"DERIBIT_MAINNET_CLIENT_ID={_CLIENT_ID}\nDERIBIT_MAINNET_CLIENT_SECRET={_CLIENT_SECRET}\n",
         mode=0o644,
     )
-    snapshot = _snapshot(tmp_path)
-
     result = run(
         [
-            *_arguments(snapshot, tmp_path / "workbench"),
+            *_arguments(),
             "--credentials-file",
             str(path),
         ],

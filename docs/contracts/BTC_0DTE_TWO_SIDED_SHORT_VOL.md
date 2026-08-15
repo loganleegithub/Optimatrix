@@ -227,8 +227,8 @@ The two private components are independent. A known empty BTC-position array mea
 that response boundary. A failed or malformed component remains `UNKNOWN`; the other known
 component may remain visible, but partial truth cannot infer flat risk, margin capacity, capital
 availability, or a reservation. Credentials and bearer tokens are transport-only process memory:
-they are absent from CLI arguments, identities, exceptions, serialization, Workbench, Ledger,
-Journal, and every durable observation field.
+they are absent from CLI arguments, identities, exceptions, safe receipts, Ledger, Journal, and
+every durable observation field.
 
 Credential injection is explicit and local. The CLI either reads both selected-environment values
 from an interactive no-echo terminal or from one caller-supplied credential-file path. It never
@@ -247,6 +247,40 @@ no external activity.
 The observation cannot become a `ShadowRiskAllocation`, `AccountRiskReservation`, TradeCase,
 Position, route, Entry, order, trade, fill, PnL, or execution attribution. C2 requires a separate
 task, contract closure, and permission boundary.
+
+## C2 Testnet Combo lifecycle
+
+C2 is `TESTNET / PRIVATE_EXECUTION / NO_REAL_CAPITAL`. It is an explicitly invoked one-order
+exchange-mechanism probe, not a mainnet Entry, Policy-selected TradeCase, capital reservation, or
+realized-PnL fact. Mainnet execution remains `NONE`.
+
+The fixed Testnet method surface is `public/auth`, `public/get_combos`,
+`public/get_instrument`, `public/get_order_book`, `private/get_positions`, `private/buy`,
+`private/sell`, `private/get_order_state`, `private/get_user_trades_by_order`, and
+`private/cancel`. It requests `trade:read_write`, uses only `test.deribit.com`, and contains no
+`private/create_combo`, RFQ, block-trade, wallet, transfer, WebSocket, daemon, or generic broker
+path. Auth-response scope text is not a local permission gate; the fixed host, method, parameter,
+credential, and task boundaries own application permission.
+
+The probe deterministically selects an existing active BTC `future_combo` or `option_combo` whose
+instrument and book are open, whose minimum amount and tick are valid, and whose Combo and legs do
+not conflict with a nonzero baseline Position. It submits that minimum amount at the same-side best
+book price as one `good_til_cancelled` limit order with `post_only=true`,
+`reject_post_only=true`, and `reduce_only=false`. The selected book price is retained exactly,
+including a negative Combo price; it is not re-rounded across tick-size-step boundaries.
+
+Order state, final `filled_amount`, unique per-order trades, top-level actual fee grouped by
+`fee_currency`, and all BTC Positions are separate response facts. Empty trades imply zero actual
+fee for this order only. A no-fill order is cancelled by its exact order ID and accepted only after
+final `cancelled/filled_amount=0`, another empty trade response, and an unchanged Position snapshot.
+This proves interface connectivity and cleanup, not natural fill, nonzero fee, or reduce-only exit.
+
+After a natural partial fill, the unfilled remainder is cancelled before exit. The opposite
+same-Combo market exit uses the final actual entry `filled_amount`, `post_only=false`, and
+`reduce_only=true`. Closure requires the exit facts and related Positions to return to baseline.
+Deribit's generic buy/sell contract exposes reduce-only and Combo trade fields, but does not
+pre-prove that every Combo accepts a market reduce-only exit; rejection or incomplete Position
+reconciliation remains explicit `UNVERIFIED` evidence rather than selecting a different method.
 
 ## Decision result and TradeCase boundary
 

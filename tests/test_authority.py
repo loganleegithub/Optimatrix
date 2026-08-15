@@ -113,21 +113,52 @@ def test_c1_private_account_boundary_is_isolated_and_read_only() -> None:
         assert forbidden not in c1_source
 
 
-def test_root_credentials_are_ignored_and_example_contains_no_values() -> None:
-    ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    example = (ROOT / ".env.example").read_text(encoding="utf-8")
+def test_credentials_are_machine_local_and_project_has_no_template() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-    assert "/.env" in ignore
-    assert "/.env.*" in ignore
-    assert "!/.env.example" in ignore
     assert not (ROOT / ".env").exists()
-    for key in (
-        "DERIBIT_MAINNET_CLIENT_ID",
-        "DERIBIT_MAINNET_CLIENT_SECRET",
-        "DERIBIT_TESTNET_CLIENT_ID",
-        "DERIBIT_TESTNET_CLIENT_SECRET",
+    assert not (ROOT / ".env.example").exists()
+    assert "/Users/logan/.config/optimatrix/credentials.env" in readme
+    assert "/Users/logan/.config/optimatrix/README.md" in readme
+    assert "repository contains no credential template" in readme
+
+
+def test_c2_combo_boundary_is_testnet_only_and_separate_from_c1() -> None:
+    btc_contract = (ROOT / "docs/contracts/BTC_0DTE_TWO_SIDED_SHORT_VOL.md").read_text(
+        encoding="utf-8"
+    )
+    manifest = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    c2_source = "\n".join(
+        (ROOT / "src/optimatrix" / name).read_text(encoding="utf-8")
+        for name in ("deribit_combo.py", "combo_cli.py")
+    )
+
+    for label in ("TESTNET", "PRIVATE_EXECUTION", "NO_REAL_CAPITAL"):
+        assert label in btc_contract
+    assert "optimatrix-combo" in manifest
+    assert "test.deribit.com" in c2_source
+    assert "www.deribit.com" not in c2_source
+    for allowed in (
+        "public/auth",
+        "public/get_combos",
+        "public/get_instrument",
+        "public/get_order_book",
+        "private/get_positions",
+        "private/buy",
+        "private/sell",
+        "private/get_order_state",
+        "private/get_user_trades_by_order",
+        "private/cancel",
     ):
-        assert f"{key}=\n" in example
+        assert allowed in c2_source
+    for forbidden in (
+        "private/create_combo",
+        "private/withdraw",
+        "private/transfer",
+        "public/subscribe",
+        "private/subscribe",
+    ):
+        assert forbidden not in c2_source
 
 
 def test_capability_acceptance_does_not_manufacture_market_evidence() -> None:

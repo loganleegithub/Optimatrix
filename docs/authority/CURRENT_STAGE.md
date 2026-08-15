@@ -1,29 +1,27 @@
 # Optimatrix Current Stage
 
-**Status:** C1 MAINNET REQUEST-SCOPED READ CONNECTIVITY — ACTIVE
+**Status:** C2 TESTNET COMBO NO-FILL CONNECTIVITY — ACCEPTED
 
-**Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
+**Current maturity:** `C2_AUTHORIZED_COMBO_EXECUTION`
 
 **Product Authority:** `INVERSE_BTC_SHORT_VOL`
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `NONE`
 
-**Sole authorized closure:** [`C1_MAINNET_REQUEST_SCOPED_AUTH`](../../tasks/C1_MAINNET_REQUEST_SCOPED_AUTH.md)
+**Sole authorized closure:** `NONE`
 
 ## Current permissions
 
 Stage is the permission ceiling; a future active task may only narrow it.
 
-**Offline checks and simulation:** the active task may change only C1 mainnet auth acceptance,
-credential/token-scope truth labels, its direct owner text, isolated Workbench projection, and fake
-tests. The fixed mainnet host, requested scope, three-method allowlist, credential reader, Public
-Shadow, Policy, and every deployed runtime remain frozen.
+**Offline checks and simulation:** read-only discovery and existing offline checks only. C1, C2,
+shared Workbench assets, Public Shadow, Policy, and every deployed runtime are frozen until one new
+task and matching Stage activation authorize a bounded closure.
 
-**Public market calls:** the active implementation task grants no new public market call. Existing
-ignored public snapshots may be read only by offline tests until the standard gate cleans them.
-Otherwise only unauthenticated production
+**Public market calls:** `NONE_AUTHORIZED` for new manual work. The accepted C2 validation grants no
+continuing Testnet call or retry. Only unauthenticated production
 `wss://www.deribit.com/ws/api/v2` public
 heartbeat, subscribe, unsubscribe, test, BTC index, and aggregated `100ms` BTC option book/ticker
 channels, plus `https://www.deribit.com/api/v2` public clock, instrument metadata, initial and at
@@ -48,14 +46,15 @@ loopback Workbench port `8765`, and no duration expansion into another process o
 WebSocket reconnects and launchd `KeepAlive` may preserve this exact job, but no manual restart,
 replacement, new root, or other process is authorized
 
-**Private read-only account permission:** `NONE` during implementation. No mainnet or testnet
-authentication, account call, Positions call, Chrome action, credential read, or secret persistence
-is authorized. The task removes only the local response-scope gate; it may not add a private method.
+**Private read-only account permission:** `NONE`. The accepted C1 mainnet capture and C2 Testnet
+validation grant no continuing credential read, authentication, account, Position, order-state, or
+trade call. Mainnet private calls, Chrome, credential copy, project `.env`, and alternate credential
+sources remain forbidden.
 
-**Orders, capital, and deployment:** mainnet execution remains permanently `NONE`. Fake tests may
-inject forbidden method names only to prove rejection. Every live order, fill, trade lookup, cancel,
-Position mutation, capital action, restart, replacement, new process, root, and deployment remains
-`NONE`.
+**Orders, capital, and deployment:** `NONE`. The accepted C2 order is final `cancelled` with zero
+fill and no remaining Testnet Position delta. Mainnet execution, real capital, another Testnet
+entry, reduce-only probe, transfer, restart, replacement, new process, root, deployment, and capital
+action remain forbidden.
 
 **Policy qualification / Edge claim:** `NONE`
 
@@ -117,10 +116,10 @@ Position mutation, capital action, restart, replacement, new process, root, and 
   Session review remains a Ledger audit; adding historical UI is not the current trading blocker.
 - `policy_qualification=NONE` and `edge_claim=NONE`: deterministic scenarios, a local ablation,
   Candidate frequency, one Session, and natural-chain occurrence cannot qualify the Policy.
-- `c1_private_account_capability=IMPLEMENTED_OFFLINE_REQUEST_SCOPED_PENDING_GATE`: the fixed
+- `c1_private_account_capability=IMPLEMENTED_OFFLINE_REQUEST_SCOPED_ACCEPTED`: the fixed
   mainnet host and method surface contains exactly `public/auth`, BTC summary, and BTC Positions.
   Auth requests exactly `account:read trade:read`; auth-response scope text is neither an
-  authorization gate nor an Observation field. Observation, CLI, and Workbench schema 9 separate
+  authorization gate nor an Observation field. Observation and the safe CLI receipt separate
   `MAINNET`, `PRIVATE_EXECUTION`, `CREDENTIAL_SCOPE=USER_DECLARED_READ_ONLY`,
   `TOKEN_SCOPE_NORMALIZATION=UNAVAILABLE`,
   `APPLICATION_METHOD_PERMISSION=READ_ONLY_FIXED_ALLOWLIST`, and `ORDERS_EXECUTED=NONE`, without
@@ -157,14 +156,26 @@ Position mutation, capital action, restart, replacement, new process, root, and 
   were both uncalled and remain `UNKNOWN`, and `ORDERS_EXECUTED=NONE`. The four ignored Workbench
   artifacts contain neither selected credential value. C1 mainnet connectivity remains
   `UNVERIFIED`; this does not authorize another scope-parser iteration inside C2.
-- `c1_live_private_account=UNVERIFIED`: neither environment has a known private account observation.
-  Mainnet remains strictly read-only and its response chain is unverified. Both failed testnet C1
-  auth guards are retained as evidence but are not a C2 product gate. No C1 account value or Position
-  fact has been accepted.
-- `c2_testnet_combo_execution=DEFERRED_UNSTARTED`: the briefly activated C2 implementation task was
-  superseded before any source, test, manifest, owner, or live change. No testnet order, trade, fill,
-  fee, Position mutation, or cancel has occurred. C2 waits for the explicit C1 mainnet connectivity
-  closure.
+- `c1_live_private_account=MAINNET_READ_ONLY_ACCEPTED`: one fixed mainnet no-retry chain directly
+  observed auth, BTC summary, and BTC Positions as `KNOWN/COMPLETE` at
+  `2026-08-15T17:39:31.733508Z`; the safe receipt reported Position count `0`,
+  `USER_DECLARED_READ_ONLY`, `READ_ONLY_FIXED_ALLOWLIST`, and `ORDERS_EXECUTED=NONE`. It grants no
+  continuing private permission and makes no capital, trade, fill, or execution claim.
+- `c2_testnet_combo_interface=IMPLEMENTED_OFFLINE_ACCEPTED`: the fixed Testnet host, exact ten-method
+  surface, existing-Combo selection, same-side passive entry, state/trade/fee/Position
+  reconciliation, no-fill cancellation, partial-fill remainder cancellation, and final-actual-fill
+  reduce-only exit branches passed `274` repository tests and `8/8` business scenarios. Shared B3
+  Workbench source and assets remain tree-equivalent to the accepted main baseline.
+- `c2_testnet_combo_no_fill=LIVE_INTERFACE_ACCEPTED`: the sole lifecycle invocation authenticated,
+  selected existing Combo `BTC-FS-17AUG26_16AUG26`, submitted one passive minimum-amount Testnet
+  order, queried its exact state and trades, observed final actual filled amount `0.0`, empty trades
+  and zero actual fee, cancelled order `113774779580`, and directly observed final `cancelled` with
+  BTC Position exposure equal to baseline. The safe receipt was `COMPLETE/NO_FILL_CANCELLED` no
+  later than `2026-08-15T18:13:20Z`; it contained no credential, token, account value, or Position
+  detail.
+- `c2_natural_fill=NOT_OBSERVED`: because the accepted order did not fill, nonzero actual fee and
+  the opposite same-Combo reduce-only exit remain `UNVERIFIED`; the exit was correctly
+  `NOT_APPLICABLE_NO_FILL` and no second entry was attempted.
 
 ## Current implementation truth
 
@@ -224,7 +235,7 @@ Position mutation, capital action, restart, replacement, new process, root, and 
   reserve immediately. Only the matching official settlement may append one hold-counterfactual
   enrichment; it cannot rewrite exit economics, primary reason, path, terminality, or risk state.
 - Runtime root schema 3, `MarketObservationV3`, `TradeCaseSnapshotV3`,
-  `ShadowExplanationPathV2`, and Workbench schema 9 reject prior source or explanatory shapes rather
+  `ShadowExplanationPathV2`, and Workbench schema 7 reject prior source or explanatory shapes rather
   than migrating the frozen prior root. Workbench exposes market-source identity, Candidate-local
   readiness, the Decision-to-Outcome path, extrema, Gaps, alternatives, fees, and counterfactuals
   without inventing missing facts.
@@ -256,18 +267,17 @@ Position mutation, capital action, restart, replacement, new process, root, and 
   epoch-bounded reconnect index-path recovery seeds, official settlement, and explicit affected-book
   recovery fallback. The feed adds no durable store, database, bus, replay framework, private
   method, or authenticated `raw` channel.
-- The complete repository gate passes: `267` tests and `8` deterministic business scenarios. This
+- The complete repository gate passes: `274` tests and `8` deterministic business scenarios. This
   is offline implementation evidence, not current market, execution, or profitability evidence.
-- The active task is C1 implementation-only. It may delete the response-scope parser as a mainnet
-  read gate, retain the fixed auth request `account:read trade:read`, and project only
-  `CREDENTIAL_SCOPE=USER_DECLARED_READ_ONLY` plus
-  `TOKEN_SCOPE_NORMALIZATION=UNAVAILABLE`. No credential read or live call is authorized.
+- The fixed C2 Testnet method surface, deterministic existing-Combo selection, one bounded
+  order/reconciliation/cleanup state machine, safe receipt, and fake branches are accepted. One
+  live no-fill/cancel lifecycle is also accepted; it grants no continuing private permission.
 
-**Primary blocker:** `C1_MAINNET_RESPONSE_SCOPE_IS_FALSE_PRODUCT_GATE` — three live auth responses
-have been blocked locally before summary and Positions because the client attempts to normalize an
-exchange scope string that neither grants nor expands application methods. Safety already belongs
-to the user-declared read-only mainnet credential, the exact requested read scope, and a closed
-three-method allowlist. B3 reliability and the natural chain remain separately `UNVERIFIED`.
+**Primary blocker:** `NEXT_AUTHORIZED_CLOSURE_UNSELECTED` — C1 mainnet read-only connectivity and C2
+Testnet no-fill interface connectivity are accepted. Natural fill, nonzero fee, and reduce-only
+exit remain truthful unobserved evidence, not a reason to repeat orders or a gate on read-only D1
+discussion. B3 reliability and the natural chain remain separately `UNVERIFIED` and are not C2
+gates.
 
 ## Maturity ladder
 
@@ -282,8 +292,6 @@ three-method allowlist. B3 reliability and the natural chain remain separately `
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Active closure boundary:** remove response-scope normalization and persistence from the C1 mainnet
-read path while retaining the exact request scope, host, currency, parameters, and three methods.
-Project the credential permission basis and unavailable token normalization truthfully. Live
-credentials, Chrome, key mutation, mainnet execution, testnet, real capital, B3 runtime/root access,
-Candidate manufacture, Policy, D1, Edge claims, and deployment remain forbidden.
+**Active closure boundary:** `NONE`. Read-only discovery, discussion, and existing offline checks are
+allowed. Any source, Authority, validation, credential, market, account, order, runtime, root,
+Policy, D1, deployment, merge, or push change requires one new task and matching Stage activation.

@@ -7,7 +7,7 @@ import os
 import re
 import stat
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NoReturn, Protocol
@@ -24,7 +24,6 @@ from optimatrix.deribit_private import (
     PrivateAccountTransport,
     capture_authenticated_account,
 )
-from optimatrix.workbench import write_workbench
 
 
 @dataclass(frozen=True)
@@ -126,25 +125,12 @@ def run(
         help="fixed Deribit account environment",
     )
     parser.add_argument(
-        "--snapshot",
-        type=Path,
-        required=True,
-        help="existing Public Shadow snapshot JSON to project beside the account capture",
-    )
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument(
         "--credentials-file",
         type=Path,
         help="explicit owner-only 0600 credential file; never searched or auto-loaded",
     )
     try:
         args = parser.parse_args(raw_arguments)
-    except DeribitPrivateError as exc:
-        _print_safe_error(exc.code)
-        return 2
-
-    try:
-        snapshot = _read_snapshot(args.snapshot)
     except DeribitPrivateError as exc:
         _print_safe_error(exc.code)
         return 2
@@ -169,16 +155,11 @@ def run(
             client_secret=credentials.client_secret,
         )
         del credentials
-        exported = write_workbench(
-            snapshot,
-            args.output_dir,
-            account_observation=observation,
-        )
     except DeribitPrivateError as exc:
         _print_safe_error(exc.code)
         return 2
     except (OSError, TypeError, ValueError):
-        _print_safe_error("PRIVATE_WORKBENCH_WRITE_FAILED")
+        _print_safe_error("PRIVATE_ACCOUNT_CAPTURE_FAILED")
         return 2
 
     print(
@@ -192,13 +173,22 @@ def run(
                 "application_method_permission": APPLICATION_METHOD_PERMISSION,
                 "orders_executed": ORDERS_EXECUTED,
                 "status": observation.status.value,
+                "summary_status": "KNOWN" if observation.summary is not None else "UNKNOWN",
+                "positions_status": "KNOWN" if observation.positions is not None else "UNKNOWN",
+                "position_count": (
+                    len(observation.positions) if observation.positions is not None else None
+                ),
+                "known_at": (
+                    observation.known_at.isoformat().replace("+00:00", "Z")
+                    if observation.known_at is not None
+                    else None
+                ),
                 "completeness": (
                     "COMPLETE"
                     if observation.status is AccountObservationStatus.KNOWN
                     else "PARTIAL_OR_UNKNOWN"
                 ),
                 "blockers": list(observation.blockers),
-                "workbench": str(exported.index_path),
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -209,16 +199,6 @@ def run(
 
 def _http_transport(environment: DeribitAccountEnvironment) -> PrivateAccountTransport:
     return DeribitPrivateHttpClient(environment=environment)
-
-
-def _read_snapshot(path: Path) -> Mapping[str, object]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        raise DeribitPrivateError("PUBLIC_SNAPSHOT_UNREADABLE") from None
-    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
-        raise DeribitPrivateError("PUBLIC_SNAPSHOT_INVALID")
-    return value
 
 
 _CREDENTIAL_FILE_KEYS = frozenset(

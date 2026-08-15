@@ -2,7 +2,7 @@
   'use strict';
 
   const workbench = window.OPTIMATRIX_WORKBENCH;
-  if (!workbench || workbench.schema_version !== 9) {
+  if (!workbench || workbench.schema_version !== 7) {
     document.body.textContent = 'Workbench 数据缺失或版本不受支持。';
     return;
   }
@@ -12,9 +12,6 @@
     snapshotKnownAt: document.snapshot?.known_at,
     runtimeUpdatedAt: document.runtime?.updated_at,
     runtimeState: document.runtime?.state,
-    accountObservationId: document.account?.account_observation_id,
-    accountStatus: document.account?.status,
-    accountCompleteness: document.account?.completeness,
     ledgerCounts: document.ledger?.counts,
     cases: (document.cases || []).map(item => ({
       tradeCaseId: item.trade_case_id,
@@ -77,13 +74,6 @@
 
   const translations = {
     PUBLIC_SHADOW: '公开行情模拟',
-    PRIVATE_EXECUTION: '私有账户事实',
-    USER_DECLARED_READ_ONLY: '用户声明只读凭据',
-    READ_ONLY_FIXED_ALLOWLIST: '固定只读方法白名单',
-    UNAVAILABLE: '不可用（未解析响应 scope）',
-    NOT_CAPTURED: '尚未采集',
-    PARTIAL: '部分已知',
-    CAPTURE_BOUNDARY_KNOWN: '采集边界已知（不代表持续新鲜）',
     UNAUTHORIZED: '尚未授权',
     RUNNING: '持续运行',
     RECOVERY_GAP: '恢复中断形成数据缺口',
@@ -240,9 +230,6 @@
 
   function renderShell() {
     byId('session-label').textContent = `${formatDate(workbench.runtime.session_id)} · Deribit 08:00 UTC 到期`;
-    byId('session-mode').textContent = workbench.account.available
-      ? `公开行情模拟 · ${translate(workbench.account.environment)} 私有账户只读观察`
-      : '公开行情模拟 · 私有账户尚未采集';
     const switcher = byId('channel-switcher');
     switcher.replaceChildren();
     workbench.channels.forEach(channel => {
@@ -353,89 +340,6 @@
       appendText(fact, 'span', '', label);
       appendText(fact, 'strong', '', value);
       marketTarget.append(fact);
-    });
-  }
-
-  function renderAccount() {
-    const account = workbench.account;
-    const boundary = byId('account-boundary');
-    boundary.replaceChildren();
-    [
-      ['ENVIRONMENT', translate(account.environment)],
-      ['CREDENTIAL_SCOPE', translate(account.credential_scope)],
-      ['APPLICATION_METHOD_PERMISSION', translate(account.application_method_permission)],
-      ['ORDERS_EXECUTED', translate(account.orders_executed)],
-      ['状态', translate(account.status)],
-      ['Freshness', translate(account.freshness?.status)],
-      ['Known at', formatTimestamp(account.freshness?.known_at)],
-      ['请求 Token scope', account.requested_token_scope || '未知'],
-      ['Token scope 归一化', translate(account.token_scope_normalization)],
-      ['完整性', translate(account.completeness)]
-    ].forEach(([label, value]) => {
-      const fact = create('div', 'account-boundary-fact');
-      appendText(fact, 'span', '', label);
-      appendText(fact, 'strong', '', value);
-      boundary.append(fact);
-    });
-
-    const summary = byId('account-summary');
-    const values = account.summary || {};
-    summary.replaceChildren(
-      metricItem('账户摘要', translate(account.summary_status), account.summary_status === 'KNOWN' ? 'positive' : 'warning'),
-      metricItem('币种', values.currency || '未知'),
-      metricItem('余额', values.balance ? `${values.balance} BTC` : '未知'),
-      metricItem('权益', values.equity ? `${values.equity} BTC` : '未知'),
-      metricItem('可用资金', values.available_funds ? `${values.available_funds} BTC` : '未知'),
-      metricItem('初始保证金', values.initial_margin ? `${values.initial_margin} BTC` : '未知'),
-      metricItem('维持保证金', values.maintenance_margin ? `${values.maintenance_margin} BTC` : '未知')
-    );
-
-    const positions = byId('account-positions');
-    positions.replaceChildren();
-    if (account.positions_status !== 'KNOWN') {
-      const unknown = create('div', 'account-unknown');
-      appendText(unknown, 'strong', '', 'BTC Positions UNKNOWN');
-      appendText(unknown, 'span', '', '部分已知不得推断为空仓、可用容量、保证金余量或真实风险暴露。');
-      positions.append(unknown);
-    } else if (!account.positions?.length) {
-      const empty = create('div', 'account-empty');
-      appendText(empty, 'strong', '', 'BTC Positions KNOWN EMPTY');
-      appendText(empty, 'span', '', '仅表示该次完整响应边界返回空持仓；不创建 Shadow Position，也不持续刷新。');
-      positions.append(empty);
-    } else {
-      const table = create('table');
-      const head = create('thead');
-      const header = create('tr');
-      ['合约', '类型', '方向', '数量', '均价', '标记价', '浮动 PnL', '累计 PnL', '初始保证金', '维持保证金', 'Delta'].forEach(label => appendText(header, 'th', '', label));
-      head.append(header);
-      const body = create('tbody');
-      account.positions.forEach(position => {
-        const row = create('tr');
-        [
-          position.instrument_name,
-          position.kind,
-          position.direction,
-          position.size,
-          position.average_price,
-          position.mark_price,
-          position.floating_profit_loss,
-          position.total_profit_loss,
-          position.initial_margin,
-          position.maintenance_margin,
-          position.delta
-        ].forEach(value => appendText(row, 'td', '', value));
-        body.append(row);
-      });
-      table.append(head, body);
-      positions.append(table);
-    }
-
-    const isolation = byId('account-isolation');
-    isolation.replaceChildren();
-    account.isolation.forEach(statement => appendText(isolation, 'p', '', statement));
-    account.blockers.forEach(blocker => {
-      const warning = appendText(isolation, 'p', 'account-blocker', translate(blocker));
-      warning.dataset.tone = 'danger';
     });
   }
 
@@ -818,7 +722,6 @@
     renderEvidenceRows('evidence-runtime', workbench.runtime.facts);
     renderEvidenceRows('evidence-window', workbench.window);
     renderEvidenceRows('evidence-context', workbench.context);
-    renderEvidenceRows('evidence-account', workbench.account.facts);
     renderEvidenceRows('evidence-methodology', workbench.methodology);
     const warnings = byId('evidence-warnings');
     warnings.replaceChildren();
@@ -887,7 +790,6 @@
 
   renderShell();
   renderLedger();
-  renderAccount();
   renderReview();
   renderEvidence();
   wireInteractions();

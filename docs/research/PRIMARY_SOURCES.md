@@ -81,6 +81,8 @@ or profitability.
   — official delivery-price payload.
 - [`public/get_combos`](https://docs.deribit.com/api-reference/combo-books/public-get_combos)
   — currently active Combo descriptors; absence does not prove on-demand impossibility.
+- [`public/get_instrument`](https://docs.deribit.com/api-reference/market-data/public-get_instrument)
+  — instrument kind, active/open state, expiry, minimum trade amount, and tick metadata.
 
 ## Private facts for later stages
 
@@ -110,4 +112,7 @@ These sources describe capability but grant no permission:
 - [`private/buy`](https://docs.deribit.com/api-reference/trading/private-buy) and
   [`private/sell`](https://docs.deribit.com/api-reference/trading/private-sell)
   — order placement, TIF, reduce-only, and returned order/trade facts; both require
+  `trade:read_write`.
+- [`private/cancel`](https://docs.deribit.com/api-reference/trading/private-cancel)
+  — cancellation of one exact open order and the resulting order state; requires
   `trade:read_write`.
