@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 PUBLIC RUNTIME RELIABILITY REMEDIATION — ACTIVE
+**Status:** B3 POST-REMEDIATION FORWARD RELIABILITY — ACTIVE
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -8,18 +8,18 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `VALIDATION_ONLY`
 
-**Sole authorized closure:** [`B3_PUBLIC_RUNTIME_RELIABILITY_REMEDIATION`](../../tasks/B3_PUBLIC_RUNTIME_RELIABILITY_REMEDIATION.md)
+**Sole authorized closure:** [`B3_POST_REMEDIATION_FORWARD_RELIABILITY`](../../tasks/B3_POST_REMEDIATION_FORWARD_RELIABILITY.md)
 
 ## Current permissions
 
 Stage is the permission ceiling; a future active task may only narrow it.
 
-**Offline checks and simulation:** deterministic silent-transport, reconnect, recovery, elapsed-time,
-and slow-Outcome scheduler tests are authorized only under caller-supplied ignored roots; synthetic
-reconnects against production, simulated durable market evidence, Policy Outcomes, and durable
-review artifacts are forbidden
+**Offline checks and simulation:** after `2026-08-16T08:20:00Z`, one bounded read-only
+reconciliation of the `55` post-remediation Windows and next-Session scheduler boundary is
+authorized under a caller-supplied ignored root; synthetic reconnects against production,
+simulated durable market evidence, Policy Outcomes, and durable review artifacts are forbidden
 
 **Public market calls:** only unauthenticated production `wss://www.deribit.com/ws/api/v2` public
 heartbeat, subscribe, unsubscribe, test, BTC index, and aggregated `100ms` BTC option book/ticker
@@ -41,16 +41,16 @@ is retained without migration or mutation and remains ineligible for the current
 **Continuous runtime:** only launchd label `com.optimatrix.b3-public-shadow`, executing the
 `origin/main` console script from `/Users/logan/Optimatrix`, with EventState `NONE`, Policy identity
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`, the exact v2 root,
-loopback Workbench port `8765`, and no duration expansion into another process or root. The current
-job may remain while checks run. After `main` is committed, pushed, and passes the full repository
-gate, exactly one launchd replacement is authorized with the same label, command, root, Policy,
-EventState, and port; natural reconnects and launchd `KeepAlive` may then preserve that exact job
+loopback Workbench port `8765`, and no duration expansion into another process or root. Commit
+`673c812` is already deployed as PID `12409`; natural WebSocket reconnects and launchd `KeepAlive`
+may preserve this exact job, but no manual restart, replacement, new root, or other process is
+authorized
 
 **Private read-only account permission:** `NONE`
 
-**Orders, capital, and deployment:** exactly one local replacement of the named public Shadow job
-is authorized after the active task's repository gates pass. Any second manual replacement, new
-root, other local or remote deployment, orders, fills, capital, and private access remain `NONE`
+**Orders, capital, and deployment:** the exact deployed local launchd public Shadow job may remain
+under `KeepAlive`. Any manual replacement, new root, other local or remote deployment, orders,
+fills, capital, and private access remain `NONE`
 
 **Policy qualification / Edge claim:** `NONE`
 
@@ -92,24 +92,28 @@ root, other local or remote deployment, orders, fills, capital, and private acce
   a known continuous public path and official delivery `63013.74`; `64` Decisions are evaluable,
   all `81` path populations are eligible, and zero is execution-attributable or Policy-qualified.
   Their overlapping horizons are Window facts, not `81` independent trades or PnL observations.
-- `reconnect_recovery_capability=EPOCH_RECOVERY_DEPLOYED_BUT_TRIGGER_PATH_INCOMPLETE`: commit `9969af3` adds one
-  epoch-scoped index-history recovery attempt, rejects malformed, discontinuous, late, or repeated
-  seeds, and requires a strictly later same-epoch WebSocket index continuation. It passed `228`
-  tests and `8` scenarios, was pushed to `origin/main`, and was deployed once as PID `51093`.
-  Loopback returned HTTP `200`; observation
-  `sha256:ba830878949ef8930642b93ebba52b91cdce5643e209d8fc716931a5145283d2` completed at
-  `2026-08-15T11:00:19.612000Z` with source
-  `DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1`, `21` quotes, and one continuity epoch.
-- `public_stream_liveness=FAILED`: the last audited inbound-triggered `public/test` response was at
-  `2026-08-15T12:05:47.666819Z`; market-cut attempts from `12:15 UTC` through at least `17:30 UTC`
-  then failed without a disconnect or new epoch while PID `51093` and loopback HTTP stayed alive.
-  The feed disables library Ping/Pong and ignores every receive timeout forever, so the deployed
-  reconnect recovery cannot run for this silent half-open failure mode.
-- `online_scheduler_isolation=FAILED`: the `08:00 UTC` Window became
-  `DECISION_FINALIZATION_CADENCE_MISSED` after the same tick synchronously constructed `81`
-  prior-Session WindowOutcomes. A representative path summary over the current history takes about
-  `0.88s` before append-only ledger validation, making the all-at-once loop a measured minutes-long
-  online scheduler blocker.
+- `reliability_incident=ADJUDICATED`: PID `51093` and loopback HTTP remained alive after the last
+  inbound-triggered `public/test` at `2026-08-15T12:05:47.666819Z`, while more than twenty later
+  market-cut attempts failed without a new connection epoch. Separately, the `08:00 UTC` Window was
+  discarded after one tick synchronously constructed `81` prior-Session WindowOutcomes. These were
+  measured liveness-trigger and scheduler-isolation failures, not market calm or Policy results.
+- `public_runtime_reliability_capability=DEPLOYED_AND_INITIAL_LIVE_CUT_ACCEPTED`: commit `673c812`
+  enables `10s/10s` protocol Ping/Pong, `30s` inbound and desired-market silence deadlines,
+  suspend-aware elapsed timing, capped `1/2/4/8/16/30s` reconnect backoff, fresh-epoch recovery
+  after a failed recovery, append-only lifecycle audit, and one WindowOutcome unit after current
+  work per tick. It passed `236` tests and `8` scenarios, was pushed to `origin/main`, and replaced
+  PID `51093` once with PID `12409` while retaining the exact command, root, Policy, EventState,
+  port, one lock owner, one listener, and HTTP `200`.
+- `post_remediation_live_cut=ACCEPTED`: epoch one opened at
+  `2026-08-15T18:15:14.766000Z`, desired market data resumed at `18:15:15.150484Z`, and observation
+  `sha256:16e6b4c991896cfec0bab1c6e4d945e03ac774f2bd254522696e92591542ec50` completed at
+  `18:15:15.167000Z` with source `DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1`, `21/21` books, one
+  continuity epoch, `knowledge=KNOWN`, and complete Candidate-local readiness. Heartbeats continued
+  through at least `18:16:24.595510Z` without a false reconnect.
+- `online_scheduler_isolation=DETERMINISTIC_MECHANISM_ACCEPTED_LIVE_BOUNDARY_PENDING`: adversarial
+  tests prove a failing Outcome append occurs only after due Decision work, at most one Outcome is
+  attempted per tick, and restart resumes the remaining append-once population without duplicates.
+  The corresponding next-Session `08:15 UTC` live boundary has not yet occurred.
 - `natural_reconnect_recovery=NOT_YET_OBSERVED`: no accepted evidence yet proves a natural
   post-remediation disconnect and recovery. Deterministic failure injection may accept the mechanism
   but cannot substitute for that production occurrence.
@@ -195,35 +199,41 @@ root, other local or remote deployment, orders, fills, capital, and private acce
 - A scheduled Window may consume its one public cut only after the source watermark reaches that
   Window's start. The existing bounded cache wait owns this lower boundary; retained pre-Window
   state cannot consume the attempt while the input grace remains available.
-- Commit `9969af3` is deployed under the exact launchd job from `/Users/logan/Optimatrix` onto v2.
-  The one authorized replacement changed PID `22801` to `51093`, retained the exact command, root,
-  Policy, EventState, and port, served HTTP `200`, and produced the healthy `11:00 UTC` public cut.
-  The interrupted `10:45 UTC` Window remained a causal restart Gap; no Decision was backfilled.
+- Commit `673c812` is deployed under the exact launchd job from `/Users/logan/Optimatrix` onto v2.
+  The one authorized replacement changed PID `51093` to `12409`, retained the exact command, root,
+  Policy, EventState, and port, served HTTP `200`, and produced the healthy `18:15 UTC` public cut.
+  The interrupted replacement Window remained a causal restart Gap; no Decision was backfilled.
+- The locked WebSocket client uses `10s/10s` Ping/Pong while the application separately requires a
+  valid inbound frame and desired market notification within `30s`. Either silence invalidates the
+  epoch using suspend-aware elapsed time. Heartbeats cannot conceal a frozen market subscription.
+  Consecutive pre-market failures back off at `1/2/4/8/16/30s` and reset only after desired market
+  data resumes; connection-open, recovery, resume, and loss transitions are append-only audits.
 - Disconnect, incomplete initialization, staleness, and sequence loss fail through the exact
   Runtime Gap path. One affected-book REST snapshot may seed resynchronization, but that instrument
   rejoins only after a matching WebSocket continuation or a new full WebSocket snapshot.
 - Each WebSocket epoch after the first attempts at most one validated two-day BTC index-history
   recovery. A seed alone is not ready: a strictly later same-epoch WebSocket index plus current
-  same-epoch books and tickers remains mandatory. Failure stays a typed Gap with no within-epoch
-  retry, polling loop, durable history, or Decision backfill.
+  same-epoch books and tickers remains mandatory. Failure stays a typed Gap, invalidates that epoch,
+  and can retry only once in a later backed-off epoch, with no within-epoch retry, polling loop,
+  durable history, or Decision backfill.
+- Due Decision, Case, and market-capture work always precedes expired-Session analytics. The Runtime
+  constructs at most one missing WindowOutcome per tick and uses existing append-once Outcomes as
+  its restart cursor; it adds no worker, queue, cursor file, or second durable owner.
 - HTTP remains limited to clock preflight/re-anchor, Session instrument metadata, initial and
   epoch-bounded reconnect index-path recovery seeds, official settlement, and explicit affected-book
   recovery fallback. The feed adds no durable store, database, bus, replay framework, private
   method, or authenticated `raw` channel.
-- The prior complete repository gate passed `228` tests and `8` deterministic business scenarios,
-  but current forward evidence has since falsified its silent-transport and scheduler-reliability
-  assumptions. Green historical tests do not override the observed failures.
-- The active task authorizes only the bounded public-runtime liveness and scheduler remediation,
-  its direct tests, one implementation push, one exact local launchd replacement after gates pass,
-  and one later Authority-only closure push after external acceptance.
-  Stable record rewriting, Policy change, private facts, orders, capital, any second replacement,
-  and any other local or remote deployment remain disabled.
+- The complete repository gate passes `236` tests and `8` deterministic business scenarios. This is
+  offline mechanism evidence, not proof that a natural production failure has occurred or recovered.
+- The active task is validation-only and ends after the fixed `2026-08-16T08:20:00Z` audit. Outside
+  the exact deployed runtime and later bounded read-only reconciliation, live commands, stable-root
+  mutation, and market calls remain disabled. Private facts, orders, capital, manual replacement,
+  and any other local or remote deployment remain unconditionally disabled.
 
-**Primary blocker:** `PUBLIC_RUNTIME_RELIABILITY_FAILED` — one silent half-open connection can keep
-the process and Workbench superficially healthy while indefinitely amplifying later Window Gaps,
-and unbounded completed-Session Outcome work can block the same online scheduler long enough to
-discard a current Window. Both trigger and scheduling paths require bounded, directly tested
-failure behavior before forward observation can resume reliably.
+**Primary blocker:** `POST_REMEDIATION_FORWARD_RELIABILITY_UNMEASURED` — the mechanism, deployment,
+initial live market cut, and one watchdog interval are accepted, but the fixed `55`-Window forward
+population and next-Session live scheduler boundary are incomplete. The active validation measures
+them once and closes without requiring a failure, reconnect, Candidate, or extension.
 
 ## Maturity ladder
 
@@ -237,14 +247,11 @@ failure behavior before forward observation can resume reliably.
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Active closure boundary:** enable the locked client's `10s/10s` Ping/Pong, close a connection after
-`30s` without a valid inbound frame or desired market notification using suspend-aware elapsed time,
-reconnect with capped
-`1/2/4/8/16/30s` backoff and append-only lifecycle audit, and process at most one WindowOutcome only
-after current-window work per tick. Preserve the existing epoch recovery and strict later-stream
-continuation rule; recovery failure closes that epoch and can retry only through a new backed-off
-epoch. After focused and full gates, push `main`, replace the exact job once, and require
-one healthy post-replacement cut plus singular-process/HTTP/audit evidence. Do not backfill any Gap
-or force a production disconnect. Policy, `7%`, `$10`, sizing, ranking, durable schema, private
-facts, orders, fills, capital, Policy qualification, Edge claims, C1/C2, D1, remote deployment, and
-B4 remain forbidden.
+**Active closure boundary:** after `2026-08-16T08:20:00Z`, reconcile exactly the `55` scheduled
+Windows beginning in `[2026-08-15T18:15:00Z, 2026-08-16T08:00:00Z)` plus the `08:15 UTC`
+next-Session scheduler boundary. Report coverage, DataHealth, lifecycle events, epochs, recovery
+calls, later-Window amplification, per-event Outcome count deltas, and any cadence miss. If no
+natural failure occurred, close with `NOT_YET_OBSERVED`; do not extend the task or manufacture a
+Candidate. Implementation, manual restart, Policy, `7%`, `$10`, sizing, ranking, durable schema,
+private facts, orders, fills, capital, Policy qualification, Edge claims, C1/C2, D1, remote
+deployment, and B4 remain forbidden.
