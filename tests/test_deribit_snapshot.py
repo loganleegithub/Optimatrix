@@ -265,7 +265,7 @@ def test_default_elapsed_clock_advances_across_macos_sleep(monkeypatch) -> None:
     monkeypatch.setattr(deribit_snapshot, "sys", SimpleNamespace(platform="darwin"))
     monkeypatch.setattr(deribit_snapshot, "time", fake_time)
 
-    assert deribit_snapshot._continuous_monotonic_ns() == 123_456_789
+    assert deribit_snapshot.continuous_monotonic_ns() == 123_456_789
     assert calls == [4]
 
 

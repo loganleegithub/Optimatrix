@@ -196,6 +196,15 @@ def _display_value(rows: object, key: str) -> object:
     return row["value"]
 
 
+def _drain_window_outcomes(runtime: BtcPublicShadowRuntime, at: datetime) -> None:
+    expected = len(runtime.ledger.read())
+    for _ in range(expected + 1):
+        if len(runtime.ledger.read_outcomes()) == expected:
+            return
+        runtime.tick(at)
+    raise AssertionError("bounded per-tick WindowOutcome work did not drain")
+
+
 def _open_case(runtime, source: FakeRuntimeSource, *, window_index: int):
     before = set(runtime.cases)
     window = runtime.windows[window_index]
@@ -241,7 +250,7 @@ def test_runtime_records_one_complete_unknown_session_and_workbench(policy, tmp_
         for window in runtime.windows:
             runtime.tick(window.input_deadline)
         runtime.tick(session.end + timedelta(minutes=5))
-        runtime.tick(runtime.finalization_at)
+        _drain_window_outcomes(runtime, runtime.finalization_at)
 
         decisions = runtime.ledger.summarize(expected_windows=runtime.windows)
         outcomes = runtime.ledger.summarize_outcomes(expected_windows=runtime.windows)
@@ -666,6 +675,53 @@ def test_late_window_finalization_does_not_replay_an_old_candidate_cut(
         runtime.close()
 
 
+def test_background_outcome_failure_cannot_precede_due_decision_and_resumes_one_per_tick(
+    policy,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    session = _session(policy)
+    source = FakeRuntimeSource(policy, session, fail_snapshot=True)
+    runtime = BtcPublicShadowRuntime(
+        root=tmp_path / "stable",
+        policy=policy,
+        source=source,
+        event_state=EventState.NONE,
+        now=session.start - timedelta(minutes=10),
+        target_session=session,
+        sleep=source.sleeps.append,
+    )
+    try:
+        first = runtime.windows[0]
+        last = runtime.windows[-1]
+        runtime.tick(first.starts_at + timedelta(seconds=1))
+        runtime.tick(first.input_deadline)
+        runtime.tick(last.starts_at + timedelta(seconds=1))
+        original_append = runtime.ledger.append_outcome
+
+        def fail_background_append(outcome) -> None:
+            recorded = {record.window.identity for record in runtime.ledger.read()}
+            assert last.identity in recorded
+            raise RuntimeError("injected background outcome failure")
+
+        monkeypatch.setattr(runtime.ledger, "append_outcome", fail_background_append)
+        with pytest.raises(RuntimeError, match="background outcome failure"):
+            runtime.tick(runtime.finalization_at)
+
+        recorded_ids = {record.window.identity for record in runtime.ledger.read()}
+        assert {first.identity, last.identity} <= recorded_ids
+        assert runtime.ledger.read_outcomes() == ()
+
+        monkeypatch.setattr(runtime.ledger, "append_outcome", original_append)
+        runtime.tick(runtime.finalization_at + timedelta(seconds=1))
+        assert len(runtime.ledger.read_outcomes()) == 1
+        runtime.tick(runtime.finalization_at + timedelta(seconds=2))
+        assert len(runtime.ledger.read_outcomes()) == 2
+        assert source.history_calls == 1
+    finally:
+        runtime.close()
+
+
 def test_second_owner_does_not_delete_temporary_file_while_lock_is_held(
     policy,
     tmp_path,
@@ -964,6 +1020,8 @@ def test_restart_completes_window_outcomes_after_nth_append_crash(
 
     monkeypatch.setattr(runtime.ledger, "append_outcome", crash_on_seventh_outcome)
     try:
+        for _ in range(6):
+            runtime.tick(runtime.finalization_at)
         with pytest.raises(RuntimeError, match="WindowOutcome append"):
             runtime.tick(runtime.finalization_at)
         accepted_prefix = runtime.ledger.read_outcomes()
@@ -983,7 +1041,10 @@ def test_restart_completes_window_outcomes_after_nth_append_crash(
         sleep=source.sleeps.append,
     )
     try:
-        restarted.tick(runtime.finalization_at + timedelta(seconds=1))
+        _drain_window_outcomes(
+            restarted,
+            runtime.finalization_at + timedelta(seconds=1),
+        )
         recorded_outcomes = restarted.ledger.read_outcomes()
         outcomes = restarted.ledger.summarize_outcomes(expected_windows=restarted.windows)
         assert outcomes.denominator == outcomes.recorded == 96
@@ -1044,7 +1105,7 @@ def test_successful_position_settles_and_populates_encountered_window_outcomes(
         assert terminal.outcome.native_result_btc is not None
         assert terminal.outcome.eligibility.terminal_economics_evaluable.value is True
 
-        runtime.tick(runtime.finalization_at)
+        _drain_window_outcomes(runtime, runtime.finalization_at)
         outcomes = runtime.ledger.read_outcomes()
         outcome_summary = runtime.ledger.summarize_outcomes(expected_windows=runtime.windows)
         assert outcome_summary.denominator == 96
@@ -1570,7 +1631,7 @@ def test_pending_entry_recovered_after_expiry_terminalizes_partial_session(
         assert terminal.outcome.terminal_method is TerminalMethod.NO_POSITION
 
         recovered.tick(session.end + timedelta(minutes=5))
-        recovered.tick(recovered.finalization_at)
+        _drain_window_outcomes(recovered, recovered.finalization_at)
         assert not recovered.complete
         assert len(recovered.ledger.read()) == 2
         assert len(recovered.ledger.read_outcomes()) == 2
@@ -1932,6 +1993,50 @@ def test_runtime_reanchors_deribit_clock_once_and_continues(policy, tmp_path) ->
         assert "DERIBIT_CLOCK_REANCHORED" in (
             runtime.root_owner.root / "runtime-events.jsonl"
         ).read_text(encoding="utf-8")
+    finally:
+        runtime.close()
+
+
+def test_runtime_persists_bound_stream_lifecycle_events(policy, tmp_path) -> None:
+    session = _session(policy)
+
+    class LifecycleAuditSource(FakeRuntimeSource):
+        stream_callback = None
+
+        def bind_stream_lifecycle_audit(self, callback) -> None:
+            self.stream_callback = callback
+
+    source = LifecycleAuditSource(policy, session)
+    runtime = BtcPublicShadowRuntime(
+        root=tmp_path / "stable",
+        policy=policy,
+        source=source,
+        event_state=EventState.NONE,
+        now=session.start,
+        target_session=session,
+        sleep=source.sleeps.append,
+    )
+    try:
+        assert source.stream_callback is not None
+        source.stream_callback(
+            "WEBSOCKET_CONNECTION_LOST",
+            {
+                "connection_epoch": 3,
+                "reason": "test-only",
+                "reconnect_delay_seconds": 4.0,
+            },
+        )
+        event = json.loads(
+            (runtime.root_owner.root / "runtime-events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()[-1]
+        )
+        assert event["kind"] == "WEBSOCKET_CONNECTION_LOST"
+        assert json.loads(event["detail"]) == {
+            "connection_epoch": 3,
+            "reason": "test-only",
+            "reconnect_delay_seconds": 4.0,
+        }
     finally:
         runtime.close()
 

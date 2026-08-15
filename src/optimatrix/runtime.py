@@ -159,6 +159,7 @@ class DeribitPublicRuntimeSource:
         self._cache: BtcWebSocketCache | None = None
         self._feed_session_id: str | None = None
         self._instrument_metadata: tuple[dict[str, object], ...] = ()
+        self._stream_lifecycle_callback: Callable[[str, Mapping[str, object]], None] | None = None
 
     def preflight(
         self,
@@ -252,6 +253,12 @@ class DeribitPublicRuntimeSource:
     ) -> None:
         self.client.audit_callback = callback
 
+    def bind_stream_lifecycle_audit(
+        self,
+        callback: Callable[[str, Mapping[str, object]], None],
+    ) -> None:
+        self._stream_lifecycle_callback = callback
+
     def close(self) -> None:
         if self._feed is not None:
             self._feed.close()
@@ -299,6 +306,7 @@ class DeribitPublicRuntimeSource:
             rest_resync=self._rest_resync,
             timeout_seconds=self.timeout_seconds,
             audit_callback=self._audit_stream_call,
+            lifecycle_callback=self._audit_stream_lifecycle,
         )
         self._instrument_metadata = metadata
         self._cache = cache
@@ -348,6 +356,15 @@ class DeribitPublicRuntimeSource:
         callback = self.client.audit_callback
         if callback is not None:
             callback(method, params, timeout_seconds)
+
+    def _audit_stream_lifecycle(
+        self,
+        kind: str,
+        detail: Mapping[str, object],
+    ) -> None:
+        callback = self._stream_lifecycle_callback
+        if callback is not None:
+            callback(kind, detail)
 
 
 @dataclass(frozen=True)
@@ -863,6 +880,13 @@ class BtcPublicShadowRuntime:
             bind_audit = getattr(self.source, "bind_audit", None)
             if callable(bind_audit):
                 bind_audit(self._audit_public_call)
+            bind_stream_lifecycle_audit = getattr(
+                self.source,
+                "bind_stream_lifecycle_audit",
+                None,
+            )
+            if callable(bind_stream_lifecycle_audit):
+                bind_stream_lifecycle_audit(self._audit_stream_lifecycle)
             if startup_preflight is not None:
                 self._audit(
                     "DERIBIT_PUBLIC_CALL",
@@ -1779,6 +1803,10 @@ class BtcPublicShadowRuntime:
     def _process_expired_sessions(self, now: datetime) -> datetime:
         effective_known_at = now
         records = self.ledger.read()
+        records_by_window = {record.window.identity: record for record in records}
+        existing_outcome_ids = {
+            outcome.decision_window_id for outcome in self.ledger.read_outcomes()
+        }
         sessions_with_records = {record.window.market_session_id for record in records}
         sessions_with_cases = {
             self._case_session(case).session_id
@@ -1796,11 +1824,30 @@ class BtcPublicShadowRuntime:
             if fact is not None:
                 effective_known_at = max(effective_known_at, fact.known_at)
             self._reconcile_settlement(session, effective_known_at)
-            if now >= self._session_finalization_at(session) and self._settlement_resolved(session):
-                self._finalize_outcomes(session, now)
-                capture = self.history_captures.get(session.session_id)
-                if capture is not None:
-                    effective_known_at = max(effective_known_at, capture.known_at)
+        outcome_session = next(
+            (
+                candidate
+                for candidate in sorted(self._sessions.values(), key=lambda item: item.end)
+                if now >= self._session_finalization_at(candidate)
+                and self._settlement_resolved(candidate)
+                and any(
+                    window.identity in records_by_window
+                    and window.identity not in existing_outcome_ids
+                    for window in self._windows_by_session[candidate.session_id]
+                )
+            ),
+            None,
+        )
+        if outcome_session is not None:
+            self._finalize_next_outcome(
+                outcome_session,
+                now,
+                records_by_window=records_by_window,
+                existing_outcome_ids=existing_outcome_ids,
+            )
+            capture = self.history_captures.get(outcome_session.session_id)
+            if capture is not None:
+                effective_known_at = max(effective_known_at, capture.known_at)
         return effective_known_at
 
     def _attempt_count(self, field: str, session: DeribitSession) -> int:
@@ -1928,7 +1975,14 @@ class BtcPublicShadowRuntime:
     def _settlement_resolved(self, session: DeribitSession) -> bool:
         return session.session_id in self.settlement_facts
 
-    def _finalize_outcomes(self, session: DeribitSession, now: datetime) -> None:
+    def _finalize_next_outcome(
+        self,
+        session: DeribitSession,
+        now: datetime,
+        *,
+        records_by_window: Mapping[str, DecisionRecord],
+        existing_outcome_ids: set[str],
+    ) -> None:
         capture = self.history_captures.get(session.session_id)
         if capture is None:
             error: DeribitSourceError | None = None
@@ -1974,12 +2028,9 @@ class BtcPublicShadowRuntime:
         history = capture.points or ()
         fact = self.settlement_facts.get(session.session_id)
         known_at = max(capture.known_at, fact.known_at) if fact is not None else capture.known_at
-        existing = {outcome.decision_window_id for outcome in self.ledger.read_outcomes()}
-        records = {record.window.identity: record for record in self.ledger.read()}
-        appended = 0
         for window in self._windows_by_session[session.session_id]:
-            record = records.get(window.identity)
-            if window.identity in existing or record is None:
+            record = records_by_window.get(window.identity)
+            if window.identity in existing_outcome_ids or record is None:
                 continue
             start, end = self._outcome_horizon(window, session)
             path = (
@@ -2004,20 +2055,20 @@ class BtcPublicShadowRuntime:
                 ),
             )
             self.ledger.append_outcome(outcome)
-            appended += 1
-        if appended:
-            session_outcomes = {
-                item.decision_window_id
-                for item in self.ledger.read_outcomes()
-                if item.decision_window_id
-                in {window.identity for window in self._windows_by_session[session.session_id]}
-            }
+            recorded_count = (
+                sum(
+                    candidate.identity in existing_outcome_ids
+                    for candidate in self._windows_by_session[session.session_id]
+                )
+                + 1
+            )
             self._audit(
                 "WINDOW_OUTCOME_POPULATION_RECORDED",
                 known_at,
-                f"count={len(session_outcomes)}",
+                f"count={recorded_count}",
                 session=session,
             )
+            return
 
     def _outcome_horizon(
         self,
@@ -2289,6 +2340,23 @@ class BtcPublicShadowRuntime:
             sort_keys=True,
         )
         self._audit("DERIBIT_PUBLIC_CALL", self._business_time_floor, detail)
+
+    def _audit_stream_lifecycle(
+        self,
+        kind: str,
+        detail: Mapping[str, object],
+    ) -> None:
+        try:
+            boundary = self.source.clock_reading().latest_at
+        except (AttributeError, DeribitSourceError):
+            boundary = self._business_time_floor
+        serialized = json.dumps(
+            dict(detail),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        self._audit(kind, boundary, serialized)
 
     def _recover_audit(self) -> None:
         path = self.root_owner.root / "runtime-events.jsonl"

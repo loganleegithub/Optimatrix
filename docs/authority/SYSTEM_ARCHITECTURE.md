@@ -91,7 +91,16 @@ or new full snapshot proves continuity. HTTP remains the clock, Session metadata
 index-history seed, at most one validated recovery seed per new connection epoch, official
 settlement, and explicit resynchronization path; it is not the continuous Runtime market-cut path.
 A recovered history seed remains transient and cannot make a cut ready without a strictly later
-same-epoch WebSocket index continuation. The cache creates no new durable record owner.
+same-epoch WebSocket index continuation. A failed recovery invalidates its epoch and can be
+attempted again only after capped backoff opens a new epoch. Transport Ping/Pong and the exchange
+heartbeat jointly
+detect a dead or silent socket; a task-bounded lack of valid inbound frames or desired market
+notifications closes the current connection even when heartbeat responses, the process, proxy
+socket, and Workbench remain alive. That deadline uses only
+suspend-aware elapsed time, opens a new continuity epoch through capped reconnect backoff, and is
+never a market timestamp. Connection-open, market-stream-resumed, recovery, and loss transitions
+use the existing append-only runtime audit rather than a new durable owner. The cache creates no new
+durable record owner.
 
 ## Record boundaries
 
@@ -119,7 +128,10 @@ settlement. Restart preserves first-enrollment provenance, resumes the Session t
 never backfills a missed causal cut. A Window missed before runtime enrollment remains absent rather
 than becoming a synthetic `UNKNOWN` record, and is not a reason to wait for another Session. Outside
 that exact task boundary, caller-supplied disposable roots remain the only authorized record
-location.
+location. On every online tick, due Decision and Case work precedes expired-Session analytics.
+WindowOutcome construction consumes at most one append-once unit per tick and resumes from existing
+Ledger facts after restart; a completed Session therefore cannot monopolize the current-Window
+scheduler or require a queue, cursor file, or second worker.
 
 The two records may reference the same immutable identities; neither copies, rewrites, or backfills
 the other's truth. Raw capture is added only when an authorized replay consumer requires it. These

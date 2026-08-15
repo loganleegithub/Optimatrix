@@ -16,6 +16,7 @@ from websockets.sync.client import connect
 from optimatrix.deribit_snapshot import (
     DeribitSourceError,
     PublicStreamResponse,
+    continuous_monotonic_ns,
 )
 from optimatrix.products import BTC
 
@@ -25,6 +26,11 @@ DERIBIT_BOOK_INTERVAL = "100ms"
 DERIBIT_TICKER_INTERVAL = "100ms"
 MAX_STREAM_INSTRUMENTS = 32
 MAX_STREAM_CHANNELS = MAX_STREAM_INSTRUMENTS * 2 + 1
+DERIBIT_HEARTBEAT_INTERVAL_SECONDS = 10.0
+WEBSOCKET_INBOUND_SILENCE_SECONDS = 30.0
+WEBSOCKET_MARKET_SILENCE_SECONDS = 30.0
+WEBSOCKET_RECEIVE_POLL_SECONDS = 0.25
+WEBSOCKET_RECONNECT_MAX_SECONDS = 30.0
 
 
 class WebSocketConnection(Protocol):
@@ -59,10 +65,32 @@ RestIndexHistoryRecovery = Callable[
     tuple[tuple[tuple[int, Decimal], ...], int],
 ]
 PublicCallAudit = Callable[[str, Mapping[str, object], float], None]
+StreamLifecycleAudit = Callable[[str, Mapping[str, object]], None]
+ReconnectWait = Callable[[float], bool]
 
 
 class ForwardObservationGap(DeribitSourceError):
     """One exact stream discontinuity that must reach the Runtime Gap path."""
+
+
+class WebSocketLivenessTimeout(ForwardObservationGap):
+    def __init__(self, *, connection_epoch: int, elapsed_seconds: float) -> None:
+        self.connection_epoch = connection_epoch
+        self.elapsed_seconds = elapsed_seconds
+        super().__init__(
+            "WEBSOCKET_INBOUND_SILENCE_TIMEOUT:"
+            f"epoch={connection_epoch}:elapsed_seconds={elapsed_seconds:g}"
+        )
+
+
+class WebSocketMarketSilenceTimeout(ForwardObservationGap):
+    def __init__(self, *, connection_epoch: int, elapsed_seconds: float) -> None:
+        self.connection_epoch = connection_epoch
+        self.elapsed_seconds = elapsed_seconds
+        super().__init__(
+            "WEBSOCKET_MARKET_SILENCE_TIMEOUT:"
+            f"epoch={connection_epoch}:elapsed_seconds={elapsed_seconds:g}"
+        )
 
 
 class WebSocketSequenceGap(ForwardObservationGap):
@@ -786,6 +814,9 @@ class DeribitPublicWebSocketFeed:
         url: str = DEFAULT_DERIBIT_WEBSOCKET_API,
         connection_factory: WebSocketConnectionFactory | None = None,
         audit_callback: PublicCallAudit | None = None,
+        lifecycle_callback: StreamLifecycleAudit | None = None,
+        monotonic_ns: Callable[[], int] | None = None,
+        reconnect_wait: ReconnectWait | None = None,
     ) -> None:
         if url != DEFAULT_DERIBIT_WEBSOCKET_API:
             raise ValueError("B3 WebSocket feed requires the production Deribit endpoint")
@@ -799,7 +830,10 @@ class DeribitPublicWebSocketFeed:
         self.url = url
         self.connection_factory = connection_factory or _open_connection
         self.audit_callback = audit_callback
+        self.lifecycle_callback = lifecycle_callback
+        self.monotonic_ns = monotonic_ns or continuous_monotonic_ns
         self._stop = threading.Event()
+        self.reconnect_wait = reconnect_wait or self._stop.wait
         self._thread: threading.Thread | None = None
         self._connection: WebSocketConnection | None = None
         self._next_request_id = 1
@@ -850,13 +884,21 @@ class DeribitPublicWebSocketFeed:
         )
 
     def _run(self) -> None:
+        consecutive_failures = 0
         while not self._stop.is_set():
             connection: WebSocketConnection | None = None
+            connection_epoch: int | None = None
+            market_stream_observed = False
+            reconnect_delay = 1.0
             try:
                 connection = self.connection_factory(self.url, self.timeout_seconds)
                 self._connection = connection
                 self._subscribed_channels = set()
                 connection_epoch = self.cache.begin_connection()
+                self._audit_lifecycle(
+                    "WEBSOCKET_CONNECTION_OPENED",
+                    {"connection_epoch": connection_epoch},
+                )
                 if connection_epoch > 1:
                     try:
                         history, received_timestamp_ms = self.rest_index_history_recovery()
@@ -865,23 +907,76 @@ class DeribitPublicWebSocketFeed:
                             received_timestamp_ms=received_timestamp_ms,
                             connection_epoch=connection_epoch,
                         )
+                        self._audit_lifecycle(
+                            "WEBSOCKET_RECONNECT_HISTORY_RECOVERED",
+                            {"connection_epoch": connection_epoch},
+                        )
                     except Exception as exc:
+                        reason = f"{type(exc).__name__}:{exc}"
                         self.cache.mark_reconnect_index_history_failed(
                             connection_epoch=connection_epoch,
-                            reason=f"{type(exc).__name__}:{exc}",
+                            reason=reason,
                         )
-                self._send(connection, "public/set_heartbeat", {"interval": 10})
+                        self._audit_lifecycle(
+                            "WEBSOCKET_RECONNECT_HISTORY_FAILED",
+                            {"connection_epoch": connection_epoch, "reason": reason},
+                        )
+                        raise
+                self._send(
+                    connection,
+                    "public/set_heartbeat",
+                    {"interval": int(DERIBIT_HEARTBEAT_INTERVAL_SECONDS)},
+                )
                 self._sync_channels(connection)
+                last_inbound_ns = self._elapsed_now_ns()
+                last_market_ns = last_inbound_ns
                 while not self._stop.is_set():
                     self._sync_channels(connection)
                     try:
-                        raw = connection.recv(timeout=0.25)
+                        raw = connection.recv(timeout=WEBSOCKET_RECEIVE_POLL_SECONDS)
                     except TimeoutError:
+                        self._raise_if_silent(
+                            connection_epoch=connection_epoch,
+                            now_ns=self._elapsed_now_ns(),
+                            last_inbound_ns=last_inbound_ns,
+                            last_market_ns=last_market_ns,
+                        )
                         continue
-                    self._accept_frame(connection, raw)
+                    market_progress = self._accept_frame(connection, raw)
+                    now_ns = self._elapsed_now_ns()
+                    last_inbound_ns = now_ns
+                    if market_progress:
+                        last_market_ns = now_ns
+                    if market_progress and not market_stream_observed:
+                        market_stream_observed = True
+                        consecutive_failures = 0
+                        self._audit_lifecycle(
+                            "WEBSOCKET_MARKET_STREAM_RESUMED",
+                            {"connection_epoch": connection_epoch},
+                        )
+                    self._raise_if_silent(
+                        connection_epoch=connection_epoch,
+                        now_ns=now_ns,
+                        last_inbound_ns=last_inbound_ns,
+                        last_market_ns=last_market_ns,
+                    )
             except Exception as exc:
                 if not self._stop.is_set():
-                    self.cache.disconnect(reason=f"{type(exc).__name__}:{exc}")
+                    reason = f"{type(exc).__name__}:{exc}"
+                    self.cache.disconnect(reason=reason)
+                    consecutive_failures += 1
+                    reconnect_delay = min(
+                        float(2 ** min(consecutive_failures - 1, 5)),
+                        WEBSOCKET_RECONNECT_MAX_SECONDS,
+                    )
+                    self._audit_lifecycle(
+                        "WEBSOCKET_CONNECTION_LOST",
+                        {
+                            "connection_epoch": connection_epoch or 0,
+                            "reason": reason,
+                            "reconnect_delay_seconds": reconnect_delay,
+                        },
+                    )
             finally:
                 self._connection = None
                 if connection is not None:
@@ -889,8 +984,41 @@ class DeribitPublicWebSocketFeed:
                         connection.close()
                     except Exception:
                         pass
-            if not self._stop.wait(1.0):
-                continue
+            if self._stop.is_set() or self.reconnect_wait(reconnect_delay):
+                break
+
+    def _elapsed_now_ns(self) -> int:
+        value = self.monotonic_ns()
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("WebSocket elapsed clock must return a non-negative integer")
+        return value
+
+    def _raise_if_silent(
+        self,
+        *,
+        connection_epoch: int,
+        now_ns: int,
+        last_inbound_ns: int,
+        last_market_ns: int,
+    ) -> None:
+        inbound_elapsed_ns = now_ns - last_inbound_ns
+        inbound_silence_ns = int(WEBSOCKET_INBOUND_SILENCE_SECONDS * 1_000_000_000)
+        if inbound_elapsed_ns >= inbound_silence_ns:
+            raise WebSocketLivenessTimeout(
+                connection_epoch=connection_epoch,
+                elapsed_seconds=inbound_elapsed_ns / 1_000_000_000,
+            ) from None
+        market_elapsed_ns = now_ns - last_market_ns
+        market_silence_ns = int(WEBSOCKET_MARKET_SILENCE_SECONDS * 1_000_000_000)
+        if market_elapsed_ns >= market_silence_ns:
+            raise WebSocketMarketSilenceTimeout(
+                connection_epoch=connection_epoch,
+                elapsed_seconds=market_elapsed_ns / 1_000_000_000,
+            ) from None
+
+    def _audit_lifecycle(self, kind: str, detail: Mapping[str, object]) -> None:
+        if self.lifecycle_callback is not None:
+            self.lifecycle_callback(kind, dict(detail))
 
     def _sync_channels(self, connection: WebSocketConnection) -> None:
         desired = set(self.cache.desired_channels)
@@ -930,7 +1058,7 @@ class DeribitPublicWebSocketFeed:
             )
         )
 
-    def _accept_frame(self, connection: WebSocketConnection, raw: str | bytes) -> None:
+    def _accept_frame(self, connection: WebSocketConnection, raw: str | bytes) -> bool:
         if not isinstance(raw, str):
             raise ForwardObservationGap("WEBSOCKET_BINARY_FRAME_FORBIDDEN")
         try:
@@ -943,18 +1071,18 @@ class DeribitPublicWebSocketFeed:
         if "id" in root:
             if root.get("error") is not None or "result" not in root:
                 raise ForwardObservationGap("WEBSOCKET_PUBLIC_REQUEST_REJECTED")
-            return
+            return False
         method = root.get("method")
         params = _mapping(root.get("params"), "WebSocket notification params")
         if method == "heartbeat":
             if params.get("type") == "test_request":
                 self._send(connection, "public/test", {})
-            return
+            return False
         if method != "subscription":
             raise ForwardObservationGap("WEBSOCKET_NOTIFICATION_METHOD_INVALID")
         channel = _text(params.get("channel"), "subscription channel")
         if channel not in set(self.cache.desired_channels):
-            return
+            return False
         received_at_ms = self.received_timestamp_ms()
         try:
             self.cache.accept_subscription(
@@ -971,6 +1099,7 @@ class DeribitPublicWebSocketFeed:
                     instrument_name=gap.instrument_name,
                     reason=f"{type(exc).__name__}:{exc}",
                 )
+        return True
 
 
 def _open_connection(url: str, timeout_seconds: float) -> WebSocketConnection:
@@ -980,7 +1109,8 @@ def _open_connection(url: str, timeout_seconds: float) -> WebSocketConnection:
             url,
             open_timeout=timeout_seconds,
             close_timeout=timeout_seconds,
-            ping_interval=None,
+            ping_interval=DERIBIT_HEARTBEAT_INTERVAL_SECONDS,
+            ping_timeout=DERIBIT_HEARTBEAT_INTERVAL_SECONDS,
             max_size=2**20,
         ),
     )

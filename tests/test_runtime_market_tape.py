@@ -355,7 +355,8 @@ def _finish_session(
         mark_iv=continuation_stage.mark_iv,
     )
     runtime.tick(runtime.session.end + timedelta(minutes=5))
-    runtime.tick(runtime.finalization_at)
+    for _window in runtime.windows:
+        runtime.tick(runtime.finalization_at)
 
     decisions = runtime.ledger.summarize(expected_windows=runtime.windows)
     outcomes = runtime.ledger.summarize_outcomes(expected_windows=runtime.windows)

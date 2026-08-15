@@ -9,6 +9,7 @@ from typing import cast
 
 import pytest
 
+import optimatrix.deribit_websocket as deribit_websocket
 from optimatrix.decision import MarketObservation, schedule_decision_windows
 from optimatrix.deribit_snapshot import (
     DeribitSourceError,
@@ -309,6 +310,7 @@ def test_transport_attempts_reconnect_history_once_and_preserves_failure_gap() -
     second = _IdleConnection()
     opened: list[WebSocketConnection] = []
     recovery_calls: list[None] = []
+    reconnect_delays: list[float] = []
 
     def factory(_url: str, _timeout_seconds: float) -> WebSocketConnection:
         connection: WebSocketConnection = first if not opened else second
@@ -319,16 +321,22 @@ def test_transport_attempts_reconnect_history_once_and_preserves_failure_gap() -
         recovery_calls.append(None)
         raise DeribitSourceError("history unavailable")
 
+    def stop_after_failed_recovery(seconds: float) -> bool:
+        reconnect_delays.append(seconds)
+        return len(reconnect_delays) == 2
+
     feed = DeribitPublicWebSocketFeed(
         cache=cache,
         received_timestamp_ms=lambda: boundary_ms + 1_000,
         rest_index_history_recovery=recovery,
         rest_resync=lambda _name: pytest.fail("book REST resync is not expected"),
         connection_factory=factory,
+        reconnect_wait=stop_after_failed_recovery,
     )
     feed.start()
-    assert second.sent_two.wait(timeout=3)
+    assert second.closed.wait(timeout=2)
     assert recovery_calls == [None]
+    assert reconnect_delays == [1.0, 2.0]
     assert opened == [first, second]
     assert cache.continuity_epoch == 2
     feed.close()
@@ -343,6 +351,74 @@ def test_transport_attempts_reconnect_history_once_and_preserves_failure_gap() -
         ),
     ):
         _cut(cache, boundary_ms + 2_000)
+
+
+def test_failed_reconnect_history_is_retried_only_in_a_new_backed_off_epoch() -> None:
+    boundary_ms = int(NOW.timestamp() * 1_000)
+    cache = BtcWebSocketCache()
+    cache.seed_index_history(_history(boundary_ms), received_timestamp_ms=boundary_ms)
+    cache.configure_instruments(NAMES)
+    first = _DisconnectingConnection()
+    second = _IdleConnection()
+    third = _InboundThenIdleConnection(
+        _subscription_frame(
+            "deribit_price_index.btc_usd",
+            {
+                "index_name": "btc_usd",
+                "price": "100010",
+                "timestamp": boundary_ms + 1_100,
+            },
+        )
+    )
+    connections: tuple[WebSocketConnection, ...] = (first, second, third)
+    opened: list[WebSocketConnection] = []
+    recovery_calls = 0
+    reconnect_delays: list[float] = []
+    lifecycle: list[tuple[str, dict[str, object]]] = []
+    resumed = threading.Event()
+
+    def factory(_url: str, _timeout_seconds: float) -> WebSocketConnection:
+        connection = connections[len(opened)]
+        opened.append(connection)
+        return connection
+
+    def recovery() -> tuple[tuple[tuple[int, Decimal], ...], int]:
+        nonlocal recovery_calls
+        recovery_calls += 1
+        if recovery_calls == 1:
+            raise DeribitSourceError("temporary history failure")
+        return _history(boundary_ms + 1_000), boundary_ms + 1_000
+
+    def audit(kind: str, detail: Mapping[str, object]) -> None:
+        lifecycle.append((kind, dict(detail)))
+        if kind == "WEBSOCKET_MARKET_STREAM_RESUMED":
+            resumed.set()
+
+    feed = DeribitPublicWebSocketFeed(
+        cache=cache,
+        received_timestamp_ms=lambda: boundary_ms + 2_000,
+        rest_index_history_recovery=recovery,
+        rest_resync=lambda _name: pytest.fail("book REST resync is not expected"),
+        connection_factory=factory,
+        lifecycle_callback=audit,
+        reconnect_wait=lambda seconds: reconnect_delays.append(seconds) or False,
+    )
+    feed.start()
+    assert resumed.wait(timeout=2)
+    feed.close()
+
+    assert opened == [first, second, third]
+    assert recovery_calls == 2
+    assert reconnect_delays == [1.0, 2.0]
+    assert cache.continuity_epoch == 3
+    assert (
+        "WEBSOCKET_RECONNECT_HISTORY_FAILED",
+        {"connection_epoch": 2, "reason": "DeribitSourceError:temporary history failure"},
+    ) in lifecycle
+    assert (
+        "WEBSOCKET_RECONNECT_HISTORY_RECOVERED",
+        {"connection_epoch": 3},
+    ) in lifecycle
 
 
 def test_reconnect_history_rejects_future_discontinuous_and_late_seeds() -> None:
@@ -529,6 +605,222 @@ def test_transport_subscribes_only_public_aggregated_btc_channels() -> None:
         for channel in channels
     )
     assert audit == ["public/set_heartbeat", "public/subscribe"]
+
+
+def test_silent_transport_closes_and_recovers_through_a_new_epoch() -> None:
+    boundary_ms = int(NOW.timestamp() * 1_000)
+    cache = BtcWebSocketCache()
+    cache.seed_index_history(_history(boundary_ms), received_timestamp_ms=boundary_ms)
+    cache.configure_instruments(NAMES)
+    elapsed = _ManualElapsedClock()
+    first = _SilentAdvancingConnection(elapsed)
+    second = _InboundThenIdleConnection(
+        _subscription_frame(
+            "deribit_price_index.btc_usd",
+            {
+                "index_name": "btc_usd",
+                "price": "100010",
+                "timestamp": boundary_ms + 1_100,
+            },
+        )
+    )
+    opened: list[WebSocketConnection] = []
+    recovery_calls: list[None] = []
+    reconnect_delays: list[float] = []
+    lifecycle: list[tuple[str, dict[str, object]]] = []
+    resumed = threading.Event()
+
+    def factory(_url: str, _timeout_seconds: float) -> WebSocketConnection:
+        connection: WebSocketConnection = first if not opened else second
+        opened.append(connection)
+        return connection
+
+    def recovery() -> tuple[tuple[tuple[int, Decimal], ...], int]:
+        recovery_calls.append(None)
+        return _history(boundary_ms + 1_000), boundary_ms + 1_000
+
+    def audit(kind: str, detail: Mapping[str, object]) -> None:
+        lifecycle.append((kind, dict(detail)))
+        if kind == "WEBSOCKET_MARKET_STREAM_RESUMED" and detail["connection_epoch"] == 2:
+            resumed.set()
+
+    feed = DeribitPublicWebSocketFeed(
+        cache=cache,
+        received_timestamp_ms=lambda: boundary_ms + 2_000,
+        rest_index_history_recovery=recovery,
+        rest_resync=lambda _name: pytest.fail("book REST resync is not expected"),
+        connection_factory=factory,
+        lifecycle_callback=audit,
+        monotonic_ns=elapsed,
+        reconnect_wait=lambda seconds: reconnect_delays.append(seconds) or False,
+    )
+    feed.start()
+    assert resumed.wait(timeout=2)
+    feed.close()
+
+    assert first.closed.is_set()
+    assert opened == [first, second]
+    assert recovery_calls == [None]
+    assert reconnect_delays == [1.0]
+    assert cache.continuity_epoch == 2
+    assert lifecycle[:5] == [
+        ("WEBSOCKET_CONNECTION_OPENED", {"connection_epoch": 1}),
+        (
+            "WEBSOCKET_CONNECTION_LOST",
+            {
+                "connection_epoch": 1,
+                "reason": (
+                    "WebSocketLivenessTimeout:WEBSOCKET_INBOUND_SILENCE_TIMEOUT:"
+                    "epoch=1:elapsed_seconds=30"
+                ),
+                "reconnect_delay_seconds": 1.0,
+            },
+        ),
+        ("WEBSOCKET_CONNECTION_OPENED", {"connection_epoch": 2}),
+        ("WEBSOCKET_RECONNECT_HISTORY_RECOVERED", {"connection_epoch": 2}),
+        ("WEBSOCKET_MARKET_STREAM_RESUMED", {"connection_epoch": 2}),
+    ]
+
+
+def test_reconnect_backoff_caps_without_unbounded_exponentiation() -> None:
+    boundary_ms = int(NOW.timestamp() * 1_000)
+    cache = BtcWebSocketCache()
+    cache.seed_index_history(_history(boundary_ms), received_timestamp_ms=boundary_ms)
+    cache.configure_instruments(NAMES)
+    waits: list[float] = []
+
+    def failed_factory(_url: str, _timeout_seconds: float) -> WebSocketConnection:
+        raise OSError("connect failed")
+
+    def bounded_wait(seconds: float) -> bool:
+        waits.append(seconds)
+        return len(waits) == 7
+
+    feed = DeribitPublicWebSocketFeed(
+        cache=cache,
+        received_timestamp_ms=lambda: boundary_ms,
+        rest_index_history_recovery=lambda: pytest.fail("recovery is not expected"),
+        rest_resync=lambda _name: pytest.fail("book REST resync is not expected"),
+        connection_factory=failed_factory,
+        reconnect_wait=bounded_wait,
+    )
+
+    feed._run()
+
+    assert waits == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
+
+
+def test_heartbeat_responses_cannot_mask_a_silent_market_subscription() -> None:
+    boundary_ms = int(NOW.timestamp() * 1_000)
+    cache = BtcWebSocketCache()
+    cache.seed_index_history(_history(boundary_ms), received_timestamp_ms=boundary_ms)
+    cache.configure_instruments(NAMES)
+    elapsed = _ManualElapsedClock()
+    connection = _HeartbeatAdvancingConnection(elapsed)
+    lifecycle: list[tuple[str, dict[str, object]]] = []
+    waits: list[float] = []
+
+    feed = DeribitPublicWebSocketFeed(
+        cache=cache,
+        received_timestamp_ms=lambda: boundary_ms,
+        rest_index_history_recovery=lambda: pytest.fail("recovery is not expected"),
+        rest_resync=lambda _name: pytest.fail("book REST resync is not expected"),
+        connection_factory=lambda _url, _timeout: connection,
+        lifecycle_callback=lambda kind, detail: lifecycle.append((kind, dict(detail))),
+        monotonic_ns=elapsed,
+        reconnect_wait=lambda seconds: waits.append(seconds) or True,
+    )
+
+    feed._run()
+
+    assert waits == [1.0]
+    assert lifecycle[-1] == (
+        "WEBSOCKET_CONNECTION_LOST",
+        {
+            "connection_epoch": 1,
+            "reason": (
+                "WebSocketMarketSilenceTimeout:WEBSOCKET_MARKET_SILENCE_TIMEOUT:"
+                "epoch=1:elapsed_seconds=30"
+            ),
+            "reconnect_delay_seconds": 1.0,
+        },
+    )
+    methods = [json.loads(message)["method"] for message in connection.sent]
+    assert methods == [
+        "public/set_heartbeat",
+        "public/subscribe",
+        "public/test",
+        "public/test",
+        "public/test",
+    ]
+
+
+def test_first_valid_market_frame_resets_reconnect_failure_streak() -> None:
+    boundary_ms = int(NOW.timestamp() * 1_000)
+    cache = BtcWebSocketCache()
+    cache.seed_index_history(_history(boundary_ms), received_timestamp_ms=boundary_ms)
+    cache.configure_instruments(NAMES)
+    healthy_then_lost = _InboundThenDisconnectingConnection(
+        _subscription_frame(
+            "deribit_price_index.btc_usd",
+            {
+                "index_name": "btc_usd",
+                "price": "100010",
+                "timestamp": boundary_ms + 100,
+            },
+        )
+    )
+    attempts = 0
+    waits: list[float] = []
+
+    def factory(_url: str, _timeout_seconds: float) -> WebSocketConnection:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("first connect failed")
+        return healthy_then_lost
+
+    def stop_after_second_failure(seconds: float) -> bool:
+        waits.append(seconds)
+        return len(waits) == 2
+
+    feed = DeribitPublicWebSocketFeed(
+        cache=cache,
+        received_timestamp_ms=lambda: boundary_ms + 200,
+        rest_index_history_recovery=lambda: pytest.fail("recovery is not expected"),
+        rest_resync=lambda _name: pytest.fail("book REST resync is not expected"),
+        connection_factory=factory,
+        reconnect_wait=stop_after_second_failure,
+    )
+
+    feed._run()
+
+    assert waits == [1.0, 1.0]
+
+
+def test_open_connection_enables_protocol_ping_and_pong_timeout(monkeypatch) -> None:
+    connection = _NoopConnection()
+    captured: list[tuple[str, dict[str, object]]] = []
+
+    def fake_connect(url: str, **kwargs: object) -> WebSocketConnection:
+        captured.append((url, dict(kwargs)))
+        return connection
+
+    monkeypatch.setattr(deribit_websocket, "connect", fake_connect)
+
+    assert deribit_websocket._open_connection(DEFAULT_DERIBIT_WEBSOCKET_API, 10.0) is connection
+    assert captured == [
+        (
+            DEFAULT_DERIBIT_WEBSOCKET_API,
+            {
+                "open_timeout": 10.0,
+                "close_timeout": 10.0,
+                "ping_interval": 10.0,
+                "ping_timeout": 10.0,
+                "max_size": 2**20,
+            },
+        )
+    ]
 
 
 def test_runtime_source_consumes_cache_without_http_market_polling(policy, monkeypatch) -> None:
@@ -768,6 +1060,78 @@ class _IdleConnection:
 
     def close(self) -> None:
         self.closed.set()
+
+
+class _ManualElapsedClock:
+    def __init__(self) -> None:
+        self.value = 0
+
+    def __call__(self) -> int:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += int(seconds * 1_000_000_000)
+
+
+class _SilentAdvancingConnection:
+    def __init__(self, elapsed: _ManualElapsedClock) -> None:
+        self.elapsed = elapsed
+        self.sent: list[str] = []
+        self.closed = threading.Event()
+
+    def send(self, message: str) -> None:
+        self.sent.append(message)
+
+    def recv(self, timeout: float | None = None) -> str | bytes:
+        del timeout
+        if self.closed.is_set():
+            raise OSError("closed")
+        self.elapsed.advance(10.0)
+        raise TimeoutError
+
+    def close(self) -> None:
+        self.closed.set()
+
+
+class _HeartbeatAdvancingConnection(_SilentAdvancingConnection):
+    def recv(self, timeout: float | None = None) -> str | bytes:
+        del timeout
+        if self.closed.is_set():
+            raise OSError("closed")
+        self.elapsed.advance(10.0)
+        return json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "method": "heartbeat",
+                "params": {"type": "test_request"},
+            }
+        )
+
+
+class _InboundThenIdleConnection(_IdleConnection):
+    def __init__(self, inbound_frame: str) -> None:
+        super().__init__()
+        self.inbound_frame = inbound_frame
+        self._inbound_sent = False
+
+    def recv(self, timeout: float | None = None) -> str | bytes:
+        if not self._inbound_sent:
+            self._inbound_sent = True
+            return self.inbound_frame
+        return super().recv(timeout=timeout)
+
+
+class _InboundThenDisconnectingConnection(_NoopConnection):
+    def __init__(self, inbound_frame: str) -> None:
+        self.inbound_frame = inbound_frame
+        self._inbound_sent = False
+
+    def recv(self, timeout: float | None = None) -> str | bytes:
+        del timeout
+        if not self._inbound_sent:
+            self._inbound_sent = True
+            return self.inbound_frame
+        raise OSError("connection lost after inbound")
 
 
 class _PreparedFeed:

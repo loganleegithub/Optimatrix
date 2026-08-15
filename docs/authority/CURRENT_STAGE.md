@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 POST-RECOVERY FORWARD RELIABILITY — ACTIVE
+**Status:** B3 PUBLIC RUNTIME RELIABILITY REMEDIATION — ACTIVE
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -8,18 +8,18 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `VALIDATION_ONLY`
+**Current task kind:** `IMPLEMENTATION`
 
-**Sole authorized closure:** [`B3_POST_RECOVERY_FORWARD_RELIABILITY`](../../tasks/B3_POST_RECOVERY_FORWARD_RELIABILITY.md)
+**Sole authorized closure:** [`B3_PUBLIC_RUNTIME_RELIABILITY_REMEDIATION`](../../tasks/B3_PUBLIC_RUNTIME_RELIABILITY_REMEDIATION.md)
 
 ## Current permissions
 
 Stage is the permission ceiling; a future active task may only narrow it.
 
-**Offline checks and simulation:** after Session `2026-08-16T08:00:00Z` ends, one bounded read-only
-reconciliation of the `84` post-deployment Windows is authorized under a caller-supplied ignored
-root; synthetic reconnects against production, simulated market evidence, Policy Outcomes, and
-durable review artifacts are forbidden
+**Offline checks and simulation:** deterministic silent-transport, reconnect, recovery, elapsed-time,
+and slow-Outcome scheduler tests are authorized only under caller-supplied ignored roots; synthetic
+reconnects against production, simulated durable market evidence, Policy Outcomes, and durable
+review artifacts are forbidden
 
 **Public market calls:** only unauthenticated production `wss://www.deribit.com/ws/api/v2` public
 heartbeat, subscribe, unsubscribe, test, BTC index, and aggregated `100ms` BTC option book/ticker
@@ -41,15 +41,16 @@ is retained without migration or mutation and remains ineligible for the current
 **Continuous runtime:** only launchd label `com.optimatrix.b3-public-shadow`, executing the
 `origin/main` console script from `/Users/logan/Optimatrix`, with EventState `NONE`, Policy identity
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`, the exact v2 root,
-loopback Workbench port `8765`, and no duration expansion into another process or root; natural
-WebSocket reconnects and launchd `KeepAlive` may preserve this exact job, but no manual restart,
-replacement, new root, or other process is authorized
+loopback Workbench port `8765`, and no duration expansion into another process or root. The current
+job may remain while checks run. After `main` is committed, pushed, and passes the full repository
+gate, exactly one launchd replacement is authorized with the same label, command, root, Policy,
+EventState, and port; natural reconnects and launchd `KeepAlive` may then preserve that exact job
 
 **Private read-only account permission:** `NONE`
 
-**Orders, capital, and deployment:** the exact already deployed local launchd public Shadow job is
-deployed and may remain under `KeepAlive`. Any other local or remote deployment, orders, fills,
-capital, and private access remain `NONE`
+**Orders, capital, and deployment:** exactly one local replacement of the named public Shadow job
+is authorized after the active task's repository gates pass. Any second manual replacement, new
+root, other local or remote deployment, orders, fills, capital, and private access remain `NONE`
 
 **Policy qualification / Edge claim:** `NONE`
 
@@ -91,7 +92,7 @@ capital, and private access remain `NONE`
   a known continuous public path and official delivery `63013.74`; `64` Decisions are evaluable,
   all `81` path populations are eligible, and zero is execution-attributable or Policy-qualified.
   Their overlapping horizons are Window facts, not `81` independent trades or PnL observations.
-- `reconnect_recovery_capability=DEPLOYED_AND_INITIAL_CUT_ACCEPTED`: commit `9969af3` adds one
+- `reconnect_recovery_capability=EPOCH_RECOVERY_DEPLOYED_BUT_TRIGGER_PATH_INCOMPLETE`: commit `9969af3` adds one
   epoch-scoped index-history recovery attempt, rejects malformed, discontinuous, late, or repeated
   seeds, and requires a strictly later same-epoch WebSocket index continuation. It passed `228`
   tests and `8` scenarios, was pushed to `origin/main`, and was deployed once as PID `51093`.
@@ -99,10 +100,19 @@ capital, and private access remain `NONE`
   `sha256:ba830878949ef8930642b93ebba52b91cdce5643e209d8fc716931a5145283d2` completed at
   `2026-08-15T11:00:19.612000Z` with source
   `DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1`, `21` quotes, and one continuity epoch.
-- `natural_reconnect_recovery=NOT_YET_OBSERVED`: the accepted post-deployment cut belongs to the
-  new process's initial WebSocket epoch, so it proves startup and market-cut health but not the
-  natural reconnect transition. The active validation has exactly `84` scheduled Windows from
-  `2026-08-15T11:00:00Z` through Session end and closes even if no natural reconnect occurs.
+- `public_stream_liveness=FAILED`: the last audited inbound-triggered `public/test` response was at
+  `2026-08-15T12:05:47.666819Z`; market-cut attempts from `12:15 UTC` through at least `17:30 UTC`
+  then failed without a disconnect or new epoch while PID `51093` and loopback HTTP stayed alive.
+  The feed disables library Ping/Pong and ignores every receive timeout forever, so the deployed
+  reconnect recovery cannot run for this silent half-open failure mode.
+- `online_scheduler_isolation=FAILED`: the `08:00 UTC` Window became
+  `DECISION_FINALIZATION_CADENCE_MISSED` after the same tick synchronously constructed `81`
+  prior-Session WindowOutcomes. A representative path summary over the current history takes about
+  `0.88s` before append-only ledger validation, making the all-at-once loop a measured minutes-long
+  online scheduler blocker.
+- `natural_reconnect_recovery=NOT_YET_OBSERVED`: no accepted evidence yet proves a natural
+  post-remediation disconnect and recovery. Deterministic failure injection may accept the mechanism
+  but cannot substitute for that production occurrence.
 - `workbench_projection=CURRENT_SESSION_TRUTHFUL`: loopback Workbench renders the active Session's
   current counts, Gap state, evidence boundary, public-Shadow disclaimer, and no fabricated
   Challenger results without console errors. It has no completed-Session selector, so the prior
@@ -200,17 +210,20 @@ capital, and private access remain `NONE`
   epoch-bounded reconnect index-path recovery seeds, official settlement, and explicit affected-book
   recovery fallback. The feed adds no durable store, database, bus, replay framework, private
   method, or authenticated `raw` channel.
-- The complete repository gate passes: `228` tests and `8` deterministic business scenarios. This
-  is offline implementation evidence, not current market, execution, or profitability evidence.
-- The active task is validation-only. Outside the exact existing runtime and bounded post-Session
-  read-only audit, live commands, stable-root mutation, and market calls remain disabled. Private
-  facts, orders, capital, and any other local or remote deployment remain unconditionally disabled.
+- The prior complete repository gate passed `228` tests and `8` deterministic business scenarios,
+  but current forward evidence has since falsified its silent-transport and scheduler-reliability
+  assumptions. Green historical tests do not override the observed failures.
+- The active task authorizes only the bounded public-runtime liveness and scheduler remediation,
+  its direct tests, one implementation push, one exact local launchd replacement after gates pass,
+  and one later Authority-only closure push after external acceptance.
+  Stable record rewriting, Policy change, private facts, orders, capital, any second replacement,
+  and any other local or remote deployment remain disabled.
 
-**Primary blocker:** `POST_RECOVERY_FORWARD_RELIABILITY_UNMEASURED` — deterministic tests and one
-healthy initial-epoch cut prove the implementation/deployment delta, but the bounded post-deployment
-Window population is incomplete. The active validation measures exact coverage, typed Gaps,
-connection epochs, and any amplification after Session end; it does not require a reconnect,
-Candidate, Policy change, or longer observation period.
+**Primary blocker:** `PUBLIC_RUNTIME_RELIABILITY_FAILED` — one silent half-open connection can keep
+the process and Workbench superficially healthy while indefinitely amplifying later Window Gaps,
+and unbounded completed-Session Outcome work can block the same online scheduler long enough to
+discard a current Window. Both trigger and scheduling paths require bounded, directly tested
+failure behavior before forward observation can resume reliably.
 
 ## Maturity ladder
 
@@ -224,9 +237,14 @@ Candidate, Policy change, or longer observation period.
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Active closure boundary:** after Session `2026-08-16T08:00:00Z` ends, reconcile only the `84`
-scheduled Windows beginning at or after `2026-08-15T11:00:00Z`. Report exact coverage, DataHealth,
-WebSocket epochs, recovery calls, and later-Window amplification without implementation changes or
-backfill. If no natural reconnect occurred, close with `NOT_YET_OBSERVED`; do not extend the task or
-manufacture a Candidate. Policy, `7%`, `$10`, sizing, ranking, durable schema, private facts, orders,
-fills, capital, Policy qualification, Edge claims, D1, remote deployment, and B4 remain forbidden.
+**Active closure boundary:** enable the locked client's `10s/10s` Ping/Pong, close a connection after
+`30s` without a valid inbound frame or desired market notification using suspend-aware elapsed time,
+reconnect with capped
+`1/2/4/8/16/30s` backoff and append-only lifecycle audit, and process at most one WindowOutcome only
+after current-window work per tick. Preserve the existing epoch recovery and strict later-stream
+continuation rule; recovery failure closes that epoch and can retry only through a new backed-off
+epoch. After focused and full gates, push `main`, replace the exact job once, and require
+one healthy post-replacement cut plus singular-process/HTTP/audit evidence. Do not backfill any Gap
+or force a production disconnect. Policy, `7%`, `$10`, sizing, ranking, durable schema, private
+facts, orders, fills, capital, Policy qualification, Edge claims, C1/C2, D1, remote deployment, and
+B4 remain forbidden.

@@ -75,7 +75,7 @@ class BookCausalError(DeribitSourceError):
     """One component-book response contradicts its validated request or time envelope."""
 
 
-def _continuous_monotonic_ns() -> int:
+def continuous_monotonic_ns() -> int:
     """Return elapsed time that continues across host sleep when the OS exposes it."""
 
     if sys.platform == "darwin":
@@ -134,7 +134,7 @@ class DeribitClock:
     """One process-local Deribit UTC clock anchored only by public responses."""
 
     def __init__(self, *, monotonic_ns: Callable[[], int] | None = None) -> None:
-        self._monotonic_ns = monotonic_ns or _continuous_monotonic_ns
+        self._monotonic_ns = monotonic_ns or continuous_monotonic_ns
         self._reading: DeribitClockReading | None = None
         self._server_sent_at_us: int | None = None
         self._last_emitted_reading: DeribitClockReading | None = None
@@ -569,7 +569,7 @@ class DeribitHttpClient:
         self.audit_callback = audit_callback
         self._next_request_id = 1
         self._request_id_lock = threading.Lock()
-        self._monotonic_ns = monotonic_ns or _continuous_monotonic_ns
+        self._monotonic_ns = monotonic_ns or continuous_monotonic_ns
         self.clock = DeribitClock(monotonic_ns=self._monotonic_ns)
 
     def call(self, method: str, params: Mapping[str, object]) -> PublicRpcResponse:
