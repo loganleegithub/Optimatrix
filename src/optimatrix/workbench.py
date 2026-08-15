@@ -6,11 +6,18 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from optimatrix.account import (
+    APPLICATION_METHOD_PERMISSION,
+    DERIBIT_REQUESTED_READ_SCOPE,
+    ORDERS_EXECUTED,
+    TOKEN_SCOPE_NORMALIZATION,
+    AuthenticatedAccountObservation,
+)
 from optimatrix.channels import CHANNELS, ChannelId
 from optimatrix.lifecycle import TradeCase
 from optimatrix.route import ShadowRouteEvidence
 
-WORKBENCH_SCHEMA_VERSION = 7
+WORKBENCH_SCHEMA_VERSION = 9
 _ASSET_ROOT = Path(__file__).with_name("workbench_static")
 _STATIC_ASSETS = ("index.html", "styles.css", "app.js")
 
@@ -311,9 +318,9 @@ _QUOTE_DETAIL_LABELS = {
 }
 _BOUNDARY_STATEMENTS = (
     "Public market facts and counterfactual structure economics only.",
-    "No order, fill, account, balance, margin, capital, or actual position is present.",
+    "Public Shadow Ledger, Case, risk, and lifecycle contain no account, order, fill, capital, or actual position fact.",
     "Displayed credit and loss are observation-boundary estimates, not real PnL.",
-    "This static export creates no Shadow Case and grants no execution permission.",
+    "An adjacent private account projection, when present, remains isolated and grants no execution permission.",
 )
 
 _CHANNEL_PRESENTATION = (
@@ -361,6 +368,7 @@ def build_workbench_document(
     runtime_state: Mapping[str, object] | None = None,
     ledger_population: Mapping[str, object] | None = None,
     recovered_cases: Sequence[TradeCase] | None = None,
+    account_observation: AuthenticatedAccountObservation | None = None,
 ) -> dict[str, object]:
     """Build the presentation model for one public snapshot and optional runtime facts.
 
@@ -441,6 +449,7 @@ def build_workbench_document(
             "fetched_book_count": _display_value(root.get("fetched_book_count")),
         },
         "runtime": runtime,
+        "account": _account_projection(account_observation),
         "population": population,
         "warnings": [{"code": warning, "tone": "warning"} for warning in warnings],
         "window": _display_rows(window, _WINDOW_LABELS),
@@ -491,6 +500,7 @@ def write_workbench(
     runtime_state: Mapping[str, object] | None = None,
     ledger_population: Mapping[str, object] | None = None,
     recovered_cases: Sequence[TradeCase] | None = None,
+    account_observation: AuthenticatedAccountObservation | None = None,
 ) -> WorkbenchExport:
     """Write a self-contained, network-JavaScript-free Workbench directory."""
 
@@ -500,6 +510,7 @@ def write_workbench(
         runtime_state=runtime_state,
         ledger_population=ledger_population,
         recovered_cases=recovered_cases,
+        account_observation=account_observation,
     )
     destination = Path(output_dir).expanduser().resolve()
     if destination == _ASSET_ROOT.resolve():
@@ -528,6 +539,156 @@ def write_workbench(
         stylesheet_path=destination / "styles.css",
         script_path=destination / "app.js",
     )
+
+
+def _account_projection(
+    observation: AuthenticatedAccountObservation | None,
+) -> dict[str, object]:
+    isolation = [
+        "Authenticated account facts are PRIVATE_EXECUTION truth, not Public Shadow truth.",
+        "They do not create a Shadow Position, risk reservation, order, fill, or trade attribution.",
+        "The application can call only auth, BTC summary, and BTC Positions; credential capability does not expand that allowlist.",
+        "This is a one-shot account capture; no refresh or continuing freshness is implied.",
+    ]
+    if observation is None:
+        return {
+            "available": False,
+            "truth_layer": "PRIVATE_EXECUTION",
+            "environment": "NOT_CAPTURED",
+            "credential_scope": "UNKNOWN",
+            "application_method_permission": APPLICATION_METHOD_PERMISSION,
+            "orders_executed": ORDERS_EXECUTED,
+            "account_observation_id": None,
+            "account_scope_id": None,
+            "status": "NOT_CAPTURED",
+            "freshness": {"status": "UNKNOWN", "known_at": None},
+            "completeness": "UNKNOWN",
+            "requested_token_scope": DERIBIT_REQUESTED_READ_SCOPE,
+            "token_scope_normalization": TOKEN_SCOPE_NORMALIZATION,
+            "summary_status": "UNKNOWN",
+            "summary": None,
+            "positions_status": "UNKNOWN",
+            "position_count": None,
+            "positions": None,
+            "blockers": [],
+            "boundaries": {"auth": None, "summary": None, "positions": None},
+            "facts": [
+                {"key": "truth_layer", "label": "Truth layer", "value": "PRIVATE_EXECUTION"},
+                {"key": "environment", "label": "ENVIRONMENT", "value": "NOT_CAPTURED"},
+                {
+                    "key": "credential_scope",
+                    "label": "CREDENTIAL_SCOPE",
+                    "value": "UNKNOWN",
+                },
+                {
+                    "key": "application_method_permission",
+                    "label": "APPLICATION_METHOD_PERMISSION",
+                    "value": APPLICATION_METHOD_PERMISSION,
+                },
+                {
+                    "key": "orders_executed",
+                    "label": "ORDERS_EXECUTED",
+                    "value": ORDERS_EXECUTED,
+                },
+                {
+                    "key": "requested_token_scope",
+                    "label": "REQUESTED_TOKEN_SCOPE",
+                    "value": DERIBIT_REQUESTED_READ_SCOPE,
+                },
+                {
+                    "key": "token_scope_normalization",
+                    "label": "TOKEN_SCOPE_NORMALIZATION",
+                    "value": TOKEN_SCOPE_NORMALIZATION,
+                },
+                {"key": "status", "label": "Capture status", "value": "NOT_CAPTURED"},
+                {"key": "freshness", "label": "Freshness", "value": "UNKNOWN"},
+                {"key": "completeness", "label": "Completeness", "value": "UNKNOWN"},
+            ],
+            "isolation": isolation,
+        }
+
+    value = observation.as_object()
+    summary_status = str(value["summary_status"])
+    positions_status = str(value["positions_status"])
+    if summary_status == "KNOWN" and positions_status == "KNOWN":
+        completeness = "COMPLETE"
+    elif summary_status == "KNOWN" or positions_status == "KNOWN":
+        completeness = "PARTIAL"
+    else:
+        completeness = "UNKNOWN"
+    known_at = value["known_at"]
+    freshness = "CAPTURE_BOUNDARY_KNOWN" if known_at is not None else "UNKNOWN"
+    credential_scope = observation.credential_scope.value
+    facts: list[dict[str, str]] = [
+        {"key": "truth_layer", "label": "Truth layer", "value": "PRIVATE_EXECUTION"},
+        {
+            "key": "environment",
+            "label": "ENVIRONMENT",
+            "value": observation.environment.value,
+        },
+        {
+            "key": "credential_scope",
+            "label": "CREDENTIAL_SCOPE",
+            "value": credential_scope,
+        },
+        {
+            "key": "application_method_permission",
+            "label": "APPLICATION_METHOD_PERMISSION",
+            "value": APPLICATION_METHOD_PERMISSION,
+        },
+        {
+            "key": "orders_executed",
+            "label": "ORDERS_EXECUTED",
+            "value": ORDERS_EXECUTED,
+        },
+        {"key": "status", "label": "Capture status", "value": observation.status.value},
+        {"key": "freshness", "label": "Freshness", "value": freshness},
+        {
+            "key": "known_at",
+            "label": "Known at",
+            "value": str(known_at or "UNKNOWN"),
+            "kind": "timestamp",
+        },
+        {"key": "completeness", "label": "Completeness", "value": completeness},
+        {
+            "key": "requested_token_scope",
+            "label": "REQUESTED_TOKEN_SCOPE",
+            "value": DERIBIT_REQUESTED_READ_SCOPE,
+        },
+        {
+            "key": "token_scope_normalization",
+            "label": "TOKEN_SCOPE_NORMALIZATION",
+            "value": observation.token_scope_normalization,
+        },
+    ]
+    return {
+        "available": True,
+        "truth_layer": "PRIVATE_EXECUTION",
+        "environment": observation.environment.value,
+        "credential_scope": credential_scope,
+        "application_method_permission": APPLICATION_METHOD_PERMISSION,
+        "orders_executed": ORDERS_EXECUTED,
+        "account_observation_id": observation.identity,
+        "account_scope_id": observation.account_scope_id,
+        "status": observation.status.value,
+        "freshness": {"status": freshness, "known_at": known_at},
+        "completeness": completeness,
+        "requested_token_scope": DERIBIT_REQUESTED_READ_SCOPE,
+        "token_scope_normalization": observation.token_scope_normalization,
+        "summary_status": summary_status,
+        "summary": value["summary"],
+        "positions_status": positions_status,
+        "position_count": value["position_count"],
+        "positions": value["positions"],
+        "blockers": list(observation.blockers),
+        "boundaries": {
+            "auth": value["auth_boundary"],
+            "summary": value["summary_boundary"],
+            "positions": value["positions_boundary"],
+        },
+        "facts": facts,
+        "isolation": isolation,
+    }
 
 
 def build_case_projection(case: TradeCase | None) -> dict[str, object]:

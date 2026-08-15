@@ -305,6 +305,31 @@ button.product-card:hover { border-color: var(--cyan); background: #0d2434; }
 .market-fact:last-child { border-right: 0; }
 .market-fact span { display: block; color: var(--muted); font-size: 10px; }
 .market-fact strong { display: block; margin-top: 5px; color: var(--cyan); font-size: 13px; font-weight: 500; }
+.account-panel { margin-top: 10px; border-color: #574077; }
+.account-panel .panel-heading { background: rgba(180, 116, 250, 0.06); }
+.account-panel .panel-heading h2 { margin: 3px 0 0; font-size: 15px; }
+.account-permission-chips { display: flex; align-items: center; gap: 8px; }
+.account-permission-chips .truth-chip { color: var(--purple); border-color: #574077; }
+.account-boundary { display: grid; grid-template-columns: repeat(6, minmax(110px, 1fr)); border-bottom: 1px solid var(--border); }
+.account-boundary-fact { min-width: 0; padding: 9px 10px; border-right: 1px solid var(--border); }
+.account-boundary-fact:last-child { border-right: 0; }
+.account-boundary-fact span, .account-boundary-fact strong { display: block; }
+.account-boundary-fact span { color: var(--muted); font-size: 9px; }
+.account-boundary-fact strong { margin-top: 4px; color: var(--purple); font-size: 11px; overflow-wrap: anywhere; }
+.account-positions { overflow-x: auto; border-bottom: 1px solid var(--border); }
+.account-positions table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.account-positions th, .account-positions td { padding: 7px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); font-size: 10px; text-align: right; overflow-wrap: anywhere; }
+.account-positions th { color: var(--muted); font-weight: 500; }
+.account-positions th:first-child, .account-positions td:first-child { width: 24%; text-align: left; }
+.account-positions th:last-child, .account-positions td:last-child { border-right: 0; }
+.account-unknown, .account-empty { display: grid; gap: 4px; padding: 12px; }
+.account-unknown strong { color: var(--amber); }
+.account-empty strong { color: var(--green); }
+.account-unknown span, .account-empty span { color: var(--muted); font-size: 10px; }
+.account-isolation { display: grid; grid-template-columns: repeat(3, 1fr); }
+.account-isolation p { margin: 0; padding: 9px 10px; border-right: 1px solid var(--border); color: var(--muted); font-size: 9px; line-height: 1.45; }
+.account-isolation p:last-child { border-right: 0; }
+.account-isolation .account-blocker { color: var(--red); }
 
 .product-heading {
   display: grid;
@@ -547,6 +572,10 @@ button.product-card:hover { border-color: var(--cyan); background: #0d2434; }
   .attention-list { grid-template-columns: 1fr; }
   .market-strip { grid-template-columns: 1fr 1fr; }
   .market-fact { border-bottom: 1px solid var(--border); }
+  .account-boundary { grid-template-columns: 1fr 1fr; }
+  .account-isolation { grid-template-columns: 1fr; }
+  .account-isolation p { border-right: 0; border-bottom: 1px solid var(--border); }
+  .account-permission-chips { margin-top: 8px; flex-wrap: wrap; }
   .product-status-block { margin-top: 12px; padding: 12px 0 0; border-top: 1px solid var(--border); border-left: 0; }
   .lifecycle-rail { grid-template-columns: 1fr; gap: 5px; }
   .lifecycle-step::after { display: none; }

@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 POST-RECOVERY FORWARD RELIABILITY — ACTIVE
+**Status:** C1 MAINNET REQUEST-SCOPED READ CONNECTIVITY — ACTIVE
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -8,20 +8,23 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `VALIDATION_ONLY`
+**Current task kind:** `IMPLEMENTATION`
 
-**Sole authorized closure:** [`B3_POST_RECOVERY_FORWARD_RELIABILITY`](../../tasks/B3_POST_RECOVERY_FORWARD_RELIABILITY.md)
+**Sole authorized closure:** [`C1_MAINNET_REQUEST_SCOPED_AUTH`](../../tasks/C1_MAINNET_REQUEST_SCOPED_AUTH.md)
 
 ## Current permissions
 
 Stage is the permission ceiling; a future active task may only narrow it.
 
-**Offline checks and simulation:** after Session `2026-08-16T08:00:00Z` ends, one bounded read-only
-reconciliation of the `84` post-deployment Windows is authorized under a caller-supplied ignored
-root; synthetic reconnects against production, simulated market evidence, Policy Outcomes, and
-durable review artifacts are forbidden
+**Offline checks and simulation:** the active task may change only C1 mainnet auth acceptance,
+credential/token-scope truth labels, its direct owner text, isolated Workbench projection, and fake
+tests. The fixed mainnet host, requested scope, three-method allowlist, credential reader, Public
+Shadow, Policy, and every deployed runtime remain frozen.
 
-**Public market calls:** only unauthenticated production `wss://www.deribit.com/ws/api/v2` public
+**Public market calls:** the active implementation task grants no new public market call. Existing
+ignored public snapshots may be read only by offline tests until the standard gate cleans them.
+Otherwise only unauthenticated production
+`wss://www.deribit.com/ws/api/v2` public
 heartbeat, subscribe, unsubscribe, test, BTC index, and aggregated `100ms` BTC option book/ticker
 channels, plus `https://www.deribit.com/api/v2` public clock, instrument metadata, initial and at
 most one reconnect index-history recovery seed per new WebSocket connection epoch, affected-book
@@ -45,11 +48,14 @@ loopback Workbench port `8765`, and no duration expansion into another process o
 WebSocket reconnects and launchd `KeepAlive` may preserve this exact job, but no manual restart,
 replacement, new root, or other process is authorized
 
-**Private read-only account permission:** `NONE`
+**Private read-only account permission:** `NONE` during implementation. No mainnet or testnet
+authentication, account call, Positions call, Chrome action, credential read, or secret persistence
+is authorized. The task removes only the local response-scope gate; it may not add a private method.
 
-**Orders, capital, and deployment:** the exact already deployed local launchd public Shadow job is
-deployed and may remain under `KeepAlive`. Any other local or remote deployment, orders, fills,
-capital, and private access remain `NONE`
+**Orders, capital, and deployment:** mainnet execution remains permanently `NONE`. Fake tests may
+inject forbidden method names only to prove rejection. Every live order, fill, trade lookup, cancel,
+Position mutation, capital action, restart, replacement, new process, root, and deployment remains
+`NONE`.
 
 **Policy qualification / Edge claim:** `NONE`
 
@@ -101,14 +107,64 @@ capital, and private access remain `NONE`
   `DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1`, `21` quotes, and one continuity epoch.
 - `natural_reconnect_recovery=NOT_YET_OBSERVED`: the accepted post-deployment cut belongs to the
   new process's initial WebSocket epoch, so it proves startup and market-cut health but not the
-  natural reconnect transition. The active validation has exactly `84` scheduled Windows from
-  `2026-08-15T11:00:00Z` through Session end and closes even if no natural reconnect occurs.
+  natural reconnect transition. The declared post-deployment population contains exactly `84`
+  scheduled Windows from `2026-08-15T11:00:00Z` through Session end, but its completed reliability
+  reconciliation is `UNVERIFIED`. The validation was ended by the explicit product decision to
+  begin C1; it was not accepted, backfilled, or converted into a C1 gate.
 - `workbench_projection=CURRENT_SESSION_TRUTHFUL`: loopback Workbench renders the active Session's
   current counts, Gap state, evidence boundary, public-Shadow disclaimer, and no fabricated
   Challenger results without console errors. It has no completed-Session selector, so the prior
   Session review remains a Ledger audit; adding historical UI is not the current trading blocker.
 - `policy_qualification=NONE` and `edge_claim=NONE`: deterministic scenarios, a local ablation,
   Candidate frequency, one Session, and natural-chain occurrence cannot qualify the Policy.
+- `c1_private_account_capability=IMPLEMENTED_OFFLINE_REQUEST_SCOPED_PENDING_GATE`: the fixed
+  mainnet host and method surface contains exactly `public/auth`, BTC summary, and BTC Positions.
+  Auth requests exactly `account:read trade:read`; auth-response scope text is neither an
+  authorization gate nor an Observation field. Observation, CLI, and Workbench schema 9 separate
+  `MAINNET`, `PRIVATE_EXECUTION`, `CREDENTIAL_SCOPE=USER_DECLARED_READ_ONLY`,
+  `TOKEN_SCOPE_NORMALIZATION=UNAVAILABLE`,
+  `APPLICATION_METHOD_PERMISSION=READ_ONLY_FIXED_ALLOWLIST`, and `ORDERS_EXECUTED=NONE`, without
+  storing credential, token, or raw scope material. The two failed testnet C1 auth guards remain
+  historical evidence; testnet execution belongs only to a later explicit C2 task.
+- `c1_initial_testnet_canary=FAIL_CLOSED_ACCEPTED`: the one authorized public snapshot completed
+  with EventState `NONE`, `21/21` books, complete Candidate data readiness, and `NO_STRUCTURE`
+  without Ledger recording. The existing user-declared `read_write` testnet key then authenticated
+  only far enough to return an effective scope outside the C1 functional allowlist. The observation
+  closed `UNKNOWN` with `AUTH_SCOPE_EXCEEDS_C1`; summary and Positions remained `UNKNOWN`, and zero
+  private methods were called. This proves the key was not misused and is not a C1 capability
+  failure.
+- `c1_read_only_credential_remediation=SUPERSEDED_BEFORE_SIDE_EFFECT`: the testnet API-management
+  page was inspected and the new-key form opened, then the explicit product decision removed the
+  need for a separate testnet read-only key. The unsaved form was cancelled; no key was created,
+  changed, deleted, copied, or used. Testnet credential capability and the application's method
+  permission must now be represented as separate truths.
+- `c1_environment_specific_canary_attempt=FAIL_CLOSED_NEEDS_OPEN_TOKEN_POLICY`: the exact prior
+  public snapshot was rehydrated with its recorded SHA-256 and no new market call. One no-retry
+  testnet auth then returned at least one scope token outside the implementation's fixed functional
+  enumeration. The observation closed `UNKNOWN/AUTH_SCOPE_EXCEEDS_C1`; summary and Positions were
+  both uncalled and remained `UNKNOWN`. Validation artifacts contain neither injected credential
+  value. This is a remaining testnet token-policy mismatch, not permission to guess the token or
+  broaden the method allowlist.
+- `c1_open_scope_canary_attempt=FAIL_CLOSED_NEEDS_SELECTIVE_RECOGNITION`: the exact prior public
+  snapshot was rehydrated again with matching SHA-256 and no new market call. One no-retry testnet
+  auth returned `AUTH_SCOPE_UNKNOWN`; the observation is `TESTNET/UNKNOWN`, summary and Positions
+  were both uncalled and remain `UNKNOWN`, and mainnet was not attempted. The five ignored
+  validation artifacts contain neither selected credential value. The irrelevant raw token was not
+  printed, persisted, or enumerated.
+- `c1_mainnet_read_only_canary=FAIL_CLOSED_AUTH_SCOPE_UNKNOWN`: the explicit owner-only machine
+  credential file passed its file contract and selected only mainnet fields. One no-retry mainnet
+  auth returned `AUTH_SCOPE_UNKNOWN`; the observation is `MAINNET/UNKNOWN`, summary and Positions
+  were both uncalled and remain `UNKNOWN`, and `ORDERS_EXECUTED=NONE`. The four ignored Workbench
+  artifacts contain neither selected credential value. C1 mainnet connectivity remains
+  `UNVERIFIED`; this does not authorize another scope-parser iteration inside C2.
+- `c1_live_private_account=UNVERIFIED`: neither environment has a known private account observation.
+  Mainnet remains strictly read-only and its response chain is unverified. Both failed testnet C1
+  auth guards are retained as evidence but are not a C2 product gate. No C1 account value or Position
+  fact has been accepted.
+- `c2_testnet_combo_execution=DEFERRED_UNSTARTED`: the briefly activated C2 implementation task was
+  superseded before any source, test, manifest, owner, or live change. No testnet order, trade, fill,
+  fee, Position mutation, or cancel has occurred. C2 waits for the explicit C1 mainnet connectivity
+  closure.
 
 ## Current implementation truth
 
@@ -168,7 +224,7 @@ capital, and private access remain `NONE`
   reserve immediately. Only the matching official settlement may append one hold-counterfactual
   enrichment; it cannot rewrite exit economics, primary reason, path, terminality, or risk state.
 - Runtime root schema 3, `MarketObservationV3`, `TradeCaseSnapshotV3`,
-  `ShadowExplanationPathV2`, and Workbench schema 7 reject prior source or explanatory shapes rather
+  `ShadowExplanationPathV2`, and Workbench schema 9 reject prior source or explanatory shapes rather
   than migrating the frozen prior root. Workbench exposes market-source identity, Candidate-local
   readiness, the Decision-to-Outcome path, extrema, Gaps, alternatives, fees, and counterfactuals
   without inventing missing facts.
@@ -200,17 +256,18 @@ capital, and private access remain `NONE`
   epoch-bounded reconnect index-path recovery seeds, official settlement, and explicit affected-book
   recovery fallback. The feed adds no durable store, database, bus, replay framework, private
   method, or authenticated `raw` channel.
-- The complete repository gate passes: `228` tests and `8` deterministic business scenarios. This
+- The complete repository gate passes: `267` tests and `8` deterministic business scenarios. This
   is offline implementation evidence, not current market, execution, or profitability evidence.
-- The active task is validation-only. Outside the exact existing runtime and bounded post-Session
-  read-only audit, live commands, stable-root mutation, and market calls remain disabled. Private
-  facts, orders, capital, and any other local or remote deployment remain unconditionally disabled.
+- The active task is C1 implementation-only. It may delete the response-scope parser as a mainnet
+  read gate, retain the fixed auth request `account:read trade:read`, and project only
+  `CREDENTIAL_SCOPE=USER_DECLARED_READ_ONLY` plus
+  `TOKEN_SCOPE_NORMALIZATION=UNAVAILABLE`. No credential read or live call is authorized.
 
-**Primary blocker:** `POST_RECOVERY_FORWARD_RELIABILITY_UNMEASURED` — deterministic tests and one
-healthy initial-epoch cut prove the implementation/deployment delta, but the bounded post-deployment
-Window population is incomplete. The active validation measures exact coverage, typed Gaps,
-connection epochs, and any amplification after Session end; it does not require a reconnect,
-Candidate, Policy change, or longer observation period.
+**Primary blocker:** `C1_MAINNET_RESPONSE_SCOPE_IS_FALSE_PRODUCT_GATE` — three live auth responses
+have been blocked locally before summary and Positions because the client attempts to normalize an
+exchange scope string that neither grants nor expands application methods. Safety already belongs
+to the user-declared read-only mainnet credential, the exact requested read scope, and a closed
+three-method allowlist. B3 reliability and the natural chain remain separately `UNVERIFIED`.
 
 ## Maturity ladder
 
@@ -220,13 +277,13 @@ Candidate, Policy change, or longer observation period.
 - `B2_STRUCTURE_PRICING` — route-independent whole-four-leg discovery and inverse-unit economics.
 - `B3_ATOMIC_PUBLIC_SHADOW` — complete whole-product Shadow Case, monitoring, terminality, and
   explanatory Outcome without fill claims.
-- `C1_PRIVATE_READ_ONLY` — authenticated account truth with no order permission.
+- `C1_PRIVATE_READ_ONLY` — authenticated mainnet account truth through a fixed read-method
+  application boundary and a user-declared read-only machine credential contract.
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Active closure boundary:** after Session `2026-08-16T08:00:00Z` ends, reconcile only the `84`
-scheduled Windows beginning at or after `2026-08-15T11:00:00Z`. Report exact coverage, DataHealth,
-WebSocket epochs, recovery calls, and later-Window amplification without implementation changes or
-backfill. If no natural reconnect occurred, close with `NOT_YET_OBSERVED`; do not extend the task or
-manufacture a Candidate. Policy, `7%`, `$10`, sizing, ranking, durable schema, private facts, orders,
-fills, capital, Policy qualification, Edge claims, D1, remote deployment, and B4 remain forbidden.
+**Active closure boundary:** remove response-scope normalization and persistence from the C1 mainnet
+read path while retaining the exact request scope, host, currency, parameters, and three methods.
+Project the credential permission basis and unavailable token normalization truthfully. Live
+credentials, Chrome, key mutation, mainnet execution, testnet, real capital, B3 runtime/root access,
+Candidate manufacture, Policy, D1, Edge claims, and deployment remain forbidden.

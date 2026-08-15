@@ -4,7 +4,7 @@ This file is an evidence index, not Authority or permission. Each source support
 mechanism or exchange fact; none validates Optimatrix thresholds, BTC 0DTE transferability, Edge,
 or profitability.
 
-**Last checked:** 2026-08-14
+**Last checked:** 2026-08-15
 
 ## Public mechanics
 
@@ -86,10 +86,21 @@ or profitability.
 
 These sources describe capability but grant no permission:
 
+- [Creating an API key](https://docs.deribit.com/articles/creating-api-key)
+  — API-key maximum account/trade/wallet permissions and read-only versus read-write selection;
+  token effective scope remains a separate `public/auth` response fact.
+- [`public/auth`](https://docs.deribit.com/api-reference/authentication/public-auth)
+  — client-credentials authentication, requested/effective scope, bearer-token result, and response
+  timing envelope; a token may request scope below the API key maximum. C1 always requests exactly
+  `account:read trade:read`. The mainnet credential is user-declared read-only, while the fixed
+  application contains no write method. C1 does not normalize, gate on, output, persist, or project
+  the response scope text and therefore labels token-scope normalization `UNAVAILABLE` rather than
+  claiming an exact effective permission set.
 - [`private/get_account_summary`](https://docs.deribit.com/api-reference/account-management/private-get_account_summary)
-  — authenticated equity, funds, margin, and account-specific fee facts.
+  — authenticated BTC equity, funds, and margin facts; C1 fixes `extended=false` and does not request
+  account-specific fee expansion. This method requires `account:read`.
 - [`private/get_positions`](https://docs.deribit.com/api-reference/account-management/private-get_positions)
-  — authenticated option and Combo Position facts.
+  — authenticated BTC option, future, and Combo Position facts; this method requires `trade:read`.
 - [`private/get_order_state`](https://docs.deribit.com/api-reference/trading/private-get_order_state)
   — authenticated order-state facts.
 - [`private/get_user_trades_by_order`](https://docs.deribit.com/api-reference/trading/private-get_user_trades_by_order)

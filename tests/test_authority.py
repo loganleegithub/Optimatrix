@@ -63,19 +63,71 @@ def test_authorized_runtime_matches_active_b3_deployment() -> None:
         "/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2"
     )
     policy = load_btc_short_vol_policy(DEFAULT_BTC_SHORT_VOL_POLICY_PATH)
-    tasks = sorted(path for path in (ROOT / "tasks").glob("*.md") if path.name != "TEMPLATE.md")
-    assert len(tasks) == 1
-    task = tasks[0]
 
     assert AUTHORIZED_RUNTIME_ROOT == expected_root
     assert AUTHORIZED_RUNTIME_POLICY_IDENTITY == policy.identity
 
-    for path in (AUTHORITY / "CURRENT_STAGE.md", task, ROOT / "README.md"):
+    for path in (AUTHORITY / "CURRENT_STAGE.md", ROOT / "README.md"):
         text = path.read_text(encoding="utf-8")
         assert str(expected_root) in text
 
     assert policy.identity in (AUTHORITY / "CURRENT_STAGE.md").read_text(encoding="utf-8")
-    assert policy.identity in task.read_text(encoding="utf-8")
+
+
+def test_c1_private_account_boundary_is_isolated_and_read_only() -> None:
+    architecture = (AUTHORITY / "SYSTEM_ARCHITECTURE.md").read_text(encoding="utf-8")
+    btc_contract = (ROOT / "docs/contracts/BTC_0DTE_TWO_SIDED_SHORT_VOL.md").read_text(
+        encoding="utf-8"
+    )
+    case_contract = (ROOT / "docs/contracts/CASE_POSITION_OUTCOME.md").read_text(encoding="utf-8")
+    manifest = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    c1_source = "\n".join(
+        (ROOT / "src/optimatrix" / name).read_text(encoding="utf-8")
+        for name in ("account.py", "deribit_private.py", "private_cli.py")
+    )
+
+    for owner in (architecture, btc_contract, case_contract):
+        assert "AuthenticatedAccountObservation" in owner
+    assert "CREDENTIAL_SCOPE=USER_DECLARED_READ_ONLY|UNKNOWN" in btc_contract
+    assert "TOKEN_SCOPE_NORMALIZATION=UNAVAILABLE" in btc_contract
+    assert "APPLICATION_METHOD_PERMISSION=READ_ONLY_FIXED_ALLOWLIST" in btc_contract
+    assert "ORDERS_EXECUTED=NONE" in btc_contract
+    assert "account:read trade:read" in btc_contract
+    assert "optimatrix-account" in manifest
+    for allowed in (
+        "public/auth",
+        "private/get_account_summary",
+        "private/get_positions",
+    ):
+        assert allowed in c1_source
+    for forbidden in (
+        "private/buy",
+        "private/sell",
+        "private/cancel",
+        "private/create_combo",
+        "private/get_order_state",
+        "private/get_user_trades",
+        "private/withdraw",
+        "private/transfer",
+    ):
+        assert forbidden not in c1_source
+
+
+def test_root_credentials_are_ignored_and_example_contains_no_values() -> None:
+    ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    example = (ROOT / ".env.example").read_text(encoding="utf-8")
+
+    assert "/.env" in ignore
+    assert "/.env.*" in ignore
+    assert "!/.env.example" in ignore
+    assert not (ROOT / ".env").exists()
+    for key in (
+        "DERIBIT_MAINNET_CLIENT_ID",
+        "DERIBIT_MAINNET_CLIENT_SECRET",
+        "DERIBIT_TESTNET_CLIENT_ID",
+        "DERIBIT_TESTNET_CLIENT_SECRET",
+    ):
+        assert f"{key}=\n" in example
 
 
 def test_capability_acceptance_does_not_manufacture_market_evidence() -> None:

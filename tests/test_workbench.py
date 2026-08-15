@@ -11,6 +11,13 @@ from typing import cast
 
 import pytest
 
+from optimatrix.account import (
+    AccountResponseBoundary,
+    AuthenticatedAccountObservation,
+    AuthenticatedAccountSummary,
+    DeribitAccountEnvironment,
+    account_scope_identity,
+)
 from optimatrix.decision import MarketObservation
 from optimatrix.engine import Btc0DteShortVolEngine
 from optimatrix.lifecycle import (
@@ -228,11 +235,20 @@ def test_document_projects_one_four_leg_strategy_without_recalculating_values() 
         "label": "PUBLIC SHADOW - READ ONLY",
         "statements": [
             "Public market facts and counterfactual structure economics only.",
-            "No order, fill, account, balance, margin, capital, or actual position is present.",
+            "Public Shadow Ledger, Case, risk, and lifecycle contain no account, order, fill, capital, or actual position fact.",
             "Displayed credit and loss are observation-boundary estimates, not real PnL.",
-            "This static export creates no Shadow Case and grants no execution permission.",
+            "An adjacent private account projection, when present, remains isolated and grants no execution permission.",
         ],
     }
+    assert document["schema_version"] == 9
+    account = cast(Mapping[str, object], document["account"])
+    assert account["credential_scope"] == "UNKNOWN"
+    assert account["application_method_permission"] == "READ_ONLY_FIXED_ALLOWLIST"
+    assert account["orders_executed"] == "NONE"
+    assert account["requested_token_scope"] == "account:read trade:read"
+    assert account["token_scope_normalization"] == "UNAVAILABLE"
+    assert "effective_scopes" not in account
+    assert account["status"] == "NOT_CAPTURED"
     snapshot_view = cast(Mapping[str, object], document["snapshot"])
     projection_view = cast(Mapping[str, object], document["projection"])
     assert snapshot_view["session_id"] == "2026-08-13T08:00:00Z"
@@ -332,9 +348,11 @@ def test_static_export_is_network_free_and_browser_receives_only_presentation_da
     stylesheet = exported.stylesheet_path.read_text(encoding="utf-8")
     script = exported.script_path.read_text(encoding="utf-8")
     data_script = exported.data_path.read_text(encoding="utf-8")
-    assert "PUBLIC SHADOW - READ ONLY" in html
+    assert "PUBLIC SHADOW - READ ONLY · PRIVATE ACCOUNT OBSERVATION" in html
     assert "公开行情模拟" in html
-    assert "账户持仓" in html
+    assert "ORDERS EXECUTED NONE" in html
+    assert "APPLICATION METHODS FIXED READ ONLY" in html
+    assert "Authenticated Account Observation" in html
     assert '<script src="workbench-data.js"></script>' in html
     assert '<meta http-equiv="refresh"' not in html
     assert "产品账" in html
@@ -361,6 +379,8 @@ def test_static_export_is_network_free_and_browser_receives_only_presentation_da
     assert "workbench.runtime.session_id" in script
     assert "workbench.ledger" in script
     assert "workbench.review" in script
+    assert "workbench.account" in script
+    assert "部分已知不得推断为空仓" in script
     assert "NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE" in script
     assert "NO_LEGAL_FOUR_LEG_STRUCTURE" in script
     assert "translateComposite(item.subtitle)" in script
@@ -836,3 +856,120 @@ def test_structure_requires_four_distinct_correctly_typed_legs() -> None:
     wrong_type["quotes"] = wrong_quotes
     with pytest.raises(ValueError, match="wrong option type"):
         build_workbench_document(wrong_type)
+
+
+def test_private_account_projection_is_visible_complete_and_isolated(
+    tmp_path: Path,
+) -> None:
+    client_id = "workbench-client-id-must-not-leak"
+    secret = "workbench-secret-must-not-leak"
+    token = "workbench-token-must-not-leak"
+    boundary = AccountResponseBoundary(
+        server_received_at=datetime(2026, 8, 15, 12, tzinfo=UTC),
+        server_sent_at=datetime(2026, 8, 15, 12, 0, 0, 2000, tzinfo=UTC),
+        known_at=datetime(2026, 8, 15, 12, 0, 0, 5000, tzinfo=UTC),
+        request_round_trip_ms=5,
+    )
+    observation = AuthenticatedAccountObservation(
+        environment=DeribitAccountEnvironment.MAINNET,
+        account_scope_id=account_scope_identity(
+            DeribitAccountEnvironment.MAINNET,
+            client_id,
+        ),
+        auth_boundary=boundary,
+        summary=AuthenticatedAccountSummary(
+            currency="BTC",
+            balance=Decimal("1"),
+            equity=Decimal("0.9"),
+            available_funds=Decimal("0.8"),
+            initial_margin=Decimal("0.1"),
+            maintenance_margin=Decimal("0.05"),
+        ),
+        summary_boundary=boundary,
+        positions=(),
+        positions_boundary=boundary,
+        blockers=(),
+    )
+
+    document = build_workbench_document(
+        _snapshot(),
+        account_observation=observation,
+    )
+    account = cast(Mapping[str, object], document["account"])
+    assert account["environment"] == "MAINNET"
+    assert account["truth_layer"] == "PRIVATE_EXECUTION"
+    assert account["credential_scope"] == "USER_DECLARED_READ_ONLY"
+    assert account["application_method_permission"] == "READ_ONLY_FIXED_ALLOWLIST"
+    assert account["orders_executed"] == "NONE"
+    assert account["requested_token_scope"] == "account:read trade:read"
+    assert account["token_scope_normalization"] == "UNAVAILABLE"
+    assert "effective_scopes" not in account
+    assert account["freshness"] == {
+        "status": "CAPTURE_BOUNDARY_KNOWN",
+        "known_at": "2026-08-15T12:00:00.005000Z",
+    }
+    assert account["completeness"] == "COMPLETE"
+    assert account["summary_status"] == "KNOWN"
+    assert account["positions_status"] == "KNOWN"
+    assert account["position_count"] == 0
+    assert account["positions"] == []
+
+    exported = write_workbench(
+        _snapshot(),
+        tmp_path / "account-workbench",
+        account_observation=observation,
+    )
+    serialized = exported.data_path.read_text(encoding="utf-8")
+    assert client_id not in serialized
+    assert secret not in serialized
+    assert token not in serialized
+    assert "PRIVATE_EXECUTION" in serialized
+    assert "USER_DECLARED_READ_ONLY" in serialized
+    assert "UNAVAILABLE" in serialized
+    assert "READ_ONLY_FIXED_ALLOWLIST" in serialized
+
+
+def test_partial_private_account_projection_never_infers_flat_or_capacity() -> None:
+    boundary = AccountResponseBoundary(
+        server_received_at=datetime(2026, 8, 15, 12, tzinfo=UTC),
+        server_sent_at=datetime(2026, 8, 15, 12, 0, 0, 2000, tzinfo=UTC),
+        known_at=datetime(2026, 8, 15, 12, 0, 0, 5000, tzinfo=UTC),
+        request_round_trip_ms=5,
+    )
+    observation = AuthenticatedAccountObservation(
+        environment=DeribitAccountEnvironment.MAINNET,
+        account_scope_id=account_scope_identity(
+            DeribitAccountEnvironment.MAINNET,
+            "partial-client",
+        ),
+        auth_boundary=boundary,
+        summary=AuthenticatedAccountSummary(
+            currency="BTC",
+            balance=Decimal("1"),
+            equity=Decimal("0.9"),
+            available_funds=Decimal("0.8"),
+            initial_margin=Decimal("0.1"),
+            maintenance_margin=Decimal("0.05"),
+        ),
+        summary_boundary=boundary,
+        positions=None,
+        positions_boundary=None,
+        blockers=("ACCOUNT_POSITIONS_RPC_REJECTED",),
+    )
+
+    account = cast(
+        Mapping[str, object],
+        build_workbench_document(
+            _snapshot(),
+            account_observation=observation,
+        )["account"],
+    )
+    assert account["status"] == "UNKNOWN"
+    assert account["credential_scope"] == "USER_DECLARED_READ_ONLY"
+    assert account["token_scope_normalization"] == "UNAVAILABLE"
+    assert account["completeness"] == "PARTIAL"
+    assert account["positions_status"] == "UNKNOWN"
+    assert account["position_count"] is None
+    assert account["positions"] is None
+    assert "capacity" not in account
+    assert "reservation" not in account

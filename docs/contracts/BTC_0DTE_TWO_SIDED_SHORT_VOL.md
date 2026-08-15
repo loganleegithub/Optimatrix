@@ -194,6 +194,60 @@ A future real Position requires a separate `AccountRiskReservation` derived from
 equity, margin, existing positions, available capacity, account-specific fees, and reservation
 state. It belongs to private stages and cannot be inferred from Shadow allocation or public depth.
 
+## C1 authenticated account observation
+
+C1 adds one isolated, explicitly invoked `AuthenticatedAccountObservation`; it does not add real
+Entry. The observation binds the exact Deribit `MAINNET` environment, an opaque account-scope
+identity, authentication response boundary, independently
+validated BTC account-summary and BTC-position components, each component's causal response
+boundary, and exact blockers.
+
+The only C1 exchange methods are:
+
+```text
+public/auth                       client_credentials with account:read trade:read
+private/get_account_summary      currency=BTC, extended=false
+private/get_positions            currency=BTC
+```
+
+Host selection is closed to the fixed Deribit mainnet endpoint. Arbitrary URL or host
+input, every method outside this list, and every parameter expansion fail before transport. The
+requested scope is always exactly `account:read trade:read`, because the summary requires the former
+capability and Positions require the latter. The machine credential is explicitly supplied under a
+user-declared read-only mainnet contract. The auth-response scope text is not normalized and never
+decides whether these two fixed reads are called; it is not output, serialized, persisted, or
+projected. `TOKEN_SCOPE_NORMALIZATION=UNAVAILABLE` prevents an invented exact-effective-scope claim.
+Missing or malformed access token, bearer type, expiry, mainnet environment, response envelope, or
+timing remains closed before the two private reads.
+Authentication, environment, currency, response-envelope timing, known-at, required numeric
+values, instrument identity, and duplicate Position names are validated before a component becomes
+known.
+
+The two private components are independent. A known empty BTC-position array means empty only at
+that response boundary. A failed or malformed component remains `UNKNOWN`; the other known
+component may remain visible, but partial truth cannot infer flat risk, margin capacity, capital
+availability, or a reservation. Credentials and bearer tokens are transport-only process memory:
+they are absent from CLI arguments, identities, exceptions, serialization, Workbench, Ledger,
+Journal, and every durable observation field.
+
+Credential injection is explicit and local. The CLI either reads both selected-environment values
+from an interactive no-echo terminal or from one caller-supplied credential-file path. It never
+searches for or implicitly loads `.env`, process environment, browser state, Keychain state, or a
+user directory. A credential file must be a same-owner, non-symlink regular file with exact mode
+`0600`; only the selected `DERIBIT_MAINNET_*` pair is retained by the C1 command. Duplicate or
+unknown keys, missing environment pairs, quotes, shell syntax, wider permissions, file replacement,
+and non-regular input fail with value-free codes.
+
+This observation is `truth_layer=PRIVATE_EXECUTION` and separates
+`CREDENTIAL_SCOPE=USER_DECLARED_READ_ONLY|UNKNOWN`,
+`TOKEN_SCOPE_NORMALIZATION=UNAVAILABLE`,
+`APPLICATION_METHOD_PERMISSION=READ_ONLY_FIXED_ALLOWLIST`, and `ORDERS_EXECUTED=NONE`. The last label
+means this application executed no order during the capture; it does not claim that the account has
+no external activity.
+The observation cannot become a `ShadowRiskAllocation`, `AccountRiskReservation`, TradeCase,
+Position, route, Entry, order, trade, fill, PnL, or execution attribution. C2 requires a separate
+task, contract closure, and permission boundary.
+
 ## Decision result and TradeCase boundary
 
 The BTC contract owns each enrolled-Window `DecisionRecord`: it freezes DecisionWindow, Base Policy,

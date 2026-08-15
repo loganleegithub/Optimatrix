@@ -59,6 +59,18 @@ Shadow and real are truth layers, not additional identities. A public quote or S
 never an order, fill, RFQ, liquidity reservation, account Position, margin fact, capital exposure,
 realized PnL, or proof of atomic exchange execution.
 
+An `AuthenticatedAccountObservation` is a one-shot mainnet `PRIVATE_EXECUTION` account fact with
+causal response boundaries, a user-declared read-only credential label, fixed application-method
+permission, observed order-activity label, component completeness, and opaque account-scope
+identity. C1 requests only the two required read capabilities, but does not normalize, gate on,
+store, or display the exchange's auth-response scope text. Token-scope normalization is explicitly
+`UNAVAILABLE`, not inferred as an effective permission fact. The observation is not a DecisionWindow,
+TradeCase, Position,
+`ShadowRiskAllocation`, `AccountRiskReservation`, order, trade, or Outcome. A known empty BTC
+Position response may state empty only at that capture boundary. A missing or failed summary or
+Position component remains `UNKNOWN`; partial account truth cannot imply flat risk, free capacity,
+available capital, or trade attribution.
+
 ## Permanent evidence boundaries
 
 `UNKNOWN` means a required fact is missing, stale, discontinuous, malformed, contradictory, outside

@@ -1,6 +1,6 @@
 # Case, Position, and Outcome Contract
 
-**Status:** ACTIVE BUSINESS CONTRACT — B3 PUBLIC SHADOW SOURCE CONFORMANT; PRIVATE AND D1 ABSENT
+**Status:** ACTIVE BUSINESS CONTRACT — B3 PUBLIC SHADOW SOURCE CONFORMANT; C1 ACCOUNT OBSERVATION ISOLATED; PRIVATE POSITION AND D1 ABSENT
 
 This contract owns the chain after each Window Decision: TradeCase, Position, monitoring,
 management, trigger, exit, terminality, Outcome, recovery, and offline learning. DecisionRecord and
@@ -44,6 +44,12 @@ An unresolved same-Session Shadow Case retains its frozen `stress_reserve_usd` w
 pending or a Position exists. Recovery verifies the allocation identity and conservative component
 maximum before reconstructing capacity. A terminal no-Position Entry or terminal Position Outcome
 releases that exact reserve; restart, Gap, ExitIntent, or a merely attempted exit does not.
+
+A C1 `AuthenticatedAccountObservation` remains outside this chain. Its known account summary and
+BTC Position list do not open a TradeCase, create a Position, reserve risk, release a Shadow
+reserve, reconcile a trade, or establish execution attribution. A complete known-empty response is
+only a capture-boundary account fact. Any missing component remains `UNKNOWN` and cannot prove
+flatness, capacity, terminality, or absence of risk responsibility.
 
 ## Position truth
 

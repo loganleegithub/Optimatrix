@@ -23,7 +23,7 @@
     <div id="channel-switcher" class="channel-switcher" aria-label="标的与策略通道"></div>
     <div class="session-block">
       <strong id="session-label">Deribit Session</strong>
-      <span id="session-mode">公开行情模拟 · 非真实成交/持仓</span>
+      <span id="session-mode">公开行情模拟 · 私有账户只读层独立</span>
     </div>
   </header>
 
@@ -62,6 +62,23 @@
       </div>
 
       <section id="market-strip" class="market-strip" aria-label="市场与运行时摘要"></section>
+
+      <section class="account-panel panel" aria-labelledby="account-panel-title">
+        <header class="panel-heading">
+          <div>
+            <span>与 Public Shadow 并排但隔离</span>
+            <h2 id="account-panel-title">Authenticated Account Observation</h2>
+          </div>
+          <div class="account-permission-chips" aria-label="私有账户权限边界">
+            <span class="truth-chip">APPLICATION METHODS FIXED READ ONLY</span>
+            <span class="state-badge" data-tone="neutral">ORDERS EXECUTED NONE</span>
+          </div>
+        </header>
+        <div id="account-boundary" class="account-boundary"></div>
+        <div id="account-summary" class="metric-ribbon"></div>
+        <div id="account-positions" class="account-positions"></div>
+        <div id="account-isolation" class="account-isolation"></div>
+      </section>
     </section>
 
     <section id="screen-product" class="screen product-screen" data-screen="product" hidden>
@@ -234,7 +251,7 @@
     <section class="drawer-panel" role="dialog" aria-modal="true">
       <header>
         <div>
-          <span>PUBLIC SHADOW · READ ONLY</span>
+          <span>PUBLIC SHADOW · PRIVATE ACCOUNT OBSERVATION</span>
           <h2 id="evidence-drawer-title">原始市场与因果证据</h2>
         </div>
         <button type="button" class="drawer-close" data-close-drawer aria-label="关闭证据抽屉">关闭</button>
@@ -243,14 +260,15 @@
         <section><h3>运行与恢复</h3><dl id="evidence-runtime"></dl></section>
         <section><h3>当前市场窗口</h3><dl id="evidence-window"></dl></section>
         <section><h3>市场上下文</h3><dl id="evidence-context"></dl></section>
+        <section><h3>私有账户权限与观察边界</h3><dl id="evidence-account"></dl></section>
         <section><h3>方法与警告</h3><div id="evidence-warnings"></div><dl id="evidence-methodology"></dl></section>
       </div>
     </section>
   </aside>
 
   <footer class="truth-footer">
-    <strong>PUBLIC SHADOW - READ ONLY</strong>
-    <span>公开行情模拟，不是订单、成交、账户持仓、保证金、资本占用或真实盈亏。</span>
+    <strong>PUBLIC SHADOW - READ ONLY · PRIVATE ACCOUNT OBSERVATION</strong>
+    <span>凭据能力与应用方法权限分开显示；账户观察不进入 Shadow Ledger/Case/Risk/Lifecycle。</span>
     <button id="footer-evidence-button" type="button">查看证据边界</button>
   </footer>
 
