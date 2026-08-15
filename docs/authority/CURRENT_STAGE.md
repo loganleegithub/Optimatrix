@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 COMPLETED SESSION REVIEW — ACTIVE
+**Status:** B3 RECONNECT INDEX HISTORY RECOVERY — ACTIVE
 
 **Current maturity:** `B3_ATOMIC_PUBLIC_SHADOW`
 
@@ -8,23 +8,23 @@
 
 **Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
-**Current task kind:** `VALIDATION_ONLY`
+**Current task kind:** `IMPLEMENTATION`
 
-**Sole authorized closure:** [`B3_COMPLETED_SESSION_REVIEW`](../../tasks/B3_COMPLETED_SESSION_REVIEW.md)
+**Sole authorized closure:** [`B3_RECONNECT_INDEX_HISTORY_RECOVERY`](../../tasks/B3_RECONNECT_INDEX_HISTORY_RECOVERY.md)
 
 ## Current permissions
 
 Stage is the permission ceiling; a future active task may only narrow it.
 
-**Offline checks and simulation:** one bounded read-only review of the completed Session ending
-`2026-08-15T08:00:00Z` is authorized; any temporary output must remain in a caller-supplied ignored
-root, and synthetic future paths or simulated Outcomes are forbidden
+**Offline checks and simulation:** deterministic reconnect, history-reseed, causal-boundary, and
+runtime-recovery tests for the exact active task are authorized under caller-supplied ignored roots;
+synthetic market evidence, simulated Policy Outcomes, and durable review artifacts are forbidden
 
 **Public market calls:** only unauthenticated production `wss://www.deribit.com/ws/api/v2` public
 heartbeat, subscribe, unsubscribe, test, BTC index, and aggregated `100ms` BTC option book/ticker
-channels, plus `https://www.deribit.com/api/v2` public clock, instrument metadata, initial index-path
-recovery seed, affected-book resync, and official settlement calls made only by the already deployed
-launchd runtime identified below
+channels, plus `https://www.deribit.com/api/v2` public clock, instrument metadata, initial and at
+most one reconnect index-history recovery seed per new WebSocket connection epoch, affected-book
+resync, and official settlement calls made only by the launchd runtime identified below
 
 **Stable ObservationLedger root:** only
 `/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2`
@@ -37,10 +37,12 @@ launchd runtime identified below
 **Frozen prior evidence:** `/Users/logan/Library/Application Support/Optimatrix/b3-public-shadow-v1`
 is retained without migration or mutation and remains ineligible for the current Policy.
 
-**Continuous runtime:** only launchd label `com.optimatrix.b3-public-shadow`, executing the current
+**Continuous runtime:** only launchd label `com.optimatrix.b3-public-shadow`, executing the
 `origin/main` console script from `/Users/logan/Optimatrix`, with EventState `NONE`, Policy identity
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`, the exact v2 root,
-loopback Workbench port `8765`, and no duration expansion into another process or root
+loopback Workbench port `8765`, and no duration expansion into another process or root; after the
+active task's full repository gate, this exact job may be replaced once by the verified reconnect
+recovery implementation
 
 **Private read-only account permission:** `NONE`
 
@@ -59,21 +61,45 @@ capital, and private access remain `NONE`
   stable-root recovery, and a healthy loopback surface without manufacturing a Candidate.
 - `natural_chain=NOT_YET_OBSERVED`: v2 contains no causally complete natural
   Candidate-to-Outcome chain. This remains stronger evidence to collect, not a capability failure.
-- `policy_reachability=LOCAL_RESPONSIBILITY_MEASURED`: snapshot
-  `sha256:984cb26a2112979ac34453ad00265f6b7e2ed3506a976b0edceab76ba01d25fc` freezes `21`
-  DecisionRecords through `2026-08-14T17:01:00Z`: `12` are DataHealth-healthy, `9` pass environment,
-  and those `9` contain `755` price-evaluable structures. Base admits `0`; removing only the `7%`
-  credit/payoff gate admits `5` structures in exactly one Window, while changing no Policy fact.
-- `credit_to_payoff_distribution=MEASURED_LOCAL_SAMPLE`: among those `755` structures, `2` pass
-  `7%`, median is `1.155678540625%`, p95 is `3.145764%`, p99 is `4.96479909375%`, and maximum is
-  `9.851412375%`. Both structures above `7%` fail only the separate `$10` credit gate; the five
-  structures exposed by removing `7%` have only `3.5183615625%–3.7268570625%` and are not
-  near-threshold cases.
+- `completed_session_review=ADJUDICATED`: Session
+  `2026-08-14T08:00:00Z/2026-08-15T08:00:00Z` has `96` pre-registered calendar Windows, `15`
+  contiguous pre-enrollment absences, `81/81` enrolled DecisionRecords, and `81/81` matching
+  WindowOutcomes. Results are `64 ABSTAIN` and `17 UNKNOWN`; phase counts are `69 CORE_CARRY`,
+  `6 LATE_THETA`, `4 EXIT_ONLY`, and `2 DELIVERY_TWAP`. No Candidate, TradeCase, or Position exists.
+- `policy_reachability=COMPLETED_SESSION_LOCAL_RESPONSIBILITY_MEASURED`: `64` records bind healthy
+  observations and none binds an unhealthy observation; `17` have no bound observation, comprising
+  `15 NO_OBSERVATION` and `2 OBSERVATION_OUTSIDE_WINDOW`. Of the healthy population, `16` pass the
+  environment layer. Across all `64` healthy Windows, `19` contain `1,200` price-evaluable
+  structures and none is Policy-eligible, including every structure behind an environment blocker.
+  Within the environment-pass population, `9` Windows contain the same `755` price-evaluable
+  structures and `7` have no legal structure.
+- `environment_frontier=ONE_SESSION_ONLY`: `43/64` healthy Windows fail only the VRP proxy gate;
+  the remaining five environment-blocked Windows are already closed to new Entry, three with
+  additional jump or persistence blockers. Removing any one environment gate exposes no
+  Policy-eligible structure. This measures responsibility, not the gate's risk value.
+- `credit_to_payoff_distribution=MEASURED_LOCAL_SAMPLE`: among the `755` environment-pass
+  structures, nearest-rank median is `1.155678540625%`, p95 is `3.145764%`, p99 is
+  `4.96479909375%`, and maximum is `9.851412375%`. Removing only `$10` admits `2` structures and
+  removing only `7%` admits `5`; all seven occur in the single `2026-08-14T15:00:00Z` Window.
 - `filter_forward_value=FIXED_WINDOW_PATH_OBSERVED`: all `9/9` frozen audit Windows now have known,
   continuous actual paths and official settlement. The sole `7%`-only affected Window's path did
   not breach its `62000` short Put, but reached `63172.323833`, breaching its shared `63000` short
   Call by `172.323833 USD`; official delivery was `63013.74`. This is path-risk evidence, not a
   counterfactual Entry, executable route, PnL, Policy qualification, or reason to change `7%`.
+- `window_outcome_population=PATH_COMPLETE_NOT_INDEPENDENT_TRADES`: all `81` enrolled Windows have
+  a known continuous public path and official delivery `63013.74`; `64` Decisions are evaluable,
+  all `81` path populations are eligible, and zero is execution-attributable or Policy-qualified.
+  Their overlapping horizons are Window facts, not `81` independent trades or PnL observations.
+- `runtime_continuity=RECONNECT_GAP_AMPLIFICATION_OBSERVED`: after the deployed Window-watermark
+  correction, `61/69` Decisions were evaluable. One `04:30 UTC` WebSocket disconnect directly
+  failed its Window and left a material gap in the retained index history that failed five more
+  consecutive Windows through `05:45 UTC`; the cache only seeds index history at initial startup.
+  The disconnected Window remains correctly `UNKNOWN`, but later Windows lack one bounded
+  reconnect reseed that could restore causal history without backfilling Decisions.
+- `workbench_projection=CURRENT_SESSION_TRUTHFUL`: loopback Workbench renders the active Session's
+  current counts, Gap state, evidence boundary, public-Shadow disclaimer, and no fabricated
+  Challenger results without console errors. It has no completed-Session selector, so the prior
+  Session review remains a Ledger audit; adding historical UI is not the current trading blocker.
 - `policy_qualification=NONE` and `edge_claim=NONE`: deterministic scenarios, a local ablation,
   Candidate frequency, one Session, and natural-chain occurrence cannot qualify the Policy.
 
@@ -169,11 +195,12 @@ capital, and private access remain `NONE`
   disabled. Private facts, orders, capital, and any other local or remote deployment remain
   unconditionally disabled.
 
-**Primary blocker:** `COMPLETED_SESSION_BEHAVIOR_NOT_REVIEWED` — the Session has terminal public
-facts, but its complete enrolled denominator, phase and blocker distributions, causal data failures,
-future paths, settlement, local Policy-frontier evidence, runtime health, and Workbench projection
-have not yet been reconciled as one review. This task may observe and adjudicate those facts only;
-it may not change `7%`, `$10`, sizing, Policy identity, runtime behavior, durable schema, or truth.
+**Primary blocker:** `RECONNECT_INDEX_HISTORY_GAP_AMPLIFICATION` — the current feed correctly fails
+closed on disconnect, but one missing WebSocket interval remains inside the matched risk horizon and
+turns one transport interruption into multiple later `UNKNOWN` Windows. The active task may add one
+bounded public index-history reseed per new connection epoch and require a later same-epoch
+WebSocket continuation before readiness. It may not backfill a Decision, poll REST continuously,
+change `7%`, `$10`, sizing, Policy identity, durable schema, or truth semantics.
 
 ## Maturity ladder
 
@@ -187,10 +214,10 @@ it may not change `7%`, `$10`, sizing, Policy identity, runtime behavior, durabl
 - `C2_AUTHORIZED_COMBO_EXECUTION` — separately authorized bounded Combo execution.
 - `D1_OFFLINE_AI_CHALLENGER` — forward Outcomes support human-governed Challenger evaluation.
 
-**Active closure boundary:** review only the completed Session ending `2026-08-15T08:00:00Z`, using
-its immutable DecisionRecords, WindowOutcomes, public future path, official settlement, runtime
-audit, and read-only Workbench projection. The current Session and later appends cannot alter that
-population. A Candidate is neither required nor awaited. The task may inspect but may not operate,
-replace, or reconfigure the runtime. Private facts, orders, v1 reuse, threshold or sizing changes,
-simulated future paths, Policy qualification, Edge claims, remote deployment, and B4 remain
-forbidden.
+**Active closure boundary:** implement only reconnect index-history recovery for the exact public
+feed: at most one validated historical BTC index seed per new WebSocket connection epoch, followed
+by a strictly later same-epoch WebSocket index continuation before a cut can become ready. Preserve
+the disconnected Window as `UNKNOWN`, all Decision identities, the Policy, root, feed universe,
+component route semantics, and fail-closed behavior. Continuous polling, Decision backfill, generic
+replay, durable history infrastructure, private facts, orders, v1 reuse, threshold or sizing
+changes, Policy qualification, Edge claims, remote deployment, and B4 remain forbidden.
