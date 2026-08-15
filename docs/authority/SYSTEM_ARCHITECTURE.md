@@ -87,10 +87,11 @@ the cache also waits until the source watermark reaches the Window start instead
 retained pre-Window cut; that wait remains bounded by the existing source timeout and Window input
 grace. Disconnect or sequence loss is an exact Gap. A bounded REST book snapshot may seed recovery,
 but the instrument cannot rejoin the incremental cut until a later matching WebSocket continuation
-or new full snapshot proves continuity. HTTP remains the clock, Session metadata, initial
-index-history recovery seed, official settlement, and explicit resynchronization path; it is not
-the continuous Runtime market-cut path. The cache is transient and creates no new durable record
-owner.
+or new full snapshot proves continuity. HTTP remains the clock, Session metadata, the initial
+index-history seed, at most one validated recovery seed per new connection epoch, official
+settlement, and explicit resynchronization path; it is not the continuous Runtime market-cut path.
+A recovered history seed remains transient and cannot make a cut ready without a strictly later
+same-epoch WebSocket index continuation. The cache creates no new durable record owner.
 
 ## Record boundaries
 

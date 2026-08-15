@@ -54,6 +54,10 @@ class RestBookSnapshot:
 
 
 RestBookResync = Callable[[str], RestBookSnapshot]
+RestIndexHistoryRecovery = Callable[
+    [],
+    tuple[tuple[tuple[int, Decimal], ...], int],
+]
 PublicCallAudit = Callable[[str, Mapping[str, object], float], None]
 
 
@@ -217,6 +221,10 @@ class BtcWebSocketCache:
         self._history: list[tuple[int, Decimal]] = []
         self._history_cadence_ms = 300_000
         self._history_received_timestamp_ms: int | None = None
+        self._reconnect_history_required_epoch = 0
+        self._reconnect_history_attempted_epoch = 0
+        self._reconnect_history_seeded_epoch = 0
+        self._reconnect_history_source_max_ms: int | None = None
         self._pending_gaps: deque[str] = deque(maxlen=MAX_STREAM_CHANNELS)
 
     @property
@@ -251,26 +259,65 @@ class BtcWebSocketCache:
         *,
         received_timestamp_ms: int,
     ) -> None:
-        _boundary(received_timestamp_ms, "history receipt timestamp")
-        points = list(history)
-        if len(points) < 3:
-            raise ValueError("WebSocket history bootstrap requires at least three points")
-        previous = -1
-        for timestamp_ms, price in points:
-            _boundary(timestamp_ms, "history timestamp")
-            if timestamp_ms <= previous or not price.is_finite() or price <= 0:
-                raise ValueError("WebSocket history bootstrap must be chronological and positive")
-            if timestamp_ms > received_timestamp_ms:
-                raise ValueError("WebSocket history bootstrap follows its receipt boundary")
-            previous = timestamp_ms
-        intervals = [current[0] - prior[0] for prior, current in pairwise(points)]
-        cadence = Counter(intervals).most_common(1)[0][0]
-        if cadence <= 0 or cadence > 15 * 60_000:
-            raise ValueError("WebSocket history bootstrap cadence is invalid")
+        points, cadence = _validated_index_history_seed(
+            history,
+            received_timestamp_ms=received_timestamp_ms,
+        )
         with self._condition:
             self._history = points
             self._history_cadence_ms = cadence
             self._history_received_timestamp_ms = received_timestamp_ms
+            self._condition.notify_all()
+
+    def seed_reconnect_index_history(
+        self,
+        history: Sequence[tuple[int, Decimal]],
+        *,
+        received_timestamp_ms: int,
+        connection_epoch: int,
+    ) -> None:
+        _boundary(received_timestamp_ms, "reconnect history receipt timestamp")
+        with self._condition:
+            self._require_reconnect_history_epoch(connection_epoch)
+            if self._reconnect_history_attempted_epoch == connection_epoch:
+                raise ForwardObservationGap(
+                    f"REST_INDEX_HISTORY_RECOVERY_ALREADY_ATTEMPTED:epoch={connection_epoch}"
+                )
+            self._reconnect_history_attempted_epoch = connection_epoch
+            points, cadence = _validated_index_history_seed(
+                history,
+                received_timestamp_ms=received_timestamp_ms,
+            )
+            intervals = [current[0] - prior[0] for prior, current in pairwise(points)]
+            if any(interval > cadence * 2 for interval in intervals):
+                raise ValueError("reconnect index history contains a material cadence gap")
+            if received_timestamp_ms - points[-1][0] > cadence * 2:
+                raise ValueError("reconnect index history is late at its receipt boundary")
+            self._history = points
+            self._history_cadence_ms = cadence
+            self._history_received_timestamp_ms = received_timestamp_ms
+            self._reconnect_history_seeded_epoch = connection_epoch
+            self._reconnect_history_source_max_ms = points[-1][0]
+            self._condition.notify_all()
+
+    def mark_reconnect_index_history_failed(
+        self,
+        *,
+        connection_epoch: int,
+        reason: str,
+    ) -> None:
+        if not reason or reason != reason.strip():
+            raise ValueError("reconnect index history failure reason must be non-empty text")
+        with self._condition:
+            self._require_reconnect_history_epoch(connection_epoch)
+            if self._reconnect_history_seeded_epoch == connection_epoch:
+                raise ForwardObservationGap(
+                    f"REST_INDEX_HISTORY_RECOVERY_ALREADY_SEEDED:epoch={connection_epoch}"
+                )
+            self._reconnect_history_attempted_epoch = connection_epoch
+            self._pending_gaps.append(
+                f"REST_INDEX_HISTORY_RECOVERY_FAILED:epoch={connection_epoch}:reason={reason}"
+            )
             self._condition.notify_all()
 
     def latest_index_price(self) -> Decimal:
@@ -293,10 +340,23 @@ class BtcWebSocketCache:
             self._index_source_timestamp_ms = None
             self._index_received_timestamp_ms = None
             self._index_epoch = 0
+            self._reconnect_history_required_epoch = self._epoch if self._epoch > 1 else 0
+            self._reconnect_history_source_max_ms = None
             for name in self._desired_names:
                 self._states[name] = _InstrumentState()
             self._condition.notify_all()
             return self._epoch
+
+    def _require_reconnect_history_epoch(self, connection_epoch: int) -> None:
+        if (
+            not self._connected
+            or connection_epoch != self._epoch
+            or self._reconnect_history_required_epoch != connection_epoch
+        ):
+            raise ForwardObservationGap(
+                "REST_INDEX_HISTORY_RECOVERY_EPOCH_INVALID:"
+                f"current={self._epoch}:requested={connection_epoch}"
+            )
 
     def disconnect(self, *, reason: str) -> None:
         if not reason or reason != reason.strip():
@@ -461,6 +521,17 @@ class BtcWebSocketCache:
         price = _positive_decimal(payload.get("price"), "index price")
         if not self._history:
             raise ForwardObservationGap("WEBSOCKET_INDEX_HISTORY_NOT_BOOTSTRAPPED")
+        if self._reconnect_history_required_epoch == self._epoch:
+            if self._reconnect_history_seeded_epoch != self._epoch:
+                return
+            seed_source_max_ms = self._reconnect_history_source_max_ms
+            seed_received_ms = self._history_received_timestamp_ms
+            assert seed_source_max_ms is not None and seed_received_ms is not None
+            if (
+                source_timestamp_ms <= seed_source_max_ms
+                or received_timestamp_ms <= seed_received_ms
+            ):
+                return
         self._index_price = price
         self._index_source_timestamp_ms = source_timestamp_ms
         self._index_received_timestamp_ms = received_timestamp_ms
@@ -585,6 +656,13 @@ class BtcWebSocketCache:
             raise _CutNotReady("WEBSOCKET_CUT_UNIVERSE_NOT_SUBSCRIBED")
         if not self._connected:
             raise _CutNotReady("WEBSOCKET_CUT_DISCONNECTED")
+        if self._reconnect_history_required_epoch == self._epoch:
+            if self._reconnect_history_seeded_epoch != self._epoch:
+                raise _CutNotReady(f"WEBSOCKET_RECONNECT_INDEX_HISTORY_PENDING:epoch={self._epoch}")
+            if self._index_epoch != self._epoch:
+                raise _CutNotReady(
+                    f"WEBSOCKET_RECONNECT_INDEX_CONTINUATION_PENDING:epoch={self._epoch}"
+                )
         if (
             self._index_price is None
             or self._index_source_timestamp_ms is None
@@ -702,6 +780,7 @@ class DeribitPublicWebSocketFeed:
         *,
         cache: BtcWebSocketCache,
         received_timestamp_ms: Callable[[], int],
+        rest_index_history_recovery: RestIndexHistoryRecovery,
         rest_resync: RestBookResync,
         timeout_seconds: float = 10.0,
         url: str = DEFAULT_DERIBIT_WEBSOCKET_API,
@@ -714,6 +793,7 @@ class DeribitPublicWebSocketFeed:
             raise ValueError("WebSocket timeout must be finite and positive")
         self.cache = cache
         self.received_timestamp_ms = received_timestamp_ms
+        self.rest_index_history_recovery = rest_index_history_recovery
         self.rest_resync = rest_resync
         self.timeout_seconds = timeout_seconds
         self.url = url
@@ -776,7 +856,20 @@ class DeribitPublicWebSocketFeed:
                 connection = self.connection_factory(self.url, self.timeout_seconds)
                 self._connection = connection
                 self._subscribed_channels = set()
-                self.cache.begin_connection()
+                connection_epoch = self.cache.begin_connection()
+                if connection_epoch > 1:
+                    try:
+                        history, received_timestamp_ms = self.rest_index_history_recovery()
+                        self.cache.seed_reconnect_index_history(
+                            history,
+                            received_timestamp_ms=received_timestamp_ms,
+                            connection_epoch=connection_epoch,
+                        )
+                    except Exception as exc:
+                        self.cache.mark_reconnect_index_history_failed(
+                            connection_epoch=connection_epoch,
+                            reason=f"{type(exc).__name__}:{exc}",
+                        )
                 self._send(connection, "public/set_heartbeat", {"interval": 10})
                 self._sync_channels(connection)
                 while not self._stop.is_set():
@@ -937,6 +1030,35 @@ def _rest_levels(value: object, field_name: str) -> dict[Decimal, Decimal]:
         if quantity > 0:
             levels[price] = quantity
     return levels
+
+
+def _validated_index_history_seed(
+    history: Sequence[tuple[int, Decimal]],
+    *,
+    received_timestamp_ms: int,
+) -> tuple[list[tuple[int, Decimal]], int]:
+    _boundary(received_timestamp_ms, "history receipt timestamp")
+    points = list(history)
+    if len(points) < 3:
+        raise ValueError("WebSocket history bootstrap requires at least three points")
+    previous = -1
+    for timestamp_ms, price in points:
+        _boundary(timestamp_ms, "history timestamp")
+        if (
+            timestamp_ms <= previous
+            or not isinstance(price, Decimal)
+            or not price.is_finite()
+            or price <= 0
+        ):
+            raise ValueError("WebSocket history bootstrap must be chronological and positive")
+        if timestamp_ms > received_timestamp_ms:
+            raise ValueError("WebSocket history bootstrap follows its receipt boundary")
+        previous = timestamp_ms
+    intervals = [current[0] - prior[0] for prior, current in pairwise(points)]
+    cadence = Counter(intervals).most_common(1)[0][0]
+    if cadence <= 0 or cadence > 15 * 60_000:
+        raise ValueError("WebSocket history bootstrap cadence is invalid")
+    return points, cadence
 
 
 def _instrument_name(value: str) -> str:

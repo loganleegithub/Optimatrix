@@ -295,6 +295,7 @@ class DeribitPublicRuntimeSource:
         feed = DeribitPublicWebSocketFeed(
             cache=cache,
             received_timestamp_ms=self._received_timestamp_ms,
+            rest_index_history_recovery=self._rest_index_history_recovery,
             rest_resync=self._rest_resync,
             timeout_seconds=self.timeout_seconds,
             audit_callback=self._audit_stream_call,
@@ -308,6 +309,15 @@ class DeribitPublicRuntimeSource:
 
     def _received_timestamp_ms(self) -> int:
         return _datetime_to_ceil_ms(self.client.clock.read().latest_at)
+
+    def _rest_index_history_recovery(
+        self,
+    ) -> tuple[tuple[tuple[int, Decimal], ...], int]:
+        history = fetch_btc_index_history(
+            self.client,
+            known_at=self.clock_reading().latest_at,
+        )
+        return history, self._received_timestamp_ms()
 
     def _rest_resync(self, instrument_name: str) -> RestBookSnapshot:
         response = self.client.call(

@@ -10,7 +10,11 @@ from typing import cast
 import pytest
 
 from optimatrix.decision import MarketObservation, schedule_decision_windows
-from optimatrix.deribit_snapshot import _instrument_metadata, evaluate_live_btc_snapshot
+from optimatrix.deribit_snapshot import (
+    DeribitSourceError,
+    _instrument_metadata,
+    evaluate_live_btc_snapshot,
+)
 from optimatrix.deribit_websocket import (
     DEFAULT_DERIBIT_WEBSOCKET_API,
     BtcWebSocketCache,
@@ -161,6 +165,7 @@ def test_sequence_gap_requires_one_rest_seed_and_later_websocket_continuation() 
     feed = DeribitPublicWebSocketFeed(
         cache=cache,
         received_timestamp_ms=lambda: boundary_ms + 550,
+        rest_index_history_recovery=lambda: pytest.fail("index history recovery is not expected"),
         rest_resync=rest_resync,
     )
     frame = _subscription_frame(
@@ -218,14 +223,68 @@ def test_direct_sequence_mismatch_exposes_expected_and_actual_change_ids() -> No
     assert raised.value.actual_previous_change_id == 7
 
 
-def test_disconnect_is_a_gap_and_reconnect_requires_fresh_full_snapshots(policy) -> None:
+def test_reconnect_requires_history_seed_and_later_same_epoch_index(policy) -> None:
     cache, metadata, boundary_ms = _ready_cache()
     cache.disconnect(reason="EOF")
-    assert cache.begin_connection() == 2
+    epoch = cache.begin_connection()
+    assert epoch == 2
     _populate_connection(cache, boundary_ms=boundary_ms + 1_000, change_id_base=3_000)
 
     with pytest.raises(ForwardObservationGap, match="WEBSOCKET_DISCONNECTED:epoch=1"):
         _cut(cache, boundary_ms + 2_000)
+    with pytest.raises(
+        ForwardObservationGap,
+        match="WEBSOCKET_RECONNECT_INDEX_HISTORY_PENDING:epoch=2",
+    ):
+        _cut(cache, boundary_ms + 2_000)
+
+    recovery_history = _history(boundary_ms + 1_000)
+    recovery_received_ms = boundary_ms + 1_400
+    cache.seed_reconnect_index_history(
+        recovery_history,
+        received_timestamp_ms=recovery_received_ms,
+        connection_epoch=epoch,
+    )
+
+    with pytest.raises(
+        ForwardObservationGap,
+        match="WEBSOCKET_RECONNECT_INDEX_CONTINUATION_PENDING:epoch=2",
+    ):
+        _cut(cache, boundary_ms + 2_000)
+    with pytest.raises(
+        ForwardObservationGap,
+        match="REST_INDEX_HISTORY_RECOVERY_ALREADY_ATTEMPTED:epoch=2",
+    ):
+        cache.seed_reconnect_index_history(
+            recovery_history,
+            received_timestamp_ms=recovery_received_ms,
+            connection_epoch=epoch,
+        )
+
+    cache.accept_subscription(
+        channel="deribit_price_index.btc_usd",
+        data={
+            "index_name": "btc_usd",
+            "price": "100000",
+            "timestamp": recovery_history[-1][0],
+        },
+        received_timestamp_ms=recovery_received_ms + 10,
+    )
+    with pytest.raises(
+        ForwardObservationGap,
+        match="WEBSOCKET_RECONNECT_INDEX_CONTINUATION_PENDING:epoch=2",
+    ):
+        _cut(cache, boundary_ms + 2_000)
+
+    cache.accept_subscription(
+        channel="deribit_price_index.btc_usd",
+        data={
+            "index_name": "btc_usd",
+            "price": "100010",
+            "timestamp": boundary_ms + 1_100,
+        },
+        received_timestamp_ms=boundary_ms + 1_500,
+    )
 
     recovered = _cut(cache, boundary_ms + 2_000)
     assert recovered.continuity_epoch == 2
@@ -239,6 +298,95 @@ def test_disconnect_is_a_gap_and_reconnect_requires_fresh_full_snapshots(policy)
         market_data_source=MarketDataSource.DERIBIT_PUBLIC_WEBSOCKET_INCREMENTAL_V1,
     )
     assert {quote.continuity_epoch for quote in evaluation.quotes} == {2}
+
+
+def test_transport_attempts_reconnect_history_once_and_preserves_failure_gap() -> None:
+    boundary_ms = int(NOW.timestamp() * 1_000)
+    cache = BtcWebSocketCache()
+    cache.seed_index_history(_history(boundary_ms), received_timestamp_ms=boundary_ms)
+    cache.configure_instruments(NAMES)
+    first = _DisconnectingConnection()
+    second = _IdleConnection()
+    opened: list[WebSocketConnection] = []
+    recovery_calls: list[None] = []
+
+    def factory(_url: str, _timeout_seconds: float) -> WebSocketConnection:
+        connection: WebSocketConnection = first if not opened else second
+        opened.append(connection)
+        return connection
+
+    def recovery() -> tuple[tuple[tuple[int, Decimal], ...], int]:
+        recovery_calls.append(None)
+        raise DeribitSourceError("history unavailable")
+
+    feed = DeribitPublicWebSocketFeed(
+        cache=cache,
+        received_timestamp_ms=lambda: boundary_ms + 1_000,
+        rest_index_history_recovery=recovery,
+        rest_resync=lambda _name: pytest.fail("book REST resync is not expected"),
+        connection_factory=factory,
+    )
+    feed.start()
+    assert second.sent_two.wait(timeout=3)
+    assert recovery_calls == [None]
+    assert opened == [first, second]
+    assert cache.continuity_epoch == 2
+    feed.close()
+
+    with pytest.raises(ForwardObservationGap, match="WEBSOCKET_DISCONNECTED:epoch=1"):
+        _cut(cache, boundary_ms + 2_000)
+    with pytest.raises(
+        ForwardObservationGap,
+        match=(
+            "REST_INDEX_HISTORY_RECOVERY_FAILED:epoch=2:"
+            "reason=DeribitSourceError:history unavailable"
+        ),
+    ):
+        _cut(cache, boundary_ms + 2_000)
+
+
+def test_reconnect_history_rejects_future_discontinuous_and_late_seeds() -> None:
+    boundary_ms = int(NOW.timestamp() * 1_000)
+    valid = _history(boundary_ms + 1_000)
+    received_ms = boundary_ms + 1_400
+    invalid = (
+        (
+            (*valid, (received_ms + 1, Decimal("100000"))),
+            "history bootstrap follows its receipt boundary",
+        ),
+        (
+            (*valid[:-5], valid[-1]),
+            "reconnect index history contains a material cadence gap",
+        ),
+        (
+            _history(boundary_ms - 20 * 60_000),
+            "reconnect index history is late at its receipt boundary",
+        ),
+    )
+
+    for history, reason in invalid:
+        cache = BtcWebSocketCache()
+        cache.seed_index_history(_history(boundary_ms), received_timestamp_ms=boundary_ms)
+        cache.configure_instruments(NAMES)
+        cache.begin_connection()
+        cache.disconnect(reason="EOF")
+        epoch = cache.begin_connection()
+
+        with pytest.raises(ValueError, match=reason):
+            cache.seed_reconnect_index_history(
+                history,
+                received_timestamp_ms=received_ms,
+                connection_epoch=epoch,
+            )
+        with pytest.raises(
+            ForwardObservationGap,
+            match=f"REST_INDEX_HISTORY_RECOVERY_ALREADY_ATTEMPTED:epoch={epoch}",
+        ):
+            cache.seed_reconnect_index_history(
+                valid,
+                received_timestamp_ms=received_ms,
+                connection_epoch=epoch,
+            )
 
 
 def test_incomplete_and_stale_stream_cuts_fail_closed() -> None:
@@ -358,6 +506,7 @@ def test_transport_subscribes_only_public_aggregated_btc_channels() -> None:
     feed = DeribitPublicWebSocketFeed(
         cache=cache,
         received_timestamp_ms=lambda: boundary_ms,
+        rest_index_history_recovery=lambda: pytest.fail("index history recovery is not expected"),
         rest_resync=lambda _name: pytest.fail("REST resync is not expected"),
         connection_factory=factory,
         audit_callback=lambda method, _params, _timeout: audit.append(method),
@@ -592,6 +741,12 @@ class _NoopConnection:
 
     def close(self) -> None:
         pass
+
+
+class _DisconnectingConnection(_NoopConnection):
+    def recv(self, timeout: float | None = None) -> str | bytes:
+        del timeout
+        raise OSError("EOF")
 
 
 class _IdleConnection:

@@ -43,10 +43,12 @@ it never consumes a retained pre-Window state as that Window's one attempted obs
 A disconnect, missing initial snapshot, sequence mismatch, stale effective index/instrument member,
 incomplete ticker/book pair, or source/receive span outside Policy invalidates the cut and yields
 `UNKNOWN` or a lifecycle Gap. REST may supply Session instrument metadata, the initial rolling
-index-history recovery seed, official settlement, and one bounded affected-book resynchronization.
-A REST resync seed is not itself proof that the incremental chain resumed: that instrument rejoins
-only after a matching later WebSocket change or a new full WebSocket snapshot. Authenticated `raw`
-channels, private facts, and cross-connection continuity are absent at B3.
+index-history seed, at most one validated index-history recovery seed per new connection epoch,
+official settlement, and one bounded affected-book resynchronization. A reconnect history seed
+cannot make a cut ready until a strictly later BTC index notification and every required book and
+ticker belong to that same epoch. A REST book-resync seed likewise requires a matching later
+WebSocket change or a new full WebSocket snapshot. Authenticated `raw` channels, private facts, and
+inferred cross-connection continuity are absent at B3.
 
 `DecisionWindowId` is the sole product and learning denominator:
 
