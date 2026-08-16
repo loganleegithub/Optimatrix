@@ -70,15 +70,24 @@ The preceding V2 repository, runtime, Policies, schemas, Case root, and historic
 external assets. This product may not read, write, translate, migrate, relabel, recover, import, or
 count them.
 
-`AI Lab` is the product name for offline learning. It must first adjudicate an ended Session over
-the complete aligned DecisionWindow denominator. A zero-opportunity conclusion requires complete
-causal observations, continuous actual future paths, official settlement, and an exhaustive frozen
-control definition; any missing required fact remains `UNKNOWN`. When the control finds an
-opportunity that Base missed, the Lab diagnoses Base blockers and quantitative threshold margins
-before considering any new rule. AI may act as an offline Challenger only after Base itself found a
-post-Session-confirmed opportunity and aligned DecisionWindows, frozen Base and Challenger
-Policies, chronological or walk-forward evaluation, and actual future paths exist. AI cannot choose
-the denominator, rewrite a frozen Policy after Outcomes, promote itself, or receive account,
+`AI Lab` is the product name for offline learning. It judges the quality of an already frozen
+ex-ante rule after an ended Session; it does not audit whether code merely followed that rule. The
+Lab compares every immutable Base Decision against one content-identified hindsight oracle over the
+complete aligned DecisionWindow denominator. The oracle requires the complete registered-cut IV/RV
+evolution, a continuous actual physical path, official settlement, decision-time full-amount cost,
+and frozen risk-quality conditions. Terminal profit alone is insufficient. Each known Window is
+classified as Base-captured opportunity, correct avoidance, missed opportunity, or over-risk
+selection; any missing required fact makes the Window and whole-Session rule-quality verdict
+`UNKNOWN`.
+
+Only a complete Session with zero misses and zero over-risk selections may say the rule was well
+calibrated for that Session. When Base missed, the Lab diagnoses exact blockers and negative signed
+threshold margins. When Base selected hindsight-ineligible risk, it diagnoses the IV/RV, path, or
+settlement failure. AI may act as an offline Challenger only after Base itself captured a
+hindsight-confirmed opportunity without Session evidence gaps or rule-quality errors, and aligned
+DecisionWindows, frozen Base and Challenger Policies, chronological or walk-forward evaluation,
+and actual future paths exist. A single Session cannot qualify Policy or establish Edge. AI cannot
+choose the denominator, rewrite a frozen Policy after Outcomes, promote itself, or receive account,
 capital, order, or execution permission. Promotion is a human decision under a separately
 authorized task.
 

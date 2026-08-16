@@ -1,6 +1,6 @@
 # Case, Position, and Outcome Contract
 
-**Status:** ACTIVE BUSINESS CONTRACT — B3 PUBLIC SHADOW SOURCE CONFORMANT; D1 AI LAB SESSION REVIEW
+**Status:** ACTIVE BUSINESS CONTRACT — B3 PUBLIC SHADOW SOURCE CONFORMANT; D1 AI LAB POLICY QUALITY
 
 This contract owns the chain after each Window Decision: TradeCase, Position, monitoring,
 management, trigger, exit, terminality, Outcome, recovery, and offline learning. DecisionRecord and
@@ -204,24 +204,38 @@ economically evaluable after a Gap while becoming ineligible for continuous-path
 is:
 
 ```text
-complete Window/Decision/Outcome evidence?
-→ frozen UNFILTERED_CONDOR post-Session opportunity adjudication
-→ zero opportunities: NO_OPPORTUNITY and stop
-→ opportunity exists but Base missed: quantitative blocker attribution
-→ Base found the same confirmed opportunity: Challenger comparison may become eligible
+complete Window/Decision/Outcome and IV/RV curve evidence?
+→ fixed hindsight short-vol Oracle over every frozen decision-time four-leg control
+→ Base action versus Oracle: captured / correct avoid / missed / over-risk
+→ any missing fact: UNKNOWN and stop
+→ complete zero opportunity plus zero Base risk: correct no-opportunity and stop
+→ miss or over-risk: quantitative diagnosis, no Challenger
+→ Base captured opportunity with zero miss and zero over-risk: Challenger may become eligible
 ```
 
-`UNFILTERED_CONDOR` uses only decision-time observations to establish the ex-ante structure and
-component-book price. It keeps DataHealth, legal four-leg geometry, full-amount pricing, standard
-Combo cost, USD contractual-payoff and reference-loss controls, while removing only the named
-strategy filters. A matching continuous future path and official delivery may then classify its
-counterfactual fee-after settlement result and short-strike breaches. This is a post-Session public
-Shadow control, not a fill, realized PnL, executable route, or proof that hindsight was available at
-the Decision.
+The hindsight Oracle uses only decision-time observations to establish legal four-leg geometry,
+full-amount component-book price, standard Combo cost, USD contractual-payoff cap, and reference-
+loss controls. After the Session, a structure is an opportunity only when entry implied-variance
+proxy strictly exceeds the conservative hindsight realized-variance proxy, the known continuous
+physical path never touches either short strike, and official-settlement fee-after economics are
+positive. Hindsight realized variance is the greater of complete registered-cut future log-return
+variance and the subsequent trailing matched-horizon RV-proxy curve maximum. Terminal profit,
+short-strike survival, or IV-over-RV alone is insufficient.
 
-The Lab stores content-sealed Session reviews and optional structured hypotheses in a separate
-append-only research root. A bounded Codex CLI invocation may explain only supplied fact identities;
-it cannot replace the deterministic verdict. Accumulated memory means recurring evidence,
+The Oracle removes named strategy filters only to judge whether their combined rejection was good;
+it never changes the immutable Base Decision. A Base Candidate is captured only when its exact
+selected structure passes the Oracle. A non-Candidate with at least one Oracle opportunity is a
+miss. A Base Candidate whose selected structure fails IV/RV, path, or settlement quality is
+over-risk even if another structure would have succeeded. This is post-Session public Shadow
+Policy-quality evidence, not a fill, realized PnL, executable route, or proof that hindsight was
+available at the Decision.
+
+The Lab stores content-sealed Policy-quality reviews and optional structured hypotheses in a
+separate append-only research root. A bounded Codex CLI invocation may explain only supplied fact
+identities; it cannot replace the deterministic verdict. The deterministic trader report is written
+before optional Codex analysis, so analysis failure cannot suppress the Review. Retired terminal-
+positive Session reviews remain tamper-evident but are invalid for Policy quality and are excluded
+from verdict memory and Challenger eligibility. Accumulated memory means recurring evidence,
 refutations, and testable hypotheses across Sessions, not self-modifying Policy or autonomous code.
 
 Qualification uses aligned DecisionWindows and actual future paths. At minimum it compares frozen

@@ -141,7 +141,11 @@ or dual-write protocol.
 
 `AI Lab` is part of the same Python modular monolith but owns a separate read-only/offline path. It
 may read a caller-selected completed Session from `ObservationLedger`, derive content-sealed
-Session reviews, and write only to its distinct Lab root. Its deterministic adjudicator owns the
-verdict; an optional one-shot Codex CLI process receives a bounded fact bundle and can append only a
-schema-validated explanation. The Lab never writes Ledger/Journal facts and has no runtime,
-market-call, account, order, Policy-mutation, deployment, or promotion path.
+Policy-quality reviews, and write only to its distinct Lab root. Its deterministic adjudicator
+compares immutable Base actions against the complete post-Session IV/RV, physical-path, cost, and
+settlement oracle; terminal payoff is not a verdict. The deterministic trader report is projected
+before an optional one-shot Codex CLI process receives a bounded fact bundle. Codex may append only
+a separate schema-validated explanation and cannot block or alter the Review. Retired terminal-
+positive reviews remain in a separate verified legacy chain and are excluded from current memory.
+The Lab never writes Ledger/Journal facts and has no runtime, market-call, account, order, Policy-
+mutation, deployment, or promotion path.

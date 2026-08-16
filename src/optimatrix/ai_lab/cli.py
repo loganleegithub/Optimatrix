@@ -25,7 +25,7 @@ from optimatrix.ai_lab.models import (
     seal_document,
 )
 from optimatrix.ai_lab.promotion import record_promotion_decision
-from optimatrix.ai_lab.report import write_session_report
+from optimatrix.ai_lab.report import write_analysis_report, write_session_report
 from optimatrix.ai_lab.session_review import SessionVerdict, review_ledger_session
 from optimatrix.ai_lab.store import AuditStore
 from optimatrix.policy import DEFAULT_BTC_SHORT_VOL_POLICY_PATH, load_btc_short_vol_policy
@@ -193,29 +193,40 @@ def main(argv: list[str] | None = None) -> int:
                 review,
                 recorded_at=recorded_at,
             )
-            analysis = None
-            codex_status = "NOT_REQUESTED"
-            if args.with_codex and review.verdict not in {
-                SessionVerdict.UNKNOWN,
-                SessionVerdict.NO_OPPORTUNITY,
-            }:
-                analysis = CodexCliAnalyzer(codex_binary=args.codex_binary).analyze(
-                    review=review,
-                    memory=prior_memory,
-                )
-                _analysis_event, analysis_appended = memory.append_analysis(analysis)
-                codex_status = "APPENDED" if analysis_appended else "ALREADY_RECORDED"
-            elif args.with_codex:
-                codex_status = "SKIPPED_BY_SESSION_FIRST_WORKFLOW"
             json_path, markdown_path = write_session_report(
                 review=review,
                 memory=prior_memory,
-                analysis=analysis,
                 root=args.lab_root,
             )
+            analysis = None
+            codex_status = "NOT_REQUESTED"
+            codex_error = None
+            analysis_json_path = None
+            analysis_markdown_path = None
+            if args.with_codex and review.verdict not in {
+                SessionVerdict.UNKNOWN,
+                SessionVerdict.NO_OPPORTUNITY_CORRECTLY_AVOIDED,
+            }:
+                try:
+                    analysis = CodexCliAnalyzer(codex_binary=args.codex_binary).analyze(
+                        review=review,
+                        memory=prior_memory,
+                    )
+                    _analysis_event, analysis_appended = memory.append_analysis(analysis)
+                    codex_status = "APPENDED" if analysis_appended else "ALREADY_RECORDED"
+                    analysis_json_path, analysis_markdown_path = write_analysis_report(
+                        review=review,
+                        analysis=analysis,
+                        root=args.lab_root,
+                    )
+                except ValidationError as exc:
+                    codex_status = "FAILED_OPTIONAL_ANALYSIS"
+                    codex_error = str(exc)[:500]
+            elif args.with_codex:
+                codex_status = "SKIPPED_BY_POLICY_QUALITY_WORKFLOW"
             _print(
                 {
-                    "status": "AI_LAB_SESSION_REVIEW_RECORDED",
+                    "status": "AI_LAB_POLICY_QUALITY_REVIEW_RECORDED",
                     "review_id": review.identity,
                     "session_id": review.session_id,
                     "verdict": review.verdict.value,
@@ -224,8 +235,15 @@ def main(argv: list[str] | None = None) -> int:
                     "review_appended": review_appended,
                     "review_event_id": review_event["event_id"],
                     "codex_status": codex_status,
+                    "codex_error": codex_error,
                     "json_report": str(json_path),
                     "markdown_report": str(markdown_path),
+                    "analysis_json_report": (
+                        str(analysis_json_path) if analysis_json_path is not None else None
+                    ),
+                    "analysis_markdown_report": (
+                        str(analysis_markdown_path) if analysis_markdown_path is not None else None
+                    ),
                 }
             )
             return 0

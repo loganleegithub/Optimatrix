@@ -8,10 +8,17 @@ from pathlib import Path
 
 import pytest
 
-from optimatrix.ai_lab.canonical import ValidationError, content_id, utc_text
+from optimatrix.ai_lab.canonical import ValidationError, content_id, seal_object, utc_text
 from optimatrix.ai_lab.codex_analysis import CodexCliAnalyzer
 from optimatrix.ai_lab.evaluation import ExperimentRunner
-from optimatrix.ai_lab.memory import AiLabMemoryStore, MemoryDigest
+from optimatrix.ai_lab.memory import (
+    LEGACY_MEMORY_REVIEW_NAMESPACE,
+    LEGACY_MEMORY_REVIEW_SCHEMA,
+    LEGACY_SESSION_REVIEW_NAMESPACE,
+    LEGACY_SESSION_REVIEW_SCHEMA,
+    AiLabMemoryStore,
+    MemoryDigest,
+)
 from optimatrix.ai_lab.models import (
     EXPORT_SCHEMA,
     PLAN_SCHEMA,
@@ -38,19 +45,61 @@ def test_memory_is_append_once_and_tamper_evident(policy, tmp_path) -> None:
     assert first == second
     assert store.verify() == {
         "status": "VALID_AI_LAB_MEMORY",
-        "session_review_count": 1,
+        "policy_quality_review_count": 1,
+        "legacy_session_review_count": 0,
+        "legacy_policy_quality_status": "INVALID_FOR_POLICY_QUALITY",
         "codex_analysis_count": 0,
+        "legacy_codex_analysis_count": 0,
     }
     digest = store.digest()
     assert digest.prior_review_count == 1
-    assert dict(digest.verdict_counts) == {"MISSED_OPPORTUNITY": 1}
+    assert digest.invalid_legacy_review_count == 0
+    assert dict(digest.verdict_counts) == {"RULE_TOO_CONSERVATIVE": 1}
     path = store.reviews.path
     path.write_text(
-        path.read_text(encoding="utf-8").replace("MISSED_OPPORTUNITY", "BASE_FOUND_OPPORTUNITY", 1),
+        path.read_text(encoding="utf-8").replace("RULE_TOO_CONSERVATIVE", "RULE_TOO_AGGRESSIVE", 1),
         encoding="utf-8",
     )
     with pytest.raises(ValidationError, match="content identity mismatch"):
         store.verify()
+
+
+def test_legacy_terminal_positive_review_is_verified_but_excluded_from_policy_memory(
+    tmp_path,
+) -> None:
+    store = AiLabMemoryStore(tmp_path / "memory")
+    session_id = "2026-08-15T08:00:00Z"
+    legacy_review = seal_object(
+        {
+            "schema_version": LEGACY_SESSION_REVIEW_SCHEMA,
+            "session_id": session_id,
+            "verdict": "MISSED_OPPORTUNITY",
+            "definition": "TERMINAL_POSITIVE_ONLY",
+        },
+        id_field="review_id",
+        namespace=LEGACY_SESSION_REVIEW_NAMESPACE,
+    )
+    payload = seal_object(
+        {
+            "schema_version": LEGACY_MEMORY_REVIEW_SCHEMA,
+            "session_id": session_id,
+            "recorded_at": "2026-08-16T00:00:00Z",
+            "review": legacy_review,
+        },
+        id_field="memory_review_id",
+        namespace=LEGACY_MEMORY_REVIEW_NAMESPACE,
+    )
+    store.legacy_reviews.append(payload, identity_field="memory_review_id")
+
+    verified = store.verify()
+    digest = store.digest(before_session_id=session_id)
+
+    assert verified["legacy_session_review_count"] == 1
+    assert verified["legacy_policy_quality_status"] == "INVALID_FOR_POLICY_QUALITY"
+    assert digest.invalid_legacy_review_count == 1
+    assert digest.prior_review_count == 0
+    assert dict(digest.verdict_counts) == {}
+    assert legacy_review["review_id"] not in digest.fact_ids
 
 
 def test_actual_challenger_experiment_requires_and_binds_eligible_reviews(policy, tmp_path) -> None:
@@ -138,7 +187,7 @@ def test_codex_is_read_only_ephemeral_schema_bound_and_fact_cited(policy) -> Non
     assert ("--sandbox", "read-only") == _pair(runner.command, "--sandbox")
     assert "--output-schema" in runner.command
     assert "--output-last-message" in runner.command
-    assert "MISSED_OPPORTUNITY" in runner.prompt
+    assert "RULE_TOO_CONSERVATIVE" in runner.prompt
     assert len(runner.prompt.encode("utf-8")) < 300_000
     prompt = json.loads(runner.prompt)
     assert prompt["session_review"]["omitted_opportunity_count"] >= 0
@@ -189,7 +238,9 @@ def test_no_opportunity_never_enters_codex(policy) -> None:
     session_id, records, outcomes = _population(
         policy,
         implied_variance=Decimal("0.0010"),
-        delivery_price=Decimal("90000"),
+        realized_variance=Decimal("0.0016"),
+        delivery_price=Decimal("100000"),
+        path_mode="SAFE_ALL",
     )
     from optimatrix.ai_lab.session_review import review_session
 
@@ -233,8 +284,10 @@ def _missed_review(policy) -> SessionReview:
 
     session_id, records, outcomes = _population(
         policy,
-        implied_variance=Decimal("0.0010"),
+        implied_variance=Decimal("0.0011"),
+        realized_variance=Decimal("0.0010"),
         delivery_price=Decimal("100000"),
+        path_mode="SAFE_ALL",
     )
     review = review_session(
         session_id=session_id,
@@ -242,7 +295,7 @@ def _missed_review(policy) -> SessionReview:
         records=records,
         outcomes=outcomes,
     )
-    assert review.verdict is SessionVerdict.MISSED_OPPORTUNITY
+    assert review.verdict is SessionVerdict.RULE_TOO_CONSERVATIVE
     return review
 
 
@@ -252,7 +305,9 @@ def _base_found_review(policy):
     session_id, records, outcomes = _population(
         policy,
         implied_variance=Decimal("0.0024"),
+        realized_variance=Decimal("0.0016"),
         delivery_price=Decimal("100000"),
+        path_mode="SAFE_CANDIDATES_ONLY",
     )
     review = review_session(
         session_id=session_id,
@@ -391,7 +446,7 @@ def _actual_experiment_documents(policy, record):
 
 
 def _empty_memory() -> MemoryDigest:
-    return MemoryDigest(0, (), (), (), (), ())
+    return MemoryDigest(0, 0, (), (), (), (), ())
 
 
 def _pair(command: tuple[str, ...], option: str) -> tuple[str, str]:

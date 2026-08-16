@@ -127,9 +127,12 @@ class CodexCliAnalyzer:
         self.runner = runner or _run_command
 
     def analyze(self, *, review: SessionReview, memory: MemoryDigest) -> JsonObject:
-        if review.verdict in {SessionVerdict.UNKNOWN, SessionVerdict.NO_OPPORTUNITY}:
+        if review.verdict in {
+            SessionVerdict.UNKNOWN,
+            SessionVerdict.NO_OPPORTUNITY_CORRECTLY_AVOIDED,
+        }:
             raise ValidationError(
-                "UNKNOWN and NO_OPPORTUNITY stop before Codex analysis by workflow design"
+                "UNKNOWN and correct no-opportunity conclusions stop before Codex analysis"
             )
         bundle = _analysis_bundle(review=review, memory=memory)
         raw_fact_ids = bundle["supplied_fact_ids"]
@@ -236,12 +239,13 @@ def _analysis_prompt(*, review: SessionReview, memory: MemoryDigest) -> str:
 
 def _analysis_bundle(*, review: SessionReview, memory: MemoryDigest) -> JsonObject:
     workflow = (
-        "你是 Optimatrix AI Lab 的离线期权研究员。确定性程序已经给出 Session verdict，"
-        "你无权修改 verdict、Policy、代码或任何交易权限。只引用 supplied_fact_ids 中的"
-        "sha256 事实。若 verdict=MISSED_OPPORTUNITY，只分析为何 Base 漏判、哪些距离可量化、"
-        "下一步如何证伪，不得提出 Challenger 比较。只有 challenger_comparison_eligible=true"
-        "时，challenger_proposal.action 才能是 PROPOSE_CHALLENGER。不要把事后盈利写成事前 Edge，"
-        "不要把 public Shadow 写成订单、成交或真实 PnL。输出必须严格符合 JSON Schema。"
+        "你是 Optimatrix AI Lab 的离线期权研究员。确定性程序已用完整 Session IV/RV 曲线、"
+        "真实路径、费用和结算给出规则质量 verdict；你无权修改 verdict、Policy、代码或交易"
+        "权限。只引用 supplied_fact_ids 中的 sha256 事实。RULE_TOO_CONSERVATIVE 只诊断漏掉"
+        "机会的门槛，RULE_TOO_AGGRESSIVE 只诊断承担了什么事后风险，MIXED_RULE_ERROR 两者都"
+        "诊断；这些 verdict 都不得跳到 Challenger。只有 challenger_comparison_eligible=true"
+        "时 challenger_proposal.action 才能是 PROPOSE_CHALLENGER。不要把单 Session 或 public "
+        "Shadow 写成 Edge、订单、成交或真实 PnL。输出必须严格符合 JSON Schema。"
     )
     representatives = _representative_opportunities(review)
     supplied_fact_ids = [
@@ -266,16 +270,22 @@ def _analysis_bundle(*, review: SessionReview, memory: MemoryDigest) -> JsonObje
             "expected_window_count": review.expected_window_count,
             "recorded_decision_count": review.recorded_decision_count,
             "recorded_outcome_count": review.recorded_outcome_count,
+            "curve_observation_count": review.curve_observation_count,
             "auditable_window_count": review.auditable_window_count,
+            "unknown_window_count": review.unknown_window_count,
             "base_candidate_window_count": review.base_candidate_window_count,
-            "base_confirmed_opportunity_count": review.base_confirmed_opportunity_count,
+            "captured_opportunity_window_count": review.captured_opportunity_window_count,
+            "correct_avoidance_window_count": review.correct_avoidance_window_count,
+            "missed_opportunity_window_count": review.missed_opportunity_window_count,
+            "over_risk_window_count": review.over_risk_window_count,
             "legal_structure_count": review.legal_structure_count,
             "price_evaluable_count": review.price_evaluable_count,
             "control_candidate_count": review.control_candidate_count,
-            "successful_opportunity_count": review.successful_opportunity_count,
+            "hindsight_opportunity_structure_count": (review.hindsight_opportunity_structure_count),
             "evidence_reason_counts": dict(review.evidence_reason_counts),
             "base_blocker_counts": dict(review.base_blocker_counts),
             "gate_attribution_summary": _gate_attribution_summary(review),
+            "iv_rv_curve": [point.as_object() for point in review.curve],
             "windows": [window.as_object() for window in review.windows],
             "representative_opportunities": [
                 opportunity.as_object() for opportunity in representatives
@@ -283,8 +293,8 @@ def _analysis_bundle(*, review: SessionReview, memory: MemoryDigest) -> JsonObje
             "representative_opportunity_limit": MAX_REPRESENTATIVE_OPPORTUNITIES,
             "omitted_opportunity_count": len(review.opportunities) - len(representatives),
             "representative_selection": (
-                "highest post-Session USD results plus closest and furthest failing examples for "
-                "each Base gate; the sealed Review/report retains the complete population"
+                "highest low-path-risk hindsight USD results plus closest and furthest failing "
+                "Base-gate examples; the sealed Review/report retains the complete population"
             ),
             "evidence_boundary": review.evidence_boundary,
         },
@@ -366,8 +376,6 @@ def _validate_model_output(
         raise ValidationError("Codex attempted Challenger work before deterministic eligibility")
     if review.challenger_comparison_eligible and action == "NOT_ELIGIBLE":
         raise ValidationError("Codex contradicted deterministic Challenger eligibility")
-    if review.verdict is SessionVerdict.MISSED_OPPORTUNITY and action != "NOT_ELIGIBLE":
-        raise ValidationError("missed-opportunity analysis cannot skip into Challenger comparison")
     return output
 
 

@@ -1,67 +1,89 @@
 # Optimatrix AI Lab
 
-AI Lab 现在和主程序在同一个 Python 包内：
-`src/optimatrix/ai_lab/`。它不再是一个放在临时或独立项目目录里的 Challenger Lab。
-`Challenger` 只保留为 Base 对照实验中的角色名，不再是 Lab 的产品名。
+AI Lab 和主程序位于同一个 Python 包：`src/optimatrix/ai_lab/`。它不在临时目录，也不再叫
+Challenger Lab；`Challenger` 只表示 Base 对照实验里的一个冻结角色。
 
 默认研究数据和可读报告放在：
 
 ```text
 /Users/logan/Library/Application Support/Optimatrix/ai-lab
-├── session-reviews.jsonl       # Session Review 哈希链
-├── codex-analyses.jsonl        # 结构化 Codex 分析哈希链
+├── policy-quality-reviews.jsonl  # 当前规则质量 Review 哈希链
+├── session-reviews.jsonl         # 旧终值筛选链，只验证，不进入规则质量记忆
+├── codex-analyses.jsonl          # 可选结构化 Codex 分析哈希链
 └── reports/<session>/<review>/
-    ├── session-review.json     # 完整机器事实
-    └── session-review.md       # 期权交易员可读报告
+    ├── policy-quality-review.json
+    ├── policy-quality-review.md
+    └── codex/<analysis>/          # 可选补充；不拥有 verdict
 ```
 
-这个根与生产 ObservationLedger / CaseJournal 必须完全分开。AI Lab 对 Ledger 只有只读输入，
-不会回填 Decision、Outcome、Case 或 Position。
+这个根与生产 ObservationLedger / CaseJournal 完全分开。AI Lab 只读 Ledger，不回填
+Decision、Outcome、Case 或 Position。
 
-## 每个 Session 的固定工作流
+## AI Lab 真正在回答什么
 
-1. 先重建该 Session 的 96 个预登记 DecisionWindow。
-2. 检查每个 Window 是否有匹配的 Base DecisionRecord、健康的 decision-time
-   MarketObservation、已知且连续的 WindowOutcome 路径、以及同到期日官方交割价。
-3. 对每个可审计 Window 枚举当时完整数量可报价的四腿结构。`UNFILTERED_CONDOR` 保留
-   四腿结构、DataHealth、标准 Combo 费用和 USD 风险约束，暂时拿掉明确列出的策略筛选。
-4. 用官方交割价计算 `entry net credit + settlement cashflow`，并用连续路径极值记录两条
-   短腿是否被穿越。
-5. 零个成功结构只有在 96/96 全部可审计时才能写成 `NO_OPPORTUNITY`；否则是 `UNKNOWN`。
-6. 找到成功结构但 Base 没选中同一 Candidate，写成 `MISSED_OPPORTUNITY`，逐项展示 Base
-   blocker、actual、threshold 和 `signed_margin_to_pass`。无法诚实单值量化的门槛明确标记。
-7. 只有 Base 选中的同一四腿结构也被事后确认，且 96/96 完整，才把 Challenger 比较标为
-   `ELIGIBLE`。这仍只是允许另行冻结实验，不代表 Challenger 更好。
+Base 的事前规则和 DecisionRecord 已经冻结。Session 结束后，Lab 不再检查规则有没有照着
+执行，而是利用收盘后才知道的单日 IV 曲线、RV 曲线、真实价格路径、费用和官方结算，判断
+这套事前规则的取舍是否正确：有没有漏掉低风险机会，也有没有承担不值得的风险。
 
-如果原规则给过 Candidate、但固定事后控制没有确认任何正的费用后结算结果，Session
-仍是 `NO_OPPORTUNITY` 并停止；“系统有信号”不会被偷换成“市场确有机会”。
+每个预登记 Window 只有四种已知分类：
 
-## Codex CLI
+| Base 行为 | 事后 Oracle | 分类 |
+|---|---|---|
+| 选中同一合格四腿 | 有机会 | `CAPTURED_OPPORTUNITY` |
+| 没选 | 无机会 | `CORRECT_AVOIDANCE` |
+| 没选 | 有机会 | `MISSED_OPPORTUNITY` |
+| 选中的结构事后不合格 | 无论是否有别的结构 | `OVER_RISK_SELECTION` |
 
-`--with-codex` 只在工作流允许时启动一次非交互 Codex：
+任何必需事实缺失时，该 Window 是 `UNKNOWN`。只要完整 Session 分母里还有一个
+`UNKNOWN`，最终规则质量 verdict 也必须是 `UNKNOWN`。
 
-```text
-codex exec
-  --ignore-user-config
-  --ephemeral
-  --sandbox read-only
-  --output-schema <strict-json-schema>
-  --output-last-message <json-output>
-```
+## 固定事后 Oracle
 
-Codex 收到的是确定性 Session Review、之前密封的 Session 摘要和允许引用的 sha256 事实
-编号。输出中的每个诊断和假设必须引用已提供事实；缺引用、引用不存在、越级提出
-Challenger、改变 verdict 或输出非结构化内容都会失败关闭。`NO_OPPORTUNITY` 与 `UNKNOWN`
-不会调用 Codex。
+Oracle 不以“最终赚钱”单独定义机会。一个四腿结构必须同时满足：
 
-随着 Session 增加，记忆会统计 verdict、反复出现的 Base blocker 和反复出现的可证伪
-假设。这里的“进化”是跨 Session 的证据越来越厚、假设越来越精确；它不自动改代码、
-改阈值、推广 Policy 或取得交易权限。
+1. decision-time 组件书能按完整数量计价，并保留标准 Combo 成本、USD contractual-payoff
+   上限和 boundary reference-loss 硬约束；
+2. 入场 same-session IV variance proxy 严格高于事后 RV proxy；事后 RV 取“完整预登记切点的
+   未来 log-return variance”和“随后 trailing matched-horizon RV proxy 曲线最大值”两者较大；
+3. 已知且连续的真实路径没有触及 Put 或 Call 短腿；
+4. 官方结算后的 `entry native net credit + settlement native cashflow` 严格大于零。
+
+这四项都是合取条件。终值盈利但 IV 没覆盖后来 RV，不是机会；终值盈利但盘中穿过短腿，
+也不是机会。这样才同时检查“没有放过机会”和“没有为了赚小钱承担过大 Gamma/路径风险”。
+
+Oracle identity 随 Policy 和方法内容密封。当前 V1 不声称拥有可执行 Combo 流动性、盘中
+真实平仓价或账户 PnL；这些缺口不能被终值盈利替代。
+
+## Session verdict
+
+- 有证据缺口：`UNKNOWN`；
+- 完整、无事后机会且 Base 全部避开：`NO_OPPORTUNITY_CORRECTLY_AVOIDED`；
+- 完整、Base 抓到机会、零漏单、零过度风险：`RULE_WELL_CALIBRATED`；
+- 有漏单而无过度风险：`RULE_TOO_CONSERVATIVE`；
+- 有过度风险而无漏单：`RULE_TOO_AGGRESSIVE`；
+- 同时有漏单和过度风险：`MIXED_RULE_ERROR`。
+
+`RULE_WELL_CALIBRATED` 只证明这个 Session 的取舍一致。单 Session 永远不能证明 Policy
+长期优秀或存在 Edge。
+
+## Codex 和累积记忆
+
+`UNKNOWN` 与 `NO_OPPORTUNITY_CORRECTLY_AVOIDED` 直接给结论，不调用 Codex。规则偏保守、
+偏激进或混合时，Codex 只能解释确定性事实和提出可证伪假设，不能跳到 Challenger。
+只有完整 `RULE_WELL_CALIBRATED` 且 Base 确实抓到至少一个机会，才允许另行研究是否存在
+更好的冻结 Challenger。
+
+确定性 JSON/Markdown 报告在任何可选 Codex 子进程之前落盘。Codex 失败会显示
+`FAILED_OPTIONAL_ANALYSIS`，但不会抹掉 Review 或阻断交易员报告；成功分析写成独立补充。
+
+记忆只统计当前 Policy-quality Review 的 verdict、重复 blocker 和可证伪假设。旧
+`optimatrix.ai-lab.session-review.v1` 仍保留并验证哈希链，但统一标为
+`INVALID_FOR_POLICY_QUALITY`，其 `MISSED_OPPORTUNITY` 不进入 Codex、累计 verdict 或
+Challenger 资格。
 
 ## 命令
 
-下面的真实 Ledger 读取属于单独的只读验证动作；阶段 D 的实现测试只使用 synthetic
-fixture：
+真实 Ledger 读取需要当前 Stage 和任务单独授权；实现测试只用 synthetic 临时根：
 
 ```bash
 optimatrix-ai-lab review-session \
@@ -76,28 +98,13 @@ optimatrix-ai-lab review-session \
 optimatrix-ai-lab verify-memory
 ```
 
-旧 D1 的 `seal/register/run/promotion` 仍存在，用于冻结 Base/Challenger、时间切分和人审
-边界；synthetic mechanism fixture 可以继续独立验证机制，但任何包含
-`ACTUAL_PUBLIC_PATH` 的真实数据集都必须同时传入一个或多个已密封且完整的
-`BASE_FOUND_OPPORTUNITY` Review：
-
-```bash
-optimatrix-ai-lab run \
-  --base '/path/to/base.json' \
-  --challenger '/path/to/challenger.json' \
-  --input '/path/to/actual-path-export.json' \
-  --plan '/path/to/plan.json' \
-  --store '/path/to/experiment-audit' \
-  --registration-id 'sha256:...' \
-  --session-review-id 'sha256:...'
-```
-
-命令会同时核对 Base Policy identity 和数据集 Window 是否被这些 eligible Review 覆盖。
-自动推广仍永久拒绝。
+旧 D1 的 `seal/register/run/promotion` 只用于冻结 Base/Challenger、时间切分和人审边界。
+任何 `ACTUAL_PUBLIC_PATH` Challenger 数据集都必须绑定一个完整、eligible 的当前
+Policy-quality Review；旧终值筛选 Review 不再有资格。
 
 ## 永久非结论
 
 - public Shadow 组件书估值不是 Combo 报价、订单、成交或可执行流动性；
-- 事后正收益不是事前 Edge，也不是 Policy qualification；
-- 一个 Session、Candidate 数或胜率不能证明规则更好；
+- 事后 Oracle 不是事前可知信号，也不是交易执行；
+- 一个 Session、Candidate 数、终值盈利或胜率不能证明 Policy qualification 或 Edge；
 - AI Lab 没有账户、资金、私有 API、部署或自动推广权限。
