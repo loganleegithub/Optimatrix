@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** D1 AI LAB — POLICY-QUALITY REVIEW REDESIGN ACTIVE
+**Status:** D1 AI LAB — POLICY-QUALITY REVIEW IMPLEMENTED; REAL VALIDATION NOT YET RUN
 
 **Current maturity:** `D1_AI_LAB_POLICY_QUALITY_REVIEW`
 
@@ -11,31 +11,27 @@
 **Frozen Base Policy identity:**
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `NONE`
 
-**Sole authorized closure:** [`D1_POLICY_QUALITY_REVIEW_REDESIGN`](../../tasks/D1_POLICY_QUALITY_REVIEW_REDESIGN.md)
+**Sole authorized closure:** `NONE`
 
 ## Current permissions
 
-Stage authorizes only the bounded offline AI Lab correction named by the active task.
-
-**Offline checks and simulation:** synthetic temporary-root tests for the corrected post-Session
-Policy-quality review
+**Offline checks and simulation:** existing repository checks only; no new durable evidence
 
 **Public market calls:** `NONE_AUTHORIZED`
 
 **Stable ObservationLedger root:** `/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2`
-remains the authorized B3 runtime root outside this branch and unchanged; this task may not open or
-mutate it
+remains the authorized B3 runtime root outside this branch and unchanged; no task may open or mutate
+it
 
-**Stable CaseJournal root:** `NONE`; this task may not create or mutate CaseJournal facts
+**Stable CaseJournal root:** `NONE`
 
-**Continuous runtime:** the existing B3 launchd job remains outside this branch and unchanged; no
-deployment or process control
+**Continuous runtime:** existing B3 launchd job remains unchanged; no process control or deployment
 
-**AI Lab stable durable root:** `NONE`; existing append-only data may not be opened or changed
+**AI Lab stable durable root:** `NONE`; no task may open or mutate it
 
-**Codex CLI:** `NONE`; fake subprocess tests only
+**Codex CLI:** `NONE`
 
 **Private read-only account permission:** `NONE`
 
@@ -43,38 +39,33 @@ deployment or process control
 
 **Policy qualification / Edge claim:** `NONE`
 
-## Required correction
+## Implemented business state
 
-The sealed 2026-08-15 Review used a retired definition: a legal four-leg control with positive
-fee-after-settlement economics was counted as an opportunity. That fact is a terminal-payoff control
-only. It does not prove the trade was a sufficiently compensated, acceptably risky ex-ante choice,
-so its `MISSED_OPPORTUNITY` verdict is `INVALID_FOR_POLICY_QUALITY`.
+- AI Lab now judges the frozen rule rather than code compliance. Every complete Window is one of
+  `CAPTURED_OPPORTUNITY`, `CORRECT_AVOIDANCE`, `MISSED_OPPORTUNITY`, or
+  `OVER_RISK_SELECTION`.
+- The fixed hindsight Oracle requires decision-time full-amount four-leg cost and hard risk
+  controls, entry IV above conservative hindsight RV, no continuous-path short-strike breach, and
+  positive official-settlement fee-after economics. Terminal profit alone is insufficient.
+- A Session with any missing registered IV/RV curve point, Base Decision, continuous path, or
+  settlement remains `UNKNOWN`. Only a complete Session with zero misses and zero over-risk choices
+  can be `RULE_WELL_CALIBRATED`, and that conclusion is Session-local only.
+- Reports expose the IV/RV curve, four-quadrant counts, exact hindsight rejection reasons, negative
+  Base gate margins, and selected-candidate path/strike/settlement facts.
+- The deterministic report is written before optional Codex. Codex failure is isolated as
+  `FAILED_OPTIONAL_ANALYSIS` and cannot suppress or change the Review.
+- Current reviews use `policy-quality-reviews.jsonl`. Legacy
+  `optimatrix.ai-lab.session-review.v1` data remains hash-chain verified but is
+  `INVALID_FOR_POLICY_QUALITY` and excluded from verdict memory, Codex facts, and Challenger gates.
+- Final repository gate passed `274` tests, `52` subtests, and `8/8` deterministic scenarios; Ruff,
+  mypy, formatting, compilation, Authority checks, and diff checks passed.
+- No corrected real Session review has run. `B3_PIPELINE_CAPABILITY_ACCEPTED` remains prior
+  mechanism evidence; `natural_chain=NOT_YET_OBSERVED`,
+  `policy_reachability=COMPLETED_SESSION_LOCAL_RESPONSIBILITY_MEASURED`,
+  `policy_qualification=NONE`, and `edge_claim=NONE` remain unchanged.
 
-AI Lab must instead compare immutable Base decisions with a post-Session oracle over the complete
-registered Window denominator. The oracle requires aligned decision-time cost, complete later IV/RV
-evolution, continuous physical path, official settlement, and a frozen risk-quality definition.
-It produces four business facts: captured opportunity, correct avoidance, missed opportunity, and
-over-risk selection. Any incomplete required evidence makes that Window and the Session judgment
-`UNKNOWN`.
-
-A complete one-Session result can judge only that Session. It cannot qualify Policy or establish
-Edge. Cross-Session chronological evidence and pre-registered promotion gates remain required for
-either claim.
-
-## Current evidence state
-
-- The existing sealed Review and its hash chain remain immutable legacy evidence.
-- `374` positive terminal-payoff findings are neither trades nor proved ex-ante opportunities.
-- The observed 2026-08-15 population had `96` expected Windows, `81` Decisions, `81` Outcomes, and
-  only `64` auditable Windows. Therefore the current evidence cannot prove either that Base missed
-  no opportunity or that Base avoided all undue risk.
-- Existing Outcome summaries do not by themselves prove a complete Session IV/RV evolution and
-  full physical-path risk series. A corrected real review has not run.
-- `B3_PIPELINE_CAPABILITY_ACCEPTED` remains prior mechanism evidence and is not reopened here.
-- `policy_reachability=COMPLETED_SESSION_LOCAL_RESPONSIBILITY_MEASURED` remains a prior diagnostic,
-  not Policy-quality proof.
-- `natural_chain=NOT_YET_OBSERVED`, `policy_qualification=NONE`, and `edge_claim=NONE` remain.
-
-**Primary blocker:** `TERMINAL_POSITIVE_IS_NOT_POLICY_QUALITY` — replace the retired verdict and
-projection path with the exact four-quadrant, fail-closed Policy-quality review before attempting
-another real Session validation.
+**Primary blocker:** `2026_08_15_POLICY_QUALITY_REVIEW_NOT_YET_OBSERVED` — a separate exact
+VALIDATION_ONLY task must authorize one read-only review of the ended 2026-08-15 Session and one
+append to the separate AI Lab root. The known `81/96` Decision population suggests the corrected
+verdict will remain `UNKNOWN`, but only the authorized command may establish the exact current
+Review and trader report.
