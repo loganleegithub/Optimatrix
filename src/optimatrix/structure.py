@@ -113,6 +113,32 @@ class CandidateDataReadiness(StrEnum):
 
 
 @dataclass(frozen=True)
+class Btc0DteCondorEnumeration:
+    """Every decision-time four-leg structure that can be priced at the frozen amount."""
+
+    candidates: tuple[Btc0DteCondorCandidate, ...]
+    legal_structure_count: int
+    data_readiness: CandidateDataReadiness
+    unavailable_book_names: tuple[str, ...]
+    primary_rank_unresolved_book_names: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.legal_structure_count < len(self.candidates):
+            raise ValueError("legal structure count cannot be below price-evaluable candidates")
+        if len(set(self.unavailable_book_names)) != len(self.unavailable_book_names):
+            raise ValueError("enumeration unavailable books must be unique")
+        unresolved = set(self.primary_rank_unresolved_book_names)
+        if len(unresolved) != len(
+            self.primary_rank_unresolved_book_names
+        ) or not unresolved.issubset(self.unavailable_book_names):
+            raise ValueError("enumeration unresolved books must be a unique unavailable subset")
+        if self.data_readiness is CandidateDataReadiness.COMPLETE and unresolved:
+            raise ValueError("complete enumeration cannot retain unresolved books")
+        if self.data_readiness is CandidateDataReadiness.PRIMARY_RANK_UNRESOLVED and not unresolved:
+            raise ValueError("unresolved enumeration requires exact missing-book identities")
+
+
+@dataclass(frozen=True)
 class Btc0DteCondorUnderwriting:
     pricing: Btc0DteCondorPricing | None
     net_delta: Decimal
@@ -349,10 +375,92 @@ def select_btc_0dte_condor(
     observation: MarketObservation,
     policy: BtcShortVolPolicy,
 ) -> Btc0DteCondorSelection:
+    enumeration = enumerate_btc_0dte_condors(observation=observation, policy=policy)
+    legal_count = enumeration.legal_structure_count
+    candidates = enumeration.candidates
+    evaluable_count = len(candidates)
+    eligible = [candidate for candidate in candidates if not candidate.policy_blockers]
+    rejected = [blocker for candidate in candidates for blocker in candidate.policy_blockers]
+    if enumeration.data_readiness is CandidateDataReadiness.PRIMARY_RANK_UNRESOLVED:
+        return Btc0DteCondorSelection(
+            selected=None,
+            retained_alternatives=(),
+            legal_structure_count=legal_count,
+            price_evaluable_count=evaluable_count,
+            policy_eligible_count=len(eligible),
+            blockers=("PRIMARY_RANK_UNRESOLVED_BY_MISSING_BOOKS",),
+            data_readiness=enumeration.data_readiness,
+            unavailable_book_names=enumeration.unavailable_book_names,
+            primary_rank_unresolved_book_names=(enumeration.primary_rank_unresolved_book_names),
+        )
+    if legal_count == 0:
+        return Btc0DteCondorSelection(
+            selected=None,
+            retained_alternatives=(),
+            legal_structure_count=0,
+            price_evaluable_count=0,
+            policy_eligible_count=0,
+            blockers=("NO_LEGAL_FOUR_LEG_STRUCTURE",),
+            data_readiness=CandidateDataReadiness.COMPLETE,
+            unavailable_book_names=enumeration.unavailable_book_names,
+            primary_rank_unresolved_book_names=(),
+        )
+    if evaluable_count == 0:
+        return Btc0DteCondorSelection(
+            selected=None,
+            retained_alternatives=(),
+            legal_structure_count=legal_count,
+            price_evaluable_count=0,
+            policy_eligible_count=0,
+            blockers=("NO_PRICE_EVALUABLE_FOUR_LEG_STRUCTURE",),
+            data_readiness=CandidateDataReadiness.COMPLETE,
+            unavailable_book_names=enumeration.unavailable_book_names,
+            primary_rank_unresolved_book_names=(),
+        )
+    if not eligible:
+        return Btc0DteCondorSelection(
+            selected=None,
+            retained_alternatives=(),
+            legal_structure_count=legal_count,
+            price_evaluable_count=evaluable_count,
+            policy_eligible_count=0,
+            blockers=("NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE", *tuple(dict.fromkeys(rejected))),
+            data_readiness=CandidateDataReadiness.COMPLETE,
+            unavailable_book_names=enumeration.unavailable_book_names,
+            primary_rank_unresolved_book_names=(),
+        )
+    ordered = tuple(sorted(eligible, key=_rank_key))
+    selected = ordered[0]
+    alternatives = ordered[1 : 1 + policy.structure.maximum_retained_alternatives]
+    return Btc0DteCondorSelection(
+        selected=selected,
+        retained_alternatives=alternatives,
+        legal_structure_count=legal_count,
+        price_evaluable_count=evaluable_count,
+        policy_eligible_count=len(eligible),
+        blockers=(),
+        data_readiness=CandidateDataReadiness.COMPLETE,
+        unavailable_book_names=enumeration.unavailable_book_names,
+        primary_rank_unresolved_book_names=(),
+    )
+
+
+def enumerate_btc_0dte_condors(
+    *,
+    observation: MarketObservation,
+    policy: BtcShortVolPolicy,
+) -> Btc0DteCondorEnumeration:
+    """Enumerate the frozen Policy geometry without applying its strategy gates.
+
+    The current selector and offline AI Lab share this owner. A member is still required to be a
+    legal four-leg product and price-evaluable at the full Policy amount, but its environment,
+    structure-limit, and underwriting blockers are retained instead of filtering it away.
+    """
+
     if observation.channel_id is not policy.channel_id:
         raise ValueError("MarketObservation does not match the Policy channel")
     if observation.data_health_blockers:
-        raise ValueError("structure selection requires healthy MarketObservation data")
+        raise ValueError("structure enumeration requires healthy MarketObservation data")
     quotes = tuple(sorted(observation.quotes, key=lambda item: item.instrument_name))
     puts = tuple(quote for quote in quotes if quote.option_type is OptionType.PUT)
     calls = tuple(quote for quote in quotes if quote.option_type is OptionType.CALL)
@@ -370,9 +478,7 @@ def select_btc_0dte_condor(
         expected_expiry=expected_expiry,
     )
     legal_count = 0
-    evaluable_count = 0
-    eligible: list[Btc0DteCondorCandidate] = []
-    rejected: list[str] = []
+    candidates: list[Btc0DteCondorCandidate] = []
     for long_put in puts:
         for short_put in puts:
             if _put_pair_blockers(
@@ -421,7 +527,6 @@ def select_btc_0dte_condor(
                     pricing = underwriting.pricing
                     if pricing is None:
                         continue
-                    evaluable_count += 1
                     blockers = underwriting.policy_blockers
                     candidate = Btc0DteCondorCandidate(
                         observation_id=observation.identity,
@@ -436,72 +541,18 @@ def select_btc_0dte_condor(
                         call_body_distance_sigma=underwriting.call_body_distance_sigma,
                         policy_blockers=blockers,
                     )
-                    if blockers:
-                        rejected.extend(blockers)
-                    else:
-                        eligible.append(candidate)
+                    candidates.append(candidate)
 
-    if primary_rank_unresolved_book_names:
-        return Btc0DteCondorSelection(
-            selected=None,
-            retained_alternatives=(),
-            legal_structure_count=legal_count,
-            price_evaluable_count=evaluable_count,
-            policy_eligible_count=len(eligible),
-            blockers=("PRIMARY_RANK_UNRESOLVED_BY_MISSING_BOOKS",),
-            data_readiness=CandidateDataReadiness.PRIMARY_RANK_UNRESOLVED,
-            unavailable_book_names=unavailable_book_names,
-            primary_rank_unresolved_book_names=primary_rank_unresolved_book_names,
-        )
-    if legal_count == 0:
-        return Btc0DteCondorSelection(
-            selected=None,
-            retained_alternatives=(),
-            legal_structure_count=0,
-            price_evaluable_count=0,
-            policy_eligible_count=0,
-            blockers=("NO_LEGAL_FOUR_LEG_STRUCTURE",),
-            data_readiness=CandidateDataReadiness.COMPLETE,
-            unavailable_book_names=unavailable_book_names,
-            primary_rank_unresolved_book_names=(),
-        )
-    if evaluable_count == 0:
-        return Btc0DteCondorSelection(
-            selected=None,
-            retained_alternatives=(),
-            legal_structure_count=legal_count,
-            price_evaluable_count=0,
-            policy_eligible_count=0,
-            blockers=("NO_PRICE_EVALUABLE_FOUR_LEG_STRUCTURE",),
-            data_readiness=CandidateDataReadiness.COMPLETE,
-            unavailable_book_names=unavailable_book_names,
-            primary_rank_unresolved_book_names=(),
-        )
-    if not eligible:
-        return Btc0DteCondorSelection(
-            selected=None,
-            retained_alternatives=(),
-            legal_structure_count=legal_count,
-            price_evaluable_count=evaluable_count,
-            policy_eligible_count=0,
-            blockers=("NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE", *tuple(dict.fromkeys(rejected))),
-            data_readiness=CandidateDataReadiness.COMPLETE,
-            unavailable_book_names=unavailable_book_names,
-            primary_rank_unresolved_book_names=(),
-        )
-    ordered = tuple(sorted(eligible, key=_rank_key))
-    selected = ordered[0]
-    alternatives = ordered[1 : 1 + policy.structure.maximum_retained_alternatives]
-    return Btc0DteCondorSelection(
-        selected=selected,
-        retained_alternatives=alternatives,
+    return Btc0DteCondorEnumeration(
+        candidates=tuple(candidates),
         legal_structure_count=legal_count,
-        price_evaluable_count=evaluable_count,
-        policy_eligible_count=len(eligible),
-        blockers=(),
-        data_readiness=CandidateDataReadiness.COMPLETE,
+        data_readiness=(
+            CandidateDataReadiness.PRIMARY_RANK_UNRESOLVED
+            if primary_rank_unresolved_book_names
+            else CandidateDataReadiness.COMPLETE
+        ),
         unavailable_book_names=unavailable_book_names,
-        primary_rank_unresolved_book_names=(),
+        primary_rank_unresolved_book_names=primary_rank_unresolved_book_names,
     )
 
 

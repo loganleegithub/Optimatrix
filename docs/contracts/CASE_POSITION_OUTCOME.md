@@ -1,6 +1,6 @@
 # Case, Position, and Outcome Contract
 
-**Status:** ACTIVE BUSINESS CONTRACT — B3 PUBLIC SHADOW SOURCE CONFORMANT; PRIVATE AND D1 ABSENT
+**Status:** ACTIVE BUSINESS CONTRACT — B3 PUBLIC SHADOW SOURCE CONFORMANT; D1 AI LAB SESSION REVIEW
 
 This contract owns the chain after each Window Decision: TradeCase, Position, monitoring,
 management, trigger, exit, terminality, Outcome, recovery, and offline learning. DecisionRecord and
@@ -199,6 +199,30 @@ One global eligibility Boolean cannot replace these facts. A known terminal resu
 economically evaluable after a Gap while becoming ineligible for continuous-path analysis.
 
 ## Offline learning and AI
+
+`AI Lab` reviews each ended Session before any Base-versus-Challenger experiment. The fixed order
+is:
+
+```text
+complete Window/Decision/Outcome evidence?
+→ frozen UNFILTERED_CONDOR post-Session opportunity adjudication
+→ zero opportunities: NO_OPPORTUNITY and stop
+→ opportunity exists but Base missed: quantitative blocker attribution
+→ Base found the same confirmed opportunity: Challenger comparison may become eligible
+```
+
+`UNFILTERED_CONDOR` uses only decision-time observations to establish the ex-ante structure and
+component-book price. It keeps DataHealth, legal four-leg geometry, full-amount pricing, standard
+Combo cost, USD contractual-payoff and reference-loss controls, while removing only the named
+strategy filters. A matching continuous future path and official delivery may then classify its
+counterfactual fee-after settlement result and short-strike breaches. This is a post-Session public
+Shadow control, not a fill, realized PnL, executable route, or proof that hindsight was available at
+the Decision.
+
+The Lab stores content-sealed Session reviews and optional structured hypotheses in a separate
+append-only research root. A bounded Codex CLI invocation may explain only supplied fact identities;
+it cannot replace the deterministic verdict. Accumulated memory means recurring evidence,
+refutations, and testable hypotheses across Sessions, not self-modifying Policy or autonomous code.
 
 Qualification uses aligned DecisionWindows and actual future paths. At minimum it compares frozen
 `BASE`, frozen `CHALLENGER`, `UNFILTERED_CONDOR`, and `NO_TRADE` under the same causal inputs,

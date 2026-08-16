@@ -17,6 +17,14 @@ make check
 `make check` is offline evidence only. A network command requires exact authorization in the active
 task and Stage; CLI help and source own its syntax.
 
+## AI Lab
+
+The integrated offline Lab is available as `optimatrix-ai-lab` and lives beside the main program in
+`src/optimatrix/ai_lab/`. Its default append-only research root is
+`/Users/logan/Library/Application Support/Optimatrix/ai-lab`. See
+[`docs/AI_LAB.md`](docs/AI_LAB.md) for the Session-first review command, report locations, memory,
+Codex CLI boundary, and Base-versus-Challenger gate.
+
 ## Deployed B3 public runtime
 
 Current permission and the sole active task come only from `CURRENT_STAGE`. When that Stage

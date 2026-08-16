@@ -43,6 +43,7 @@ runtime.py           one manifest-enrolled BTC public cross-Session scheduler an
 workbench.py         read-only display projection
 cli.py               offline and explicitly authorized entrypoints
 scenarios.py         deterministic evidence, not product Authority
+ai_lab/              ended-Session adjudication, append-only research memory, and offline AI
 ```
 
 Business definitions live in the two contracts, not this table. Exact Policy values and formulas
@@ -137,3 +138,10 @@ The two records may reference the same immutable identities; neither copies, rew
 the other's truth. Raw capture is added only when an authorized replay consumer requires it. These
 boundaries authorize no database, bus, schema registry, replay service, retention system, migration,
 or dual-write protocol.
+
+`AI Lab` is part of the same Python modular monolith but owns a separate read-only/offline path. It
+may read a caller-selected completed Session from `ObservationLedger`, derive content-sealed
+Session reviews, and write only to its distinct Lab root. Its deterministic adjudicator owns the
+verdict; an optional one-shot Codex CLI process receives a bounded fact bundle and can append only a
+schema-validated explanation. The Lab never writes Ledger/Journal facts and has no runtime,
+market-call, account, order, Policy-mutation, deployment, or promotion path.

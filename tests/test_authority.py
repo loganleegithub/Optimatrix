@@ -64,18 +64,31 @@ def test_authorized_runtime_matches_active_b3_deployment() -> None:
     )
     policy = load_btc_short_vol_policy(DEFAULT_BTC_SHORT_VOL_POLICY_PATH)
     tasks = sorted(path for path in (ROOT / "tasks").glob("*.md") if path.name != "TEMPLATE.md")
-    assert len(tasks) == 1
-    task = tasks[0]
 
     assert AUTHORIZED_RUNTIME_ROOT == expected_root
     assert AUTHORIZED_RUNTIME_POLICY_IDENTITY == policy.identity
 
-    for path in (AUTHORITY / "CURRENT_STAGE.md", task, ROOT / "README.md"):
-        text = path.read_text(encoding="utf-8")
-        assert str(expected_root) in text
+    stage = (AUTHORITY / "CURRENT_STAGE.md").read_text(encoding="utf-8")
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-    assert policy.identity in (AUTHORITY / "CURRENT_STAGE.md").read_text(encoding="utf-8")
-    assert policy.identity in task.read_text(encoding="utf-8")
+    assert str(expected_root) in stage
+    assert str(expected_root) in readme
+    assert policy.identity in stage
+    if tasks:
+        assert len(tasks) == 1
+        task_text = tasks[0].read_text(encoding="utf-8")
+        assert policy.identity in task_text
+    else:
+        task_text = ""
+        assert "**Current task kind:** `NONE`" in stage
+    if "**Target maturity stage:** `B3_ATOMIC_PUBLIC_SHADOW`" in task_text:
+        assert str(expected_root) in task_text
+    elif task_text:
+        assert "outside this branch and unchanged" in stage
+        assert "deployment" in task_text
+        assert "NONE" in task_text
+    else:
+        assert "existing B3 launchd job remains unchanged" in stage
 
 
 def test_capability_acceptance_does_not_manufacture_market_evidence() -> None:

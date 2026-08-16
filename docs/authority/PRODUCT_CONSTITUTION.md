@@ -70,7 +70,13 @@ The preceding V2 repository, runtime, Policies, schemas, Case root, and historic
 external assets. This product may not read, write, translate, migrate, relabel, recover, import, or
 count them.
 
-AI may be an offline Challenger only after aligned DecisionWindows, frozen Base and Challenger
+`AI Lab` is the product name for offline learning. It must first adjudicate an ended Session over
+the complete aligned DecisionWindow denominator. A zero-opportunity conclusion requires complete
+causal observations, continuous actual future paths, official settlement, and an exhaustive frozen
+control definition; any missing required fact remains `UNKNOWN`. When the control finds an
+opportunity that Base missed, the Lab diagnoses Base blockers and quantitative threshold margins
+before considering any new rule. AI may act as an offline Challenger only after Base itself found a
+post-Session-confirmed opportunity and aligned DecisionWindows, frozen Base and Challenger
 Policies, chronological or walk-forward evaluation, and actual future paths exist. AI cannot choose
 the denominator, rewrite a frozen Policy after Outcomes, promote itself, or receive account,
 capital, order, or execution permission. Promotion is a human decision under a separately
