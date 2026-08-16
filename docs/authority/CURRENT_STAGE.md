@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** D1 AI LAB SESSION REVIEW — ACTIVE
+**Status:** D1 AI LAB SESSION REVIEW — IMPLEMENTED OFFLINE; REAL SESSION UNVERIFIED
 
 **Current maturity:** `D1_AI_LAB_SESSION_REVIEW`
 
@@ -11,35 +11,36 @@
 **Frozen Base Policy identity:**
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `NONE`
 
-**Sole authorized closure:** [`D1_AI_LAB_SESSION_REVIEW`](../../tasks/D1_AI_LAB_SESSION_REVIEW.md)
+**Sole authorized closure:** `NONE`
 
 ## Current permissions
 
-Stage is the permission ceiling; the active task may only narrow it.
+No validation, deployment, or live-action permission is implied by the implemented maturity.
 
-**Offline checks and simulation:** deterministic synthetic Session fixtures only; opening a real
-ObservationLedger remains a later read-only validation action
+**Offline checks and simulation:** existing deterministic tests and synthetic demonstrations only;
+opening a real ObservationLedger requires a new exact read-only validation task
 
 **Public market calls:** `NONE_AUTHORIZED`
 
 **Stable ObservationLedger root:** the existing
 `/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2` remains owned by
-the deployed B3 runtime. This implementation task may not open or mutate it.
+the deployed B3 runtime. AI Lab has not opened or mutated it.
 
-**Stable CaseJournal root:** the same existing v2 root remains owned by B3. AI Lab is not a
-CaseJournal consumer and may not open or mutate it in this task.
+**Stable CaseJournal root:** the same v2 root remains owned by B3. AI Lab is not a CaseJournal writer
+and has not opened or mutated it.
 
-**Continuous runtime:** the existing B3 launchd job remains outside this branch and unchanged. AI
-Lab adds no daemon, scheduler, listener, runtime owner, restart, replacement, or deployment.
+**Continuous runtime:** the existing B3 launchd job remains unchanged. AI Lab adds no daemon,
+scheduler, listener, runtime owner, restart, replacement, or deployment.
 
 **AI Lab durable root:** default
 `/Users/logan/Library/Application Support/Optimatrix/ai-lab`; it is a separate append-only research
 root and must never be used as an ObservationLedger, CaseJournal, account, or runtime root
 
-**Codex CLI:** optional fake-process validation of one-shot `codex exec` only. A real invocation is
-not authorized by this implementation task.
+**Codex CLI:** no real invocation is currently authorized. The implemented optional adapter uses a
+bounded deterministic fact bundle, `--ephemeral`, `--sandbox read-only`, a temporary working
+directory, and a strict output schema; Codex cannot own the Session verdict or promotion.
 
 **Private read-only account permission:** `NONE`
 
@@ -47,37 +48,52 @@ not authorized by this implementation task.
 
 **Policy qualification / Edge claim:** `NONE`
 
-## Required workflow
+## Implemented D1 truth
 
-For every ended Session, the deterministic Lab must follow this order:
+- `AI Lab` now lives inside the modular monolith at `src/optimatrix/ai_lab/`; `Challenger` remains
+  only the role name of a later Base-versus-Challenger experiment.
+- Every selected ended Session is reconstructed against its exact `96` pre-registered Windows.
+  Missing Decision, causal observation, continuous future path, or matching official settlement
+  keeps the Session `UNKNOWN`.
+- The content-addressed `UNFILTERED_CONDOR` control uses decision-time public Shadow facts and
+  preserves legal four-leg geometry, full-amount price evaluability, standard Combo fees, boundary
+  loss, fee-burden, and Session USD-risk limits. It removes only the named strategy filters.
+- Complete zero-success evidence returns `NO_OPPORTUNITY` and stops before Codex, even when Base had
+  emitted an unconfirmed Candidate. A positive control result missed by Base returns
+  `MISSED_OPPORTUNITY` with actual, threshold, unit, and signed margin where quantifiable.
+- Only `BASE_FOUND_OPPORTUNITY` with complete `96/96` evidence can unlock a separately frozen
+  Challenger comparison. Actual-path experiments fail closed without matching eligible Session
+  Review identities, Base Policy identity, and Window coverage.
+- Session Reviews and optional Codex analyses use separate append-only hash chains. Memory exposes
+  recurring verdicts, Base blockers, and falsifiable hypothesis keys; it does not retain raw chat,
+  self-modify code or Policy, or promote anything automatically.
+- JSON and Chinese trader-readable Markdown reports show the Session verdict, exact opportunity
+  definition, evidence funnel, every Window, successful structures, short-strike breaches,
+  quantitative Base attribution, prior-memory summary, and permanent evidence limits.
+- The Codex prompt is bounded to all `96` Window summaries, deterministic gate aggregates, and at
+  most `48` representative opportunities. The complete opportunity population remains in the
+  sealed Review/report rather than being silently discarded.
 
-1. prove the exact DecisionWindow denominator, matching DecisionRecords, causal observations,
-   continuous future paths, and official settlement;
-2. enumerate one frozen `UNFILTERED_CONDOR` control from decision-time public facts while retaining
-   legal geometry, full-amount pricing, standard cost, and USD-risk constraints;
-3. return `NO_OPPORTUNITY` and stop only from complete zero-success evidence; missing evidence is
-   `UNKNOWN`, and an unconfirmed Base Candidate cannot bypass the stop;
-4. when an opportunity existed but Base missed it, return `MISSED_OPPORTUNITY` and expose exact
-   Base blockers, values, thresholds, units, and signed margins where quantifiable;
-5. only a complete `BASE_FOUND_OPPORTUNITY` Session may unlock a separately frozen
-   Base-versus-Challenger comparison.
+## Verification state
 
-Memory may accumulate sealed verdicts, blocker counts, and falsifiable hypotheses. Evolution means
-stronger cross-Session evidence, never self-modifying Policy, automatic code changes, execution
-permission, or automatic promotion.
-
-## Current evidence state
-
-- The prior isolated Challenger Lab proves only an offline audit mechanism. Its useful frozen
-  Base/Challenger, chronological split, append-only audit, and human-promotion boundaries are being
-  integrated under the product name `AI Lab`.
-- Session-first adjudication, missed-opportunity attribution, persistent memory, bounded Codex
-  explanation, and trader-readable reports are `NOT_YET_IMPLEMENTED` at activation.
+- `36` direct AI Lab tests cover the four verdict branches, incomplete evidence, Base false
+  positives stopping as no-opportunity, quantitative missed-opportunity attribution, append-only
+  tamper detection, path isolation, bounded/cited Codex output, actual-path experiment gating, and
+  CLI-to-report closure.
+- Repository gate: `272 passed`, `52 subtests passed`, and all `8` deterministic business scenarios
+  passed, with Ruff format, Ruff lint, strict mypy, and compileall green.
+- `real_session_review=NOT_YET_MEASURED`: no production ObservationLedger Session has been opened or
+  adjudicated by AI Lab.
+- `real_codex_analysis=NOT_YET_RUN`: the Codex adapter is verified only with a fake process boundary.
 - `B3_PIPELINE_CAPABILITY_ACCEPTED` remains prior mechanism evidence; this branch neither changes
   nor re-accepts it. `natural_chain=NOT_YET_OBSERVED`,
   `policy_reachability=COMPLETED_SESSION_LOCAL_RESPONSIBILITY_MEASURED`,
   `policy_qualification=NONE`, and `edge_claim=NONE` remain unchanged evidence boundaries.
+- The existing Workbench assets and schema remain untouched. AI Lab's visible surface is its
+  content-addressed Markdown/JSON report until a separate UI task is authorized.
 
-**Primary blocker:** `AI_LAB_SESSION_FIRST_WORKFLOW_NOT_IMPLEMENTED` — close only after all four
-verdict branches, the append-only memory, the bounded/cited Codex boundary, actual-path Challenger
-gate, visible report, and full repository gate pass. Real Session review remains `UNVERIFIED`.
+**Primary blocker:** `FIRST_REAL_ENDED_SESSION_AI_LAB_REVIEW_UNVERIFIED` — implementation and
+synthetic mechanism closure do not establish that the existing production Ledger contains one
+complete `96/96` Session suitable for this adjudication. A later validation-only task may open one
+exact root read-only, emit its first report under the separate AI Lab root, and report `UNKNOWN`
+rather than infer missing facts.
