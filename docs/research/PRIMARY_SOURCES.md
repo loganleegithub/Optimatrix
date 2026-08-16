@@ -4,7 +4,7 @@ This file is an evidence index, not Authority or permission. Each source support
 mechanism or exchange fact; none validates Optimatrix thresholds, BTC 0DTE transferability, Edge,
 or profitability.
 
-**Last checked:** 2026-08-14
+**Last checked:** 2026-08-16
 
 ## Public mechanics
 
@@ -76,7 +76,23 @@ or profitability.
 - [`public/get_index_price`](https://docs.deribit.com/api-reference/market-data/public-get_index_price)
   — index-price payload.
 - [`public/get_index_chart_data`](https://docs.deribit.com/api-reference/market-data/public-get_index_chart_data)
-  — bounded historical index payload.
+  — historical average index values for a named relative range; useful only when the returned
+  timestamps and cadence cover the exact hindsight interval.
+- [`public/get_historical_volatility`](https://docs.deribit.com/api-reference/market-data/public-get_historical_volatility)
+  — official realized-volatility time series by currency; a diagnostic series, not the product's
+  decision-time matched-horizon RV method by itself.
+- [`public/get_volatility_index_data`](https://docs.deribit.com/api-reference/market-data/public-get_volatility_index_data)
+  — historical DVOL OHLC with exact start/end, supported resolution, and pagination; forward-vol
+  context, not a 0DTE structure's decision-time IV or executable price.
+- [`public/get_mark_price_history`](https://docs.deribit.com/api-reference/market-data/public-get_mark_price_history)
+  — historical mark-price points for one instrument; mark valuation cannot replace a full-amount
+  historical component book.
+- [`public/get_last_trades_by_instrument_and_time`](https://docs.deribit.com/api-reference/market-data/public-get_last_trades_by_instrument_and_time)
+  — timestamp-bounded historical public trades, including option trade IV when present; sparse
+  trades cannot prove continuous liquidity or reconstruct an absent book.
+- [Options Data Collection](https://docs.deribit.com/articles/options-data-collection-best-practices)
+  — official separation of live order books/tickers from REST historical volatility, trades,
+  candles, and settlement backfill, including pagination limits.
 - [`public/get_delivery_prices`](https://docs.deribit.com/api-reference/market-data/public-get_delivery_prices)
   — official delivery-price payload.
 - [`public/get_combos`](https://docs.deribit.com/api-reference/combo-books/public-get_combos)

@@ -26,7 +26,7 @@ from optimatrix.ai_lab.canonical import (
     verify_seal,
 )
 from optimatrix.ai_lab.memory import MemoryDigest
-from optimatrix.ai_lab.session_review import OpportunityFinding, SessionReview, SessionVerdict
+from optimatrix.ai_lab.session_review import HindsightFinding, SessionReview, SessionVerdict
 
 CODEX_ANALYSIS_SCHEMA = "optimatrix.ai-lab.codex-analysis.v1"
 CODEX_ANALYSIS_NAMESPACE = "OptimatrixAiLabCodexAnalysisV1"
@@ -129,10 +129,12 @@ class CodexCliAnalyzer:
     def analyze(self, *, review: SessionReview, memory: MemoryDigest) -> JsonObject:
         if review.verdict in {
             SessionVerdict.UNKNOWN,
+            SessionVerdict.PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR,
             SessionVerdict.NO_OPPORTUNITY_CORRECTLY_AVOIDED,
         }:
             raise ValidationError(
-                "UNKNOWN and correct no-opportunity conclusions stop before Codex analysis"
+                "unknown, partially identified without known error, and correct no-opportunity "
+                "conclusions stop before Codex analysis"
             )
         bundle = _analysis_bundle(review=review, memory=memory)
         raw_fact_ids = bundle["supplied_fact_ids"]
@@ -239,11 +241,11 @@ def _analysis_prompt(*, review: SessionReview, memory: MemoryDigest) -> str:
 
 def _analysis_bundle(*, review: SessionReview, memory: MemoryDigest) -> JsonObject:
     workflow = (
-        "你是 Optimatrix AI Lab 的离线期权研究员。确定性程序已用完整 Session IV/RV 曲线、"
-        "真实路径、费用和结算给出规则质量 verdict；你无权修改 verdict、Policy、代码或交易"
-        "权限。只引用 supplied_fact_ids 中的 sha256 事实。RULE_TOO_CONSERVATIVE 只诊断漏掉"
-        "机会的门槛，RULE_TOO_AGGRESSIVE 只诊断承担了什么事后风险，MIXED_RULE_ERROR 两者都"
-        "诊断；这些 verdict 都不得跳到 Challenger。只有 challenger_comparison_eligible=true"
+        "你是 Optimatrix AI Lab 的离线期权研究员。确定性程序已按 Window 使用决策时事实、"
+        "事后 RV/路径、费用和结算给出规则质量 verdict 与缺失数据上下界；你无权修改 verdict、"
+        "Policy、代码或交易权限。只引用 supplied_fact_ids 中的 sha256 事实。保守、激进或混合"
+        "错误 verdict 只诊断已经观察到的错误；OBSERVED 前缀表示未知 Window 仍可能扩大或改变"
+        "整日错误组合。这些 verdict 都不得跳到 Challenger。只有 challenger_comparison_eligible=true"
         "时 challenger_proposal.action 才能是 PROPOSE_CHALLENGER。不要把单 Session 或 public "
         "Shadow 写成 Edge、订单、成交或真实 PnL。输出必须严格符合 JSON Schema。"
     )
@@ -273,6 +275,19 @@ def _analysis_bundle(*, review: SessionReview, memory: MemoryDigest) -> JsonObje
             "curve_observation_count": review.curve_observation_count,
             "auditable_window_count": review.auditable_window_count,
             "unknown_window_count": review.unknown_window_count,
+            "coverage_fraction": decimal_text(review.coverage_fraction),
+            "miss_rate_bounds": [
+                decimal_text(review.miss_rate_lower_bound),
+                decimal_text(review.miss_rate_upper_bound),
+            ],
+            "over_risk_rate_bounds": [
+                decimal_text(review.over_risk_rate_lower_bound),
+                decimal_text(review.over_risk_rate_upper_bound),
+            ],
+            "opportunity_rate_bounds": [
+                decimal_text(review.opportunity_rate_lower_bound),
+                decimal_text(review.opportunity_rate_upper_bound),
+            ],
             "base_candidate_window_count": review.base_candidate_window_count,
             "captured_opportunity_window_count": review.captured_opportunity_window_count,
             "correct_avoidance_window_count": review.correct_avoidance_window_count,
@@ -304,7 +319,7 @@ def _analysis_bundle(*, review: SessionReview, memory: MemoryDigest) -> JsonObje
     return bundle
 
 
-def _representative_opportunities(review: SessionReview) -> tuple[OpportunityFinding, ...]:
+def _representative_opportunities(review: SessionReview) -> tuple[HindsightFinding, ...]:
     by_identity = {item.identity: item for item in review.opportunities}
     selected = {
         item.identity

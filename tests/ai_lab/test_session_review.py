@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -46,6 +47,7 @@ def test_terminal_profit_alone_is_not_a_hindsight_opportunity(policy, tmp_path) 
     assert not review.challenger_comparison_eligible
     markdown = render_session_report(review=review, memory=_empty_memory())
     assert "最终盈利只是其中一项" in markdown
+    assert "部分识别区间" in markdown
     assert "本 Session 没有机会，Base 避险正确" in markdown
     assert "ENTRY_IV_DID_NOT_EXCEED_HINDSIGHT_RV" in markdown
     json_path, markdown_path = write_session_report(
@@ -97,6 +99,46 @@ def test_complete_hindsight_opportunity_exposes_quantified_base_miss(policy) -> 
         for opportunity in review.opportunities
         for gate in opportunity.gate_distances
     )
+    assert all(not opportunity.candidate_policy_blockers for opportunity in review.opportunities)
+
+
+def test_hindsight_positive_policy_reject_is_diagnostic_not_a_miss(policy) -> None:
+    strict_policy = replace(
+        policy,
+        underwriting=replace(
+            policy.underwriting,
+            minimum_boundary_net_credit_usd=Decimal("1000"),
+            minimum_credit_to_payoff_cap=Decimal("0.99"),
+        ),
+    )
+    session_id, records, outcomes = _population(
+        strict_policy,
+        implied_variance=Decimal("0.0011"),
+        realized_variance=Decimal("0.0010"),
+        delivery_price=Decimal("100000"),
+        path_mode="SAFE_ALL",
+    )
+
+    review = review_session(
+        session_id=session_id,
+        policy=strict_policy,
+        records=records,
+        outcomes=outcomes,
+    )
+
+    assert review.verdict is SessionVerdict.NO_OPPORTUNITY_CORRECTLY_AVOIDED
+    assert review.missed_opportunity_window_count == 0
+    assert review.hindsight_opportunity_structure_count == 0
+    assert review.hindsight_positive_policy_reject_structure_count > 0
+    assert review.policy_rejects
+    assert all(item.candidate_policy_blockers for item in review.policy_rejects)
+    assert {
+        blocker for item in review.policy_rejects for blocker in item.candidate_policy_blockers
+    } == {"BOUNDARY_NET_CREDIT_TOO_SMALL", "CREDIT_TO_PAYOFF_CAP_TOO_SMALL"}
+    markdown = render_session_report(review=review, memory=_empty_memory())
+    assert "事后赚钱、但当时就不合格的结构" in markdown
+    assert "不是 Base 漏掉的订单" in markdown
+    assert "这里的计数是结构次数，不是漏单次数" in markdown
 
 
 def test_short_strike_breach_turns_terminal_profit_into_correct_avoidance(policy) -> None:
@@ -179,12 +221,18 @@ def test_only_complete_well_calibrated_session_unlocks_challenger(policy) -> Non
     assert complete.captured_opportunity_window_count > 0
     assert complete.missed_opportunity_window_count == complete.over_risk_window_count == 0
     assert complete.challenger_comparison_eligible
-    assert incomplete.verdict is SessionVerdict.UNKNOWN
+    assert incomplete.verdict is SessionVerdict.PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR
+    assert incomplete.auditable_window_count == 95
     assert incomplete.unknown_window_count == 1
+    assert incomplete.coverage_fraction == Decimal(95) / Decimal(96)
+    assert incomplete.miss_rate_lower_bound == 0
+    assert incomplete.miss_rate_upper_bound == Decimal(1) / Decimal(96)
     assert not incomplete.challenger_comparison_eligible
 
 
-def test_missing_curve_point_makes_whole_session_unknown(policy) -> None:
+def test_missing_final_curve_point_invalidates_only_windows_without_a_complete_future_path(
+    policy,
+) -> None:
     session_id, records, outcomes = _population(
         policy,
         implied_variance=Decimal("0.0011"),
@@ -204,7 +252,38 @@ def test_missing_curve_point_makes_whole_session_unknown(policy) -> None:
     assert review.curve_observation_count == 95
     assert review.auditable_window_count == 0
     assert review.unknown_window_count == 96
-    assert dict(review.evidence_reason_counts)["SESSION_IV_RV_CURVE_INCOMPLETE"] == 96
+    assert dict(review.evidence_reason_counts)["FUTURE_VARIANCE_PATH_INCOMPLETE"] == 95
+    assert "SESSION_IV_RV_CURVE_INCOMPLETE" not in dict(review.evidence_reason_counts)
+
+
+def test_missing_first_curve_point_does_not_erase_later_complete_windows(policy) -> None:
+    session_id, records, outcomes = _population(
+        policy,
+        implied_variance=Decimal("0.0011"),
+        realized_variance=Decimal("0.0010"),
+        delivery_price=Decimal("100000"),
+        path_mode="SAFE_ALL",
+    )
+
+    review = review_session(
+        session_id=session_id,
+        policy=policy,
+        records=records[1:],
+        outcomes=outcomes,
+    )
+
+    assert review.curve_observation_count == 95
+    assert review.auditable_window_count == 95
+    assert review.unknown_window_count == 1
+    assert review.verdict is SessionVerdict.OBSERVED_RULE_TOO_CONSERVATIVE
+    assert review.missed_opportunity_window_count > 0
+    assert review.miss_rate_lower_bound == (
+        Decimal(review.missed_opportunity_window_count) / Decimal(96)
+    )
+    assert review.miss_rate_upper_bound == (
+        Decimal(review.missed_opportunity_window_count + 1) / Decimal(96)
+    )
+    assert not review.challenger_comparison_eligible
 
 
 def test_cli_writes_report_before_optional_codex_failure(policy, tmp_path, capsys) -> None:
@@ -347,6 +426,8 @@ def _population(
 def _empty_memory() -> MemoryDigest:
     return MemoryDigest(
         prior_review_count=0,
+        superseded_policy_quality_v1_review_count=0,
+        superseded_policy_quality_v2_review_count=0,
         invalid_legacy_review_count=0,
         verdict_counts=(),
         recurring_base_blockers=(),

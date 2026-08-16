@@ -701,6 +701,19 @@ def fetch_btc_index_history(
     return history
 
 
+def btc_index_history_cadence_ms(
+    history: tuple[tuple[int, Decimal], ...],
+    *,
+    horizon_minutes: int,
+) -> int:
+    """Return the validated dominant cadence for a bounded BTC index-history tail."""
+
+    if horizon_minutes <= 0:
+        raise ValueError("index-history horizon must be positive")
+    points = _validated_index_history_points(history)
+    return _history_cadence_ms(points, horizon_minutes=horizon_minutes)
+
+
 def fetch_btc_option_metadata(
     client: PublicRpcClient,
     *,

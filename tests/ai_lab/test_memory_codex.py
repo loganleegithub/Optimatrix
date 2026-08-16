@@ -16,6 +16,14 @@ from optimatrix.ai_lab.memory import (
     LEGACY_MEMORY_REVIEW_SCHEMA,
     LEGACY_SESSION_REVIEW_NAMESPACE,
     LEGACY_SESSION_REVIEW_SCHEMA,
+    POLICY_QUALITY_V1_MEMORY_NAMESPACE,
+    POLICY_QUALITY_V1_MEMORY_SCHEMA,
+    POLICY_QUALITY_V1_REVIEW_NAMESPACE,
+    POLICY_QUALITY_V1_REVIEW_SCHEMA,
+    POLICY_QUALITY_V2_MEMORY_NAMESPACE,
+    POLICY_QUALITY_V2_MEMORY_SCHEMA,
+    POLICY_QUALITY_V2_REVIEW_NAMESPACE,
+    POLICY_QUALITY_V2_REVIEW_SCHEMA,
     AiLabMemoryStore,
     MemoryDigest,
 )
@@ -46,6 +54,10 @@ def test_memory_is_append_once_and_tamper_evident(policy, tmp_path) -> None:
     assert store.verify() == {
         "status": "VALID_AI_LAB_MEMORY",
         "policy_quality_review_count": 1,
+        "superseded_policy_quality_v1_review_count": 0,
+        "superseded_policy_quality_v1_status": "SUPERSEDED_BY_PARTIAL_IDENTIFICATION_V2",
+        "superseded_policy_quality_v2_review_count": 0,
+        "superseded_policy_quality_v2_status": "SUPERSEDED_BY_RISK_QUALITY_V3",
         "legacy_session_review_count": 0,
         "legacy_policy_quality_status": "INVALID_FOR_POLICY_QUALITY",
         "codex_analysis_count": 0,
@@ -100,6 +112,97 @@ def test_legacy_terminal_positive_review_is_verified_but_excluded_from_policy_me
     assert digest.prior_review_count == 0
     assert dict(digest.verdict_counts) == {}
     assert legacy_review["review_id"] not in digest.fact_ids
+
+
+def test_v3_review_supersedes_exact_v1_v2_chain_without_rewriting_history(policy, tmp_path) -> None:
+    store = AiLabMemoryStore(tmp_path / "memory")
+    session_id = "2026-08-15T08:00:00Z"
+    v1_review = seal_object(
+        {
+            "schema_version": POLICY_QUALITY_V1_REVIEW_SCHEMA,
+            "session_id": session_id,
+            "verdict": "UNKNOWN",
+        },
+        id_field="review_id",
+        namespace=POLICY_QUALITY_V1_REVIEW_NAMESPACE,
+    )
+    v1_payload = seal_object(
+        {
+            "schema_version": POLICY_QUALITY_V1_MEMORY_SCHEMA,
+            "session_id": session_id,
+            "recorded_at": "2026-08-16T00:00:00Z",
+            "review": v1_review,
+        },
+        id_field="memory_review_id",
+        namespace=POLICY_QUALITY_V1_MEMORY_NAMESPACE,
+    )
+    store.reviews.append(v1_payload, identity_field="memory_review_id")
+    original_first_line = store.reviews.path.read_text(encoding="utf-8").splitlines()[0]
+    v2_review = seal_object(
+        {
+            "schema_version": POLICY_QUALITY_V2_REVIEW_SCHEMA,
+            "session_id": session_id,
+            "supersedes_review_id": v1_review["review_id"],
+            "verdict": "OBSERVED_RULE_TOO_CONSERVATIVE",
+        },
+        id_field="review_id",
+        namespace=POLICY_QUALITY_V2_REVIEW_NAMESPACE,
+    )
+    v2_payload = seal_object(
+        {
+            "schema_version": POLICY_QUALITY_V2_MEMORY_SCHEMA,
+            "session_id": session_id,
+            "recorded_at": "2026-08-16T00:01:00Z",
+            "supersedes_review_id": v1_review["review_id"],
+            "review": v2_review,
+        },
+        id_field="memory_review_id",
+        namespace=POLICY_QUALITY_V2_MEMORY_NAMESPACE,
+    )
+    store.reviews.append(v2_payload, identity_field="memory_review_id")
+    original_second_line = store.reviews.path.read_text(encoding="utf-8").splitlines()[1]
+    population_session_id, records, outcomes = _population(
+        policy,
+        implied_variance=Decimal("0.0011"),
+        realized_variance=Decimal("0.0010"),
+        delivery_price=Decimal("100000"),
+        path_mode="SAFE_ALL",
+    )
+    assert population_session_id == session_id
+    from optimatrix.ai_lab.session_review import review_session
+
+    unlinked = review_session(
+        session_id=session_id,
+        policy=policy,
+        records=records,
+        outcomes=outcomes,
+    )
+    with pytest.raises(ValidationError, match="exact prior Review"):
+        store.append_review(
+            unlinked,
+            recorded_at=unlinked.windows[-1].starts_at + timedelta(hours=1),
+        )
+    review = review_session(
+        session_id=session_id,
+        policy=policy,
+        records=records,
+        outcomes=outcomes,
+        supersedes_review_id=str(v2_review["review_id"]),
+    )
+    store.append_review(review, recorded_at=review.windows[-1].starts_at + timedelta(hours=1))
+
+    lines = store.reviews.path.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == original_first_line
+    assert lines[1] == original_second_line
+    assert len(lines) == 3
+    assert store.verify()["policy_quality_review_count"] == 1
+    assert store.verify()["superseded_policy_quality_v1_review_count"] == 1
+    assert store.verify()["superseded_policy_quality_v2_review_count"] == 1
+    digest = store.digest()
+    assert digest.prior_review_count == 1
+    assert digest.superseded_policy_quality_v1_review_count == 1
+    assert digest.superseded_policy_quality_v2_review_count == 1
+    assert digest.fact_ids == (review.identity,)
 
 
 def test_actual_challenger_experiment_requires_and_binds_eligible_reviews(policy, tmp_path) -> None:
@@ -446,7 +549,7 @@ def _actual_experiment_documents(policy, record):
 
 
 def _empty_memory() -> MemoryDigest:
-    return MemoryDigest(0, 0, (), (), (), (), ())
+    return MemoryDigest(0, 0, 0, 0, (), (), (), (), ())
 
 
 def _pair(command: tuple[str, ...], option: str) -> tuple[str, str]:

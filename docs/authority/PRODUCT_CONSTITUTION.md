@@ -72,24 +72,38 @@ count them.
 
 `AI Lab` is the product name for offline learning. It judges the quality of an already frozen
 ex-ante rule after an ended Session; it does not audit whether code merely followed that rule. The
-Lab compares every immutable Base Decision against one content-identified hindsight oracle over the
-complete aligned DecisionWindow denominator. The oracle requires the complete registered-cut IV/RV
-evolution, a continuous actual physical path, official settlement, decision-time full-amount cost,
-and frozen risk-quality conditions. Terminal profit alone is insufficient. Each known Window is
-classified as Base-captured opportunity, correct avoidance, missed opportunity, or over-risk
-selection; any missing required fact makes the Window and whole-Session rule-quality verdict
-`UNKNOWN`.
+Lab retains the complete aligned DecisionWindow denominator but adjudicates each Window
+independently against one content-identified hindsight oracle. The oracle requires that Window's
+decision-time full-amount four-leg cost and frozen risk-quality controls, plus sufficient
+post-Session realized-variance path, physical-path extrema, and official settlement evidence.
+Hindsight may test whether a record-level environment filter rejected a structure whose frozen
+Candidate-level controls were all satisfied. It may never waive a Candidate-level structure,
+minimum-credit, credit-to-payoff, net-Delta, fee, reference-loss, or payoff-cap blocker. A favorable
+realized outcome behind any such blocker is a diagnostic Policy reject, not an opportunity or a
+miss. Terminal profit alone is insufficient. A complete Window is classified as Base-captured
+opportunity, correct avoidance, missed opportunity, or over-risk selection. A Window missing one of
+its own required facts remains `UNKNOWN`; an unrelated missing Window cannot erase this known
+classification.
+
+Missingness is never assumed random. The Lab reports exact coverage and non-parametric
+identification bounds over the registered denominator. In particular, the observed miss count is a
+lower bound and observed misses plus unknown Windows is the upper bound; the same bound applies to
+over-risk selections and opportunity incidence. These are logical bounds, not confidence intervals
+or imputed estimates. A known miss or over-risk selection is valid adverse evidence even when the
+rest of the Session is incomplete. If complete Windows show no rule error but unknown Windows
+remain, the conclusion is only `PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR`, never a clean bill of
+health.
 
 Only a complete Session with zero misses and zero over-risk selections may say the rule was well
-calibrated for that Session. When Base missed, the Lab diagnoses exact blockers and negative signed
-threshold margins. When Base selected hindsight-ineligible risk, it diagnoses the IV/RV, path, or
-settlement failure. AI may act as an offline Challenger only after Base itself captured a
-hindsight-confirmed opportunity without Session evidence gaps or rule-quality errors, and aligned
-DecisionWindows, frozen Base and Challenger Policies, chronological or walk-forward evaluation,
-and actual future paths exist. A single Session cannot qualify Policy or establish Edge. AI cannot
-choose the denominator, rewrite a frozen Policy after Outcomes, promote itself, or receive account,
-capital, order, or execution permission. Promotion is a human decision under a separately
-authorized task.
+calibrated or that no opportunity existed for the whole Session. When Base missed, the Lab
+diagnoses exact blockers and negative signed threshold margins. When Base selected
+hindsight-ineligible risk, it diagnoses the IV/RV, path, or settlement failure. AI may act as an
+offline Challenger only after Base itself captured a hindsight-confirmed opportunity without
+Session evidence gaps or rule-quality errors, and aligned DecisionWindows, frozen Base and
+Challenger Policies, chronological or walk-forward evaluation, and actual future paths exist. A
+single Session cannot qualify Policy or establish Edge. AI cannot choose the denominator, rewrite a
+frozen Policy after Outcomes, promote itself, or receive account, capital, order, or execution
+permission. Promotion is a human decision under a separately authorized task.
 
 ## Capability acceptance and exogenous opportunity
 

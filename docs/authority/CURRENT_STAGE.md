@@ -1,12 +1,12 @@
 # Optimatrix Current Stage
 
-**Status:** D1 AI LAB — 2026-08-15 POLICY-QUALITY REVIEW SEALED UNKNOWN
+**Status:** D1 AI LAB — RISK-QUALITY V3 PARTIALLY IDENTIFIED THROUGH 2026-08-16
 
-**Current maturity:** `D1_AI_LAB_POLICY_QUALITY_REVIEW`
+**Current maturity:** `D1_AI_LAB_RISK_QUALITY_V3`
 
 **Product Authority:** `INVERSE_BTC_SHORT_VOL`
 
-**Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
+**Active Policy:** `src/optimatrix/data/btc-inverse-0dte-two-sided-short-vol.json`
 
 **Frozen Base Policy identity:**
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`
@@ -22,15 +22,14 @@
 **Public market calls:** `NONE_AUTHORIZED`
 
 **Stable ObservationLedger root:** `/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2`
-remains the authorized B3 runtime root outside this branch and unchanged; no task may open or mutate
-it
+remains the B3 runtime root outside AI Lab and may not be opened or mutated without a new exact task
 
 **Stable CaseJournal root:** `NONE`
 
 **Continuous runtime:** existing B3 launchd job remains unchanged; no process control or deployment
 
-**AI Lab stable durable root:** `NONE`; the sealed artifacts below are read-only until a later exact
-task
+**AI Lab stable durable root:** `/Users/logan/Library/Application Support/Optimatrix/ai-lab` is
+read-only until a later exact task
 
 **Codex CLI:** `NONE`
 
@@ -38,51 +37,83 @@ task
 
 **Orders, capital, and deployment:** `NONE`
 
+**Policy mutation / promotion:** `NONE`
+
 **Policy qualification / Edge claim:** `NONE`
 
 ## Implemented business state
 
-- AI Lab compares immutable Base actions with a fixed post-Session IV/RV, path, cost, and settlement
-  Oracle. Terminal profit alone is not an opportunity. Complete Windows are classified as captured,
-  correctly avoided, missed, or over-risk; missing evidence is `UNKNOWN`.
-- Deterministic reports are written before optional Codex; legacy terminal-positive Reviews remain
-  verified but `INVALID_FOR_POLICY_QUALITY` and cannot enter current memory or Challenger gates.
-- Final implementation gate passed `274` tests, `52` subtests, and `8/8` scenarios plus formatting,
-  Ruff, mypy, compilation, Authority, and diff gates.
+- AI Lab V3 keeps the complete 96-Window denominator but adjudicates each Window independently.
+  Missing facts remain `UNKNOWN` and widen logical identification bounds without erasing known
+  classifications.
+- A hindsight opportunity must have zero frozen Candidate-level Policy blockers before IV/RV,
+  continuous path, and fee-after settlement can establish favorable hindsight economics. A
+  profitable structure behind a minimum-credit, credit-to-payoff, net-Delta, or other Candidate
+  blocker is `HINDSIGHT_POSITIVE_POLICY_REJECT`, never a missed opportunity.
+- Official post-Session index history may establish future sampled variance. It cannot reconstruct
+  an absent decision-time option book, rewrite a Base Decision, prove executable liquidity, or
+  create a fill or account PnL.
+- Policy-quality memory is append-only. Each successor names the exact predecessor, only one
+  terminal V3 Review per Session is current, and V1/V2 bytes remain verifiable but excluded from
+  current verdict memory and Challenger gates.
+- Deterministic JSON/Markdown reports are trader-readable and precede any optional Codex analysis.
+  No Codex analysis was invoked for either current Session.
+- Repository gate passed `282` tests, `52` subtests, and `8/8` business scenarios plus formatting,
+  Ruff, mypy, compilation, Authority, compatibility, and diff checks.
 
 ## 2026-08-15 observed result
 
-- Current Review `sha256:01720071fe5c14ed546bf1571f0dd4c43d29fba2da784f3924e97994ec9a737c`
-  and report `sha256:0a564a7d4236318dca6178024016483d04b4c5644eea15b11307776d6aef11c9`
-  were appended once for Session `2026-08-15T08:00:00Z`.
-- Verdict is `UNKNOWN`: expected `96`, recorded `81` Decisions and `81` Outcomes, observed `64`
-  healthy registered-cut IV/RV curve points, and missed `32` curve points. The missing curve points
-  are `15` absent DecisionRecords plus `17` Base UNKNOWN records without decision-time observations.
-- Because whole-Session IV/RV completeness is a prerequisite, `auditable_window_count=0` and all
-  `96` Windows are `UNKNOWN`. Captured, correctly avoided, missed, and over-risk counts are all zero;
-  these zeros mean unclassified, not that each business outcome was observed as absent.
-- Exact evidence reasons are `SESSION_IV_RV_CURVE_INCOMPLETE=96`,
-  `WINDOW_IV_RV_CURVE_POINT_MISSING=32`, `DECISION_RECORD_MISSING=15`,
-  `WINDOW_OUTCOME_MISSING=15`, `BASE_DECISION_UNKNOWN=17`, and
-  `DECISION_TIME_OBSERVATION_MISSING=17`.
-- The prior `374` terminal-positive structure-Window findings remain legacy diagnostics only. They
-  do not prove a missed opportunity and were not imported into the corrected four-quadrant result.
-- Memory verification is `VALID_AI_LAB_MEMORY`: one current Policy-quality Review, one legacy
-  Session Review, zero current or legacy Codex analyses, and legacy status
-  `INVALID_FOR_POLICY_QUALITY`.
-- Trader artifacts are:
-  `/Users/logan/Library/Application Support/Optimatrix/ai-lab/reports/20260815T080000Z/01720071fe5c14ed/policy-quality-review.json`
-  and
-  `/Users/logan/Library/Application Support/Optimatrix/ai-lab/reports/20260815T080000Z/01720071fe5c14ed/policy-quality-review.md`.
-- Focused post-run `tests/ai_lab` plus Authority tests passed. No Codex, market call, private fact,
-  process control, Policy change, or deployment occurred.
-- `B3_PIPELINE_CAPABILITY_ACCEPTED` remains prior mechanism evidence;
-  `natural_chain=NOT_YET_OBSERVED`,
-  `policy_reachability=COMPLETED_SESSION_LOCAL_RESPONSIBILITY_MEASURED`,
-  `policy_qualification=NONE`, and `edge_claim=NONE` remain unchanged.
+- Official evidence
+  `sha256:5605536e56e3c726d2cb3f9446c654449d3bfceb9d612078f61ea74ba5290444`
+  contains `2879` one-minute `btc_usd` points, zero gaps, and complete sampled path coverage.
+- Terminal V3 Review
+  `sha256:e301d06fdaf77de7ea5a7ebc38f20cfbfccdb65254e674d3a73b4b94996dcca0`
+  and report `sha256:bba29ea1883ee6bef8721913d33ce47f2f461cc9ecbd4d8b2e47ad9d83c2e850`
+  supersede V2 Review
+  `sha256:573144dd67bf88b270252463094c2a0937b526961265978ff018b23e07f33167`
+  without changing any earlier event, evidence, or report byte.
+- Exact population is `96`: `64` auditable and `32` unknown. Known classifications are `0`
+  captured, `64` correct avoidance, `0` missed, and `0` over-risk. Verdict is
+  `PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR`; miss, over-risk, and opportunity rates are each bounded
+  by `[0/96, 32/96]`.
+- The V2 labels for `10` missed Windows are retracted. Their `245` favorable structures all failed
+  `BOUNDARY_NET_CREDIT_TOO_SMALL` and `CREDIT_TO_PAYOFF_CAP_TOO_SMALL`; `11` also failed
+  `NET_DELTA_TOO_DIRECTIONAL`. Maximum boundary credit was `$6.8253337875` against the frozen `$10`
+  minimum, and maximum credit/payoff-cap ratio was `5.0332224%` against the frozen `7%` minimum.
+  These are diagnostic Policy rejects, not missed orders.
+- Trader report:
+  `/Users/logan/Library/Application Support/Optimatrix/ai-lab/reports/20260815T080000Z/e301d06fdaf77de7/policy-quality-review.md`.
 
-**Primary blocker:** `INCOMPLETE_SESSION_IV_RV_CURVE_PREVENTS_POLICY_QUALITY_JUDGMENT` — this
-historical Session cannot prove that Base neither missed opportunities nor took undue risk. Missing
-registered cuts may not be backfilled. A later ended Session must supply the complete pre-registered
-Decision/Observation curve and continuous Outcomes before AI Lab can produce a known four-quadrant
-verdict or unlock Challenger research.
+## 2026-08-16 observed result
+
+- Official evidence
+  `sha256:40b798a527b8537799385cf836fc40200b542990d27f45da2f0e994facdf0f7e`
+  contains `2879` one-minute `btc_usd` points, zero gaps, and complete sampled path coverage.
+- Terminal V3 Review
+  `sha256:69419e565c97719e9d30aea409e8bd80b50656dac359673b11927d26c78d5228`
+  and report `sha256:d9a1713f47b149d1a3df5837e2f9e4ccdfe7492c7ac13d1910101aeb09b011ee`
+  are the first Policy-quality facts for the Session.
+- Exact population is `96`: all DecisionRecords and WindowOutcomes exist, but only `64` have a
+  decision-time observation and `32` remain unknown. Known classifications are `0` captured, `64`
+  correct avoidance, `0` missed, and `0` over-risk. Verdict is
+  `PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR`; miss, over-risk, and opportunity rates are each bounded
+  by `[0/96, 32/96]`.
+- The hindsight funnel contains `546` legal structures, `171` complete-amount priceable structures,
+  and `0` structures surviving the fixed hard-control layer. All `171` failed Combo fee-burden
+  control and `108` also failed boundary-reference-loss control. There are `0` Policy-eligible
+  opportunities and `0` favorable Policy-reject diagnostics.
+- Trader report:
+  `/Users/logan/Library/Application Support/Optimatrix/ai-lab/reports/20260816T080000Z/69419e565c97719e/policy-quality-review.md`.
+
+Memory verification is `VALID_AI_LAB_MEMORY`: two current V3 Reviews, one superseded V1 Review, one
+superseded V2 Review, one invalid-for-Policy-quality legacy Session Review, and zero Codex analyses.
+
+`B3_PIPELINE_CAPABILITY_ACCEPTED` remains prior mechanism evidence;
+`natural_chain=NOT_YET_OBSERVED`,
+`policy_reachability=COMPLETED_SESSION_LOCAL_RESPONSIBILITY_MEASURED`,
+`policy_qualification=NONE`, and `edge_claim=NONE` remain unchanged.
+
+**Primary blocker:** `DECISION_TIME_OBSERVATION_COVERAGE_INCOMPLETE` — each reviewed Session still has
+`32/96` unknown Windows. Post-Session public history can repair future RV evidence but cannot recreate
+the absent causal option books, so neither Session proves that the full day contained no opportunity
+or that the Policy is well calibrated.

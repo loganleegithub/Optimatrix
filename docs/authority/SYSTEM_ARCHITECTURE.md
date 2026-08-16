@@ -140,12 +140,27 @@ boundaries authorize no database, bus, schema registry, replay service, retentio
 or dual-write protocol.
 
 `AI Lab` is part of the same Python modular monolith but owns a separate read-only/offline path. It
-may read a caller-selected completed Session from `ObservationLedger`, derive content-sealed
-Policy-quality reviews, and write only to its distinct Lab root. Its deterministic adjudicator
-compares immutable Base actions against the complete post-Session IV/RV, physical-path, cost, and
-settlement oracle; terminal payoff is not a verdict. The deterministic trader report is projected
-before an optional one-shot Codex CLI process receives a bounded fact bundle. Codex may append only
-a separate schema-validated explanation and cannot block or alter the Review. Retired terminal-
-positive reviews remain in a separate verified legacy chain and are excluded from current memory.
-The Lab never writes Ledger/Journal facts and has no runtime, market-call, account, order, Policy-
-mutation, deployment, or promotion path.
+may read a caller-selected completed Session from `ObservationLedger`, combine it with
+content-sealed post-Session public evidence, derive content-sealed Policy-quality reviews, and write
+only to its distinct Lab root. Its deterministic adjudicator compares immutable Base actions
+Window by Window against the post-Session IV/RV, physical-path, cost, and settlement oracle;
+terminal payoff is not a verdict. Missing Windows remain in the denominator and widen explicit
+logical bounds without erasing complete Windows.
+
+A separately authorized bounded command may fetch official historical public evidence after a
+Session ends. The command must fix the production host and public-method allowlist, bind Deribit
+response time, source method, requested range, raw points, cadence, coverage, and exact gaps, and
+append only to the Lab root. It cannot write or repair an `ObservationLedger`, reconstruct a
+decision-time option book, or turn hindsight into a causal Base Decision. Standard public APIs may
+backfill index/RV, trade/mark, volatility-index, and delivery facts; only a previously captured
+decision-time full-amount component book can support the ex-ante structure and cost side of a
+Window classification. If official history lacks the required scope or cadence, the affected fact
+stays `UNKNOWN`; a later exact task may authorize one indexed external raw-data source without
+changing that evidence boundary.
+
+The deterministic trader report is projected before an optional one-shot Codex CLI process
+receives a bounded fact bundle. Codex may append only a separate schema-validated explanation and
+cannot block or alter the Review. Superseded Policy-quality Reviews and retired terminal-positive
+reviews remain in verified append-only history and are excluded from current verdict memory and
+Challenger gates. The Lab never writes Ledger/Journal facts and has no continuous runtime, private
+market-data, account, order, Policy-mutation, deployment, or promotion path.

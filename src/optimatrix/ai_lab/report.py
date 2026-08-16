@@ -15,11 +15,16 @@ from optimatrix.ai_lab.canonical import (
     content_id,
     isolated_path,
 )
-from optimatrix.ai_lab.memory import LEGACY_POLICY_QUALITY_STATUS, MemoryDigest
-from optimatrix.ai_lab.session_review import SessionReview, SessionVerdict
+from optimatrix.ai_lab.memory import (
+    LEGACY_POLICY_QUALITY_STATUS,
+    POLICY_QUALITY_V1_STATUS,
+    POLICY_QUALITY_V2_STATUS,
+    MemoryDigest,
+)
+from optimatrix.ai_lab.session_review import HindsightFinding, SessionReview, SessionVerdict
 
-REPORT_SCHEMA = "optimatrix.ai-lab.policy-quality-report.v1"
-REPORT_NAMESPACE = "OptimatrixAiLabPolicyQualityReportV1"
+REPORT_SCHEMA = "optimatrix.ai-lab.policy-quality-report.v3"
+REPORT_NAMESPACE = "OptimatrixAiLabPolicyQualityReportV3"
 ANALYSIS_REPORT_SCHEMA = "optimatrix.ai-lab.codex-analysis-report.v1"
 ANALYSIS_REPORT_NAMESPACE = "OptimatrixAiLabCodexAnalysisReportV1"
 
@@ -90,6 +95,17 @@ def render_session_report(*, review: SessionReview, memory: MemoryDigest) -> str
         f"| Base 选择过度风险 | {review.over_risk_window_count} |",
         f"| 证据不足 | {review.unknown_window_count} |",
         "",
+        "### 部分识别区间",
+        "",
+        "缺失不按随机样本处理；下面是注册分母上的逻辑上下界，不是置信区间。",
+        "",
+        "| 指标 | 下界 | 上界 |",
+        "|---|---:|---:|",
+        f"| 可审判覆盖率 | {review.coverage_fraction} | {review.coverage_fraction} |",
+        f"| 漏掉机会率 | {review.miss_rate_lower_bound} | {review.miss_rate_upper_bound} |",
+        f"| 过度冒险率 | {review.over_risk_rate_lower_bound} | {review.over_risk_rate_upper_bound} |",
+        f"| 机会出现率 | {review.opportunity_rate_lower_bound} | {review.opportunity_rate_upper_bound} |",
+        "",
         "Challenger 比较："
         + (
             "`ELIGIBLE`（只允许另行冻结实验，不代表规则长期更好）"
@@ -101,11 +117,16 @@ def render_session_report(*, review: SessionReview, memory: MemoryDigest) -> str
         "",
         "事前规则与 Base DecisionRecord 保持原样；AI Lab 不再检查规则有没有照着执行。"
         "Session 结束后，每个 Window 只有同时满足以下条件才算事后短波机会：当时四腿"
-        "能够按完整数量计价且通过成本和硬风险上限；入场 IV proxy 高于随后实际 RV proxy；"
-        "连续路径没有穿任何短腿；官方结算后的费用后结果为正。最终盈利只是其中一项，"
-        "不能单独证明漏掉机会。",
+        "能够按完整数量计价，并通过全部冻结的 Candidate Policy 门槛（包括结构、净 Delta、"
+        "最低净权利金、权利金/最大赔付比、费用和风险上限）；入场 IV proxy 高于随后实际 "
+        "RV proxy；连续路径没有穿任何短腿；官方结算后的费用后结果为正。事后信息只负责"
+        "证明风险是否兑现，不能撤销当时的准入风控。最终盈利只是其中一项，不能单独证明"
+        "漏掉机会。",
         "",
         f"Oracle identity：`{review.opportunity_definition_id}`",
+        "",
+        "RV 路径可以来自完整注册切点尾部，或来自覆盖该 Window 至到期的密封 Deribit "
+        "官方指数历史；缺失的决策时盘口仍然不能回补。",
         "",
         "## 分母和证据覆盖",
         "",
@@ -118,10 +139,36 @@ def render_session_report(*, review: SessionReview, memory: MemoryDigest) -> str
         f"| 可完成四象限判定 Window | {review.auditable_window_count} |",
         f"| 合法四腿结构 | {review.legal_structure_count} |",
         f"| 完整数量可报价结构 | {review.price_evaluable_count} |",
-        f"| 保留费用与硬风险约束后的控制结构 | {review.control_candidate_count} |",
-        f"| 同时通过 IV/RV、路径和结算的结构 | {review.hindsight_opportunity_structure_count} |",
+        f"| 可完成事后经济判定的控制结构 | {review.control_candidate_count} |",
+        f"| 全部 Policy 门槛通过且事后成立的机会 | {review.hindsight_opportunity_structure_count} |",
+        f"| 事后盈利但当时 Policy 明确拒绝（诊断项） | {review.hindsight_positive_policy_reject_structure_count} |",
         "",
     ]
+    if review.official_index_evidence is not None:
+        evidence = review.official_index_evidence
+        lines.extend(
+            [
+                "### Deribit 官方事后指数证据",
+                "",
+                f"Evidence identity：`{evidence.identity}`",
+                "",
+                f"点数 `{len(evidence.points)}`，主 cadence `{evidence.cadence_ms}ms`，"
+                f"完整 Session 覆盖 `{evidence.session_coverage_complete}`。",
+                "",
+            ]
+        )
+        if evidence.coverage_gaps:
+            lines.extend(
+                [
+                    "| Gap | 开始 ms | 结束 ms |",
+                    "|---|---:|---:|",
+                    *[
+                        f"| `{gap.reason}` | {gap.starts_at_ms} | {gap.ends_at_ms} |"
+                        for gap in evidence.coverage_gaps
+                    ],
+                    "",
+                ]
+            )
     if review.evidence_reason_counts:
         lines.extend(
             [
@@ -138,6 +185,7 @@ def render_session_report(*, review: SessionReview, memory: MemoryDigest) -> str
         )
     lines.extend(_curve_section(review))
     lines.extend(_avoidance_section(review))
+    lines.extend(_policy_reject_section(review))
     lines.extend(_miss_section(review))
     lines.extend(_over_risk_section(review))
     lines.extend(_window_table(review))
@@ -151,6 +199,8 @@ def render_session_report(*, review: SessionReview, memory: MemoryDigest) -> str
             "## 证据边界",
             "",
             review.evidence_boundary,
+            "",
+            f"Supersedes Review: `{review.supersedes_review_id or 'NONE'}`",
             "",
             f"Review identity: `{review.identity}`",
             "",
@@ -177,8 +227,9 @@ def _curve_section(review: SessionReview) -> list[str]:
     lines.extend(
         [
             "",
-            "这条曲线是事后审计证据；它不能倒灌进原 DecisionRecord。少一个预登记切点，"
-            "整个 Session 的‘规则很好’结论就保持 UNKNOWN。",
+            "这条曲线保留决策时 IV/RV 事实，不能倒灌或补写原 DecisionRecord。缺一个切点"
+            "只让该 Window 的入场侧未知；若未来 RV 有完整官方路径，其他完整 Window 仍可"
+            "审判。整日‘规则很好/全天无机会’仍要求 96/96 完整。",
             "",
         ]
     )
@@ -236,8 +287,9 @@ def _avoidance_section(review: SessionReview) -> list[str]:
     lines = [
         "## 为什么这些 Window 应该避开",
         "",
-        "下面统计所有通过 decision-time 成本与硬风险控制的结构，最终没有成为事后机会的"
-        "确切原因；同一结构可以同时触发多项。",
+        "下面统计可完成事后判定的结构在 IV/RV、连续路径或结算经济上未成立的原因；"
+        "同一结构可以同时触发多项。另有一些结构事后赚钱但当时没有通过冻结 Policy，"
+        "它们在下一节单列为诊断样本，不计为漏掉机会。",
         "",
         "| 事后否决原因 | 结构-Window 次数 |",
         "|---|---:|",
@@ -250,6 +302,64 @@ def _avoidance_section(review: SessionReview) -> list[str]:
     else:
         lines.append("| `NO_CONTROL_CANDIDATE_AFTER_HARD_CONSTRAINTS` | 0 |")
     lines.append("")
+    return lines
+
+
+def _policy_reject_section(review: SessionReview) -> list[str]:
+    if not review.policy_rejects:
+        return []
+    windows = {item.decision_window_id: item for item in review.windows}
+    grouped: dict[str, list[HindsightFinding]] = {}
+    for finding in review.policy_rejects:
+        grouped.setdefault(finding.decision_window_id, []).append(finding)
+    ordered = sorted(grouped.items(), key=lambda item: windows[item[0]].starts_at)
+    lines = [
+        "## 事后赚钱、但当时就不合格的结构",
+        "",
+        "这些结构在收盘后看确实赚钱，IV/RV 和路径也没有出事；但它们在下单前就没有通过"
+        "冻结的 Candidate Policy。因此它们是用来检验风控阈值是否值得继续研究的样本，"
+        "不是 Base 漏掉的订单，也不进入漏单率。",
+        "",
+        "| UTC | 结构数 | 最大费用后 USD | 最大净权利金 USD | 最大权利金/赔付上限 | 当时未通过的门槛 |",
+        "|---|---:|---:|---:|---:|---|",
+    ]
+    for window_id, findings in ordered:
+        blocker_counts = Counter(
+            blocker for finding in findings for blocker in finding.candidate_policy_blockers
+        )
+        blockers = "、".join(
+            f"{code}={count}"
+            for code, count in sorted(blocker_counts.items(), key=lambda item: (-item[1], item[0]))
+        )
+        maximum_ratio = max(
+            finding.boundary_net_credit_usd / finding.maximum_contractual_payoff_cap_usd
+            for finding in findings
+        )
+        lines.append(
+            f"| {windows[window_id].starts_at.strftime('%H:%M')} | {len(findings)} | "
+            f"{max(item.settlement_reference_result_usd for item in findings)} | "
+            f"{max(item.boundary_net_credit_usd for item in findings)} | {maximum_ratio} | "
+            f"{_cell(blockers)} |"
+        )
+    all_blockers = Counter(
+        blocker
+        for finding in review.policy_rejects
+        for blocker in finding.candidate_policy_blockers
+    )
+    lines.extend(
+        [
+            "",
+            "全 Session 合计："
+            + "、".join(
+                f"`{code}`={count}"
+                for code, count in sorted(
+                    all_blockers.items(), key=lambda item: (-item[1], item[0])
+                )
+            )
+            + "。这里的计数是结构次数，不是漏单次数。",
+            "",
+        ]
+    )
     return lines
 
 
@@ -281,13 +391,14 @@ def _window_table(review: SessionReview) -> list[str]:
     lines = [
         "## 每个 Window 的规则质量对照",
         "",
-        "| UTC | 证据 | Base | 事后分类 | 合法 / 可报价 / 控制 / 机会 | 原因 |",
-        "|---|---|---|---|---:|---|",
+        "| UTC | 证据 | RV 路径 | Base | 事后分类 | 合法 / 可报价 / 控制 / 机会 / Policy拒绝 | 原因 |",
+        "|---|---|---|---|---|---:|---|",
     ]
     for item in review.windows:
         funnel = (
             f"{item.legal_structure_count} / {item.price_evaluable_count} / "
-            f"{item.control_candidate_count} / {item.hindsight_opportunity_count}"
+            f"{item.control_candidate_count} / {item.hindsight_opportunity_count} / "
+            f"{item.hindsight_positive_policy_reject_count}"
         )
         hindsight_rejections = tuple(
             f"{reason}={count}" for reason, count in item.hindsight_rejection_counts
@@ -303,6 +414,7 @@ def _window_table(review: SessionReview) -> list[str]:
         )
         lines.append(
             f"| {item.starts_at.strftime('%H:%M')} | {item.evidence_status.value} | "
+            f"{item.hindsight_rv_source.value if item.hindsight_rv_source is not None else '—'} | "
             f"{item.base_result} | {item.classification.value} | {funnel} | {_cell(reasons)} |"
         )
     lines.append("")
@@ -314,6 +426,10 @@ def _memory_section(memory: MemoryDigest) -> list[str]:
         "## 累积记忆",
         "",
         f"当前 Session 前已有 `{memory.prior_review_count}` 个有效 Policy-quality Review。",
+        f"另有 `{memory.superseded_policy_quality_v1_review_count}` 个 V1 全有或全无 Review，"
+        f"统一标记 `{POLICY_QUALITY_V1_STATUS}`。",
+        f"另有 `{memory.superseded_policy_quality_v2_review_count}` 个 V2 撤销 Candidate Policy "
+        f"门槛的 Review，统一标记 `{POLICY_QUALITY_V2_STATUS}`。",
         f"另有 `{memory.invalid_legacy_review_count}` 个旧终值筛选 Review，统一标记 "
         f"`{LEGACY_POLICY_QUALITY_STATUS}`，不进入规则质量统计或 Codex 事实。",
         "",
@@ -402,6 +518,12 @@ def _write_idempotent(path: Path, payload: bytes) -> None:
 def _verdict_label(verdict: SessionVerdict) -> str:
     return {
         SessionVerdict.UNKNOWN: "证据不足，不能评价规则",
+        SessionVerdict.PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR: (
+            "部分窗口未见规则错误，但整日仍未识别完整"
+        ),
+        SessionVerdict.OBSERVED_RULE_TOO_CONSERVATIVE: "已观察到规则漏掉机会",
+        SessionVerdict.OBSERVED_RULE_TOO_AGGRESSIVE: "已观察到规则承担不合格风险",
+        SessionVerdict.OBSERVED_MIXED_RULE_ERROR: "已同时观察到漏单和冒险",
         SessionVerdict.NO_OPPORTUNITY_CORRECTLY_AVOIDED: "本 Session 没有机会，Base 避险正确",
         SessionVerdict.RULE_WELL_CALIBRATED: "本 Session 的规则取舍很好",
         SessionVerdict.RULE_TOO_CONSERVATIVE: "规则偏保守，漏掉了机会",

@@ -17,6 +17,11 @@ from optimatrix.ai_lab.canonical import (
 from optimatrix.ai_lab.codex_analysis import CodexCliAnalyzer
 from optimatrix.ai_lab.demo import run_demo
 from optimatrix.ai_lab.evaluation import ExperimentRunner
+from optimatrix.ai_lab.hindsight_evidence import (
+    fetch_official_index_evidence,
+    load_official_index_evidence,
+    write_official_index_evidence,
+)
 from optimatrix.ai_lab.memory import AiLabMemoryStore
 from optimatrix.ai_lab.models import (
     DecisionWindowExport,
@@ -90,6 +95,18 @@ def _parser() -> argparse.ArgumentParser:
     review.add_argument("--with-codex", action="store_true")
     review.add_argument("--codex-binary", default="codex")
     review.add_argument("--recorded-at", help="canonical UTC; defaults to local audit time")
+    review.add_argument(
+        "--official-index-evidence",
+        type=Path,
+        help="content-sealed Deribit official index evidence already stored under --lab-root",
+    )
+
+    fetch_evidence = subcommands.add_parser(
+        "fetch-official-evidence",
+        help="fetch one ended Session's bounded public Deribit index history",
+    )
+    fetch_evidence.add_argument("--session-id", required=True)
+    fetch_evidence.add_argument("--lab-root", type=Path, default=AI_LAB_DURABLE_ROOT)
 
     verify_memory = subcommands.add_parser(
         "verify-memory",
@@ -174,15 +191,37 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "demo":
             _print(run_demo(args.output))
             return 0
+        if args.command == "fetch-official-evidence":
+            evidence = fetch_official_index_evidence(session_id=args.session_id)
+            path = write_official_index_evidence(evidence, root=args.lab_root)
+            _print(
+                {
+                    "status": "AI_LAB_OFFICIAL_INDEX_EVIDENCE_RECORDED",
+                    "session_id": evidence.session_id,
+                    "evidence_id": evidence.identity,
+                    "point_count": len(evidence.points),
+                    "cadence_ms": evidence.cadence_ms,
+                    "session_coverage_complete": evidence.session_coverage_complete,
+                    "coverage_gap_count": len(evidence.coverage_gaps),
+                    "path": str(path),
+                }
+            )
+            return 0
         if args.command == "review-session":
             _require_separate_roots(args.ledger_root, args.lab_root)
             policy = load_btc_short_vol_policy(args.policy)
+            memory = AiLabMemoryStore(args.lab_root)
+            official_evidence = None
+            if args.official_index_evidence is not None:
+                _require_evidence_in_lab_root(args.official_index_evidence, args.lab_root)
+                official_evidence = load_official_index_evidence(args.official_index_evidence)
             review = review_ledger_session(
                 ledger_root=args.ledger_root,
                 session_id=args.session_id,
                 policy=policy,
+                official_index_evidence=official_evidence,
+                supersedes_review_id=memory.review_predecessor_id(session_id=args.session_id),
             )
-            memory = AiLabMemoryStore(args.lab_root)
             prior_memory = memory.digest(before_session_id=review.session_id)
             recorded_at = (
                 parse_utc(args.recorded_at, "recorded_at")
@@ -205,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
             analysis_markdown_path = None
             if args.with_codex and review.verdict not in {
                 SessionVerdict.UNKNOWN,
+                SessionVerdict.PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR,
                 SessionVerdict.NO_OPPORTUNITY_CORRECTLY_AVOIDED,
             }:
                 try:
@@ -232,6 +272,33 @@ def main(argv: list[str] | None = None) -> int:
                     "verdict": review.verdict.value,
                     "verdict_reason": review.verdict_reason,
                     "challenger_comparison_eligible": (review.challenger_comparison_eligible),
+                    "auditable_window_count": review.auditable_window_count,
+                    "unknown_window_count": review.unknown_window_count,
+                    "coverage_fraction": str(review.coverage_fraction),
+                    "miss_rate_bounds": [
+                        str(review.miss_rate_lower_bound),
+                        str(review.miss_rate_upper_bound),
+                    ],
+                    "over_risk_rate_bounds": [
+                        str(review.over_risk_rate_lower_bound),
+                        str(review.over_risk_rate_upper_bound),
+                    ],
+                    "opportunity_rate_bounds": [
+                        str(review.opportunity_rate_lower_bound),
+                        str(review.opportunity_rate_upper_bound),
+                    ],
+                    "hindsight_opportunity_structure_count": (
+                        review.hindsight_opportunity_structure_count
+                    ),
+                    "hindsight_positive_policy_reject_structure_count": (
+                        review.hindsight_positive_policy_reject_structure_count
+                    ),
+                    "official_index_evidence_id": (
+                        review.official_index_evidence.identity
+                        if review.official_index_evidence is not None
+                        else None
+                    ),
+                    "supersedes_review_id": review.supersedes_review_id,
                     "review_appended": review_appended,
                     "review_event_id": review_event["event_id"],
                     "codex_status": codex_status,
@@ -267,3 +334,10 @@ def _require_separate_roots(ledger_root: Path, lab_root: Path) -> None:
         raise ValidationError(
             "AI Lab memory/report root must be disjoint from the read-only ObservationLedger root"
         )
+
+
+def _require_evidence_in_lab_root(path: Path, lab_root: Path) -> None:
+    evidence = path.expanduser().resolve()
+    root = lab_root.expanduser().resolve()
+    if not evidence.is_relative_to(root):
+        raise ValidationError("official index evidence must already be stored under --lab-root")

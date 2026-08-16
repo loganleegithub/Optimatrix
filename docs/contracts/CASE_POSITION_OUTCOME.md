@@ -204,39 +204,58 @@ economically evaluable after a Gap while becoming ineligible for continuous-path
 is:
 
 ```text
-complete Window/Decision/Outcome and IV/RV curve evidence?
-→ fixed hindsight short-vol Oracle over every frozen decision-time four-leg control
+fix the full registered Window denominator
+→ evaluate each Window's own Decision/Outcome/entry-IV/future-path/settlement evidence
+→ complete Window: fixed hindsight Oracle over its frozen decision-time four-leg controls
 → Base action versus Oracle: captured / correct avoid / missed / over-risk
-→ any missing fact: UNKNOWN and stop
+→ incomplete Window: that Window alone is UNKNOWN
+→ report exact coverage and logical lower/upper bounds without missing-at-random assumptions
+→ observed miss or over-risk: quantitative diagnosis, no Challenger
+→ incomplete denominator with no known error: partially identified, no clean conclusion
 → complete zero opportunity plus zero Base risk: correct no-opportunity and stop
-→ miss or over-risk: quantitative diagnosis, no Challenger
-→ Base captured opportunity with zero miss and zero over-risk: Challenger may become eligible
+→ complete Base capture with zero miss and zero over-risk: Challenger may become eligible
 ```
 
 The hindsight Oracle uses only decision-time observations to establish legal four-leg geometry,
-full-amount component-book price, standard Combo cost, USD contractual-payoff cap, and reference-
-loss controls. After the Session, a structure is an opportunity only when entry implied-variance
-proxy strictly exceeds the conservative hindsight realized-variance proxy, the known continuous
-physical path never touches either short strike, and official-settlement fee-after economics are
-positive. Hindsight realized variance is the greater of complete registered-cut future log-return
-variance and the subsequent trailing matched-horizon RV-proxy curve maximum. Terminal profit,
-short-strike survival, or IV-over-RV alone is insufficient.
+full-amount component-book price, standard Combo cost, net Delta, minimum boundary credit,
+credit-to-payoff ratio, USD contractual-payoff cap, reference-loss, and fee controls. Every frozen
+Candidate-level blocker must be empty. Only then can a structure become an opportunity when entry
+implied-variance proxy strictly exceeds the conservative hindsight realized-variance proxy, the
+known continuous physical path never touches either short strike, and official-settlement fee-after
+economics are positive. The future variance path may come from either complete registered cuts or a
+content-sealed official BTC index-history series whose cadence and coverage reach from that Window
+to expiry. Hindsight realized variance is the greater of the complete chosen path's sampled forward
+log-return variance and every available subsequent trailing matched-horizon RV-proxy observation;
+missing optional local curve points do not invalidate a complete official path, while a gap in the
+chosen path does. Terminal profit, short-strike survival, or IV-over-RV alone is insufficient.
 
-The Oracle removes named strategy filters only to judge whether their combined rejection was good;
-it never changes the immutable Base Decision. A Base Candidate is captured only when its exact
-selected structure passes the Oracle. A non-Candidate with at least one Oracle opportunity is a
-miss. A Base Candidate whose selected structure fails IV/RV, path, or settlement quality is
-over-risk even if another structure would have succeeded. This is post-Session public Shadow
-Policy-quality evidence, not a fill, realized PnL, executable route, or proof that hindsight was
-available at the Decision.
+The Oracle may test a named record-level environment filter only after all Candidate-level controls
+pass; it never changes the immutable Base Decision or retrospectively relaxes risk quality. A
+structure that satisfies the hindsight economics but carries any frozen Candidate Policy blocker is
+stored only as `HINDSIGHT_POSITIVE_POLICY_REJECT`; it is not an opportunity and cannot create a miss.
+A Base Candidate is captured only when its exact selected structure passes the Oracle. A
+non-Candidate with at least one Policy-eligible Oracle opportunity is a miss. A Base Candidate whose
+selected structure fails IV/RV, path, or settlement quality is over-risk even if another structure
+would have succeeded. This is post-Session public Shadow Policy-quality evidence, not a fill,
+realized PnL, executable route, or proof that hindsight was available at the Decision.
 
-The Lab stores content-sealed Policy-quality reviews and optional structured hypotheses in a
-separate append-only research root. A bounded Codex CLI invocation may explain only supplied fact
-identities; it cannot replace the deterministic verdict. The deterministic trader report is written
-before optional Codex analysis, so analysis failure cannot suppress the Review. Retired terminal-
-positive Session reviews remain tamper-evident but are invalid for Policy quality and are excluded
-from verdict memory and Challenger eligibility. Accumulated memory means recurring evidence,
-refutations, and testable hypotheses across Sessions, not self-modifying Policy or autonomous code.
+One complete adverse Window proves at least one observed rule error even if other Windows are
+unknown, but the unknown population may still contain errors of the other kind. For an expected
+denominator `N`, known count `K`, and unknown count `U`, each adverse rate is bounded by
+`K/N <= rate <= (K+U)/N`. The same construction bounds opportunity incidence using captured plus
+missed Windows as the known opportunity count. The Lab never narrows these bounds with an assumed
+missing-data distribution. Only `U=0` permits a whole-Session statement that there were no misses,
+no over-risk selections, or no opportunities.
+
+The Lab stores content-sealed official hindsight evidence, Policy-quality reviews, and optional
+structured hypotheses in a separate append-only research root. A corrected Review supersedes but
+never edits or deletes an earlier sealed Review for the same Session. A bounded Codex CLI invocation
+may explain only supplied fact identities; it cannot replace the deterministic verdict. The
+deterministic trader report is written before optional Codex analysis, so analysis failure cannot
+suppress the Review. Superseded Policy-quality Reviews and retired terminal-positive Session
+reviews remain tamper-evident but are excluded from current verdict memory and Challenger
+eligibility. Accumulated memory means recurring evidence, refutations, and testable hypotheses
+across Sessions, not self-modifying Policy or autonomous code.
 
 Qualification uses aligned DecisionWindows and actual future paths. At minimum it compares frozen
 `BASE`, frozen `CHALLENGER`, `UNFILTERED_CONDOR`, and `NO_TRADE` under the same causal inputs,
