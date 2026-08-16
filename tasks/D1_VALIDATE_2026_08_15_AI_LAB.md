@@ -84,5 +84,27 @@ duplicate divergent review, malformed Ledger evidence, or forbidden Codex transi
 **External evidence:** exact read-only Ledger result, exact Lab memory verification, and exact
 JSON/Markdown report paths from the one authorized attempt
 
-Close after directly observing and recording the result. Replace Stage with the post-task snapshot
-and remove this file; do not append completion history.
+## Observed result
+
+The one attempt ran at `2026-08-16T04:58:23Z`. It sealed Review
+`sha256:09cd363e775fa41c26c5004712ee683252e6b154d35d99b235be6ee8973a8a63` with verdict
+`MISSED_OPPORTUNITY`, then exited `2` after the conditional Codex subprocess failed before model
+output. Memory verification reports one valid Session Review and zero Codex analyses. No report was
+written because the current CLI projects it only after optional analysis.
+
+The exact population is `96` expected, `81` Decisions, `81` Outcomes, `64` auditable, `32` unknown,
+zero Base Candidates, `1,583` legal structures, `1,200` price-evaluable, `374` control, and `374`
+positive fee-after-settlement structure-Window findings across `16` distinct Windows. This proves a
+miss in the observed subset, not 374 trades or complete-Session frequency.
+
+Candidate attribution also exposed a source defect: record-level union blocker codes are copied
+onto individual opportunity gate rows even when that candidate's signed margin is non-negative.
+Negative margins remain valid exact failures; non-negative inherited rows cannot be called that
+candidate's blocker.
+
+`AI_LAB_CODEX_FAILURE_PREVENTED_REPORT_PROJECTION` replaces the original blocker. No retry,
+second Ledger read, source edit, or projection-recovery write is authorized by this task.
+
+Do not close while the required report is absent. Any source remediation or projection recovery
+requires replacing this validation task and Stage with an exact newly authorized closure; no retry
+or implementation permission is inferred here.
