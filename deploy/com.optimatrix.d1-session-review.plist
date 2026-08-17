@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.optimatrix.d1-session-review</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/logan/Optimatrix/.venv/bin/optimatrix-ai-lab</string>
+    <string>daily-review</string>
+    <string>--ledger-root</string>
+    <string>/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2</string>
+    <string>--lab-root</string>
+    <string>/Users/logan/Library/Application Support/Optimatrix/ai-lab</string>
+    <string>--first-session-id</string>
+    <string>2026-08-17T08:00:00Z</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/logan/Optimatrix</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/logan/Library/Logs/Optimatrix/d1-session-review.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/logan/Library/Logs/Optimatrix/d1-session-review.stderr.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+  </dict>
+</dict>
+</plist>

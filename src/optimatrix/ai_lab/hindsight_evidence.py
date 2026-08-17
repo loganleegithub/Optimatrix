@@ -41,6 +41,10 @@ OFFICIAL_INDEX_RANGE = "2d"
 MAXIMUM_SUPPORTED_CADENCE_MS = 15 * 60_000
 
 
+class SessionNotEndedError(ValidationError):
+    """The authoritative Deribit clock has not crossed the requested Session expiry."""
+
+
 @dataclass(frozen=True)
 class CoverageGap:
     starts_at_ms: int
@@ -296,7 +300,7 @@ def fetch_official_index_evidence(
     client = DeribitHttpClient(timeout_seconds=timeout_seconds)
     preflight = preflight_public_clock(client)
     if preflight.clock_reading.earliest_at < expiry:
-        raise ValidationError("official hindsight fetch requires an ended Session")
+        raise SessionNotEndedError("official hindsight fetch requires an ended Session")
     history = fetch_btc_index_history(
         client,
         known_at=preflight.clock_reading.latest_at,
@@ -336,6 +340,34 @@ def write_official_index_evidence(
     except FileExistsError as exc:
         raise ValidationError(f"official evidence appeared concurrently: {path}") from exc
     return path
+
+
+def earliest_official_index_evidence(
+    *,
+    session_id: str,
+    root: Path = AI_LAB_DURABLE_ROOT,
+) -> OfficialIndexEvidence | None:
+    """Return the first sealed evidence already captured for one Session, if any."""
+
+    _session_expiry(session_id)
+    session_slug = session_id.replace("-", "").replace(":", "")
+    directory = isolated_path(root) / "evidence" / session_slug
+    if not directory.exists():
+        return None
+    if directory.is_symlink() or not directory.is_dir():
+        raise ValidationError("official evidence Session path must be a directory")
+    paths = sorted(directory.glob("*/official-index-history.json"))
+    evidence: list[OfficialIndexEvidence] = []
+    for path in paths:
+        if path.is_symlink() or not path.is_file():
+            raise ValidationError("official index evidence must be a regular file")
+        item = load_official_index_evidence(path)
+        if item.session_id != session_id:
+            raise ValidationError("official index evidence is stored under a foreign Session")
+        evidence.append(item)
+    if not evidence:
+        return None
+    return min(evidence, key=lambda item: (item.requested_at, item.identity))
 
 
 def load_official_index_evidence(path: Path) -> OfficialIndexEvidence:

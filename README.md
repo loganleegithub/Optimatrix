@@ -23,7 +23,9 @@ The integrated offline Lab is available as `optimatrix-ai-lab` and lives beside 
 `src/optimatrix/ai_lab/`. Its default append-only research root is
 `/Users/logan/Library/Application Support/Optimatrix/ai-lab`. See
 [`docs/AI_LAB.md`](docs/AI_LAB.md) for the Session-first review command, report locations, memory,
-Codex CLI boundary, and Base-versus-Challenger gate.
+daily one-shot automation, Workbench projection, Codex CLI boundary, and Base-versus-Challenger
+gate. Completed daily reports appear under the Workbench's `复盘与进化` page; the Web projection is
+read-only and remains independent of B3 trading/runtime truth.
 
 ## Deployed B3 public runtime
 

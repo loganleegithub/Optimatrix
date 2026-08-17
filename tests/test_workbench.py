@@ -328,14 +328,17 @@ def test_static_export_is_network_free_and_browser_receives_only_presentation_da
     assert exported.stylesheet_path.is_file()
     assert exported.script_path.is_file()
     assert exported.data_path.is_file()
+    assert exported.review_data_path.is_file()
     html = exported.index_path.read_text(encoding="utf-8")
     stylesheet = exported.stylesheet_path.read_text(encoding="utf-8")
     script = exported.script_path.read_text(encoding="utf-8")
     data_script = exported.data_path.read_text(encoding="utf-8")
+    review_data_script = exported.review_data_path.read_text(encoding="utf-8")
     assert "PUBLIC SHADOW - READ ONLY" in html
     assert "公开行情模拟" in html
     assert "账户持仓" in html
     assert '<script src="workbench-data.js"></script>' in html
+    assert '<script src="workbench-reviews.js"></script>' in html
     assert '<meta http-equiv="refresh"' not in html
     assert "产品账" in html
     assert "复盘与进化" in html
@@ -343,11 +346,12 @@ def test_static_export_is_network_free_and_browser_receives_only_presentation_da
     assert "完整四腿与收益边界" in html
     assert "Case Outcome" in html
     assert "Window Outcome" in html
-    assert "Challenger 对照实验" in html
-    assert "D1 尚未授权" in html
+    assert "每日 Session 复盘" in html
+    assert "复盘不改写事实" in html
+    assert "不自动晋升" in html
     assert ".ledger-grid" in stylesheet
     assert ".product-main-grid" in stylesheet
-    assert ".review-layout" in stylesheet
+    assert ".daily-review-report" in stylesheet
     assert "@media (max-width: 1360px)" in stylesheet
     assert "gradient(" not in stylesheet
     assert "fetch(" not in script
@@ -357,10 +361,16 @@ def test_static_export_is_network_free_and_browser_receives_only_presentation_da
     assert "boundary_net_credit_usd" not in script
     assert "new Intl.DateTimeFormat" in script
     assert "row.kind === 'timestamp'" in script
-    assert "formatTimestamp(workbench.runtime.updated_at)" in script
+    assert "formatTimestamp(completed.generated_at)" in script
+    assert "pointByWindow" in script
+    assert "断点 = UNKNOWN" in html
     assert "workbench.runtime.session_id" in script
     assert "workbench.ledger" in script
     assert "workbench.review" in script
+    assert "workbench.review.completed" in script
+    assert "OPTIMATRIX_COMPLETED_SESSION_REVIEWS" in script
+    assert "OPTIMATRIX_COMPLETED_SESSION_REVIEWS" in review_data_script
+    assert '"reviews":[]' in data_script
     assert "NO_POLICY_ELIGIBLE_FOUR_LEG_STRUCTURE" in script
     assert "NO_LEGAL_FOUR_LEG_STRUCTURE" in script
     assert "translateComposite(item.subtitle)" in script

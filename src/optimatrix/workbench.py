@@ -10,9 +10,11 @@ from optimatrix.channels import CHANNELS, ChannelId
 from optimatrix.lifecycle import TradeCase
 from optimatrix.route import ShadowRouteEvidence
 
-WORKBENCH_SCHEMA_VERSION = 7
+WORKBENCH_SCHEMA_VERSION = 8
 _ASSET_ROOT = Path(__file__).with_name("workbench_static")
 _STATIC_ASSETS = ("index.html", "styles.css", "app.js")
+_REVIEW_DATA_FILENAME = "workbench-reviews.js"
+_WRITTEN_REVIEW_MARKERS: dict[Path, str] = {}
 
 # These are UTC instants whose presentation belongs to the browser. Identities such as
 # market_session_id deliberately stay as exact backend text even when they resemble ISO timestamps.
@@ -350,6 +352,7 @@ class WorkbenchExport:
     output_dir: Path
     index_path: Path
     data_path: Path
+    review_data_path: Path
     stylesheet_path: Path
     script_path: Path
 
@@ -361,6 +364,7 @@ def build_workbench_document(
     runtime_state: Mapping[str, object] | None = None,
     ledger_population: Mapping[str, object] | None = None,
     recovered_cases: Sequence[TradeCase] | None = None,
+    completed_session_reviews: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Build the presentation model for one public snapshot and optional runtime facts.
 
@@ -479,6 +483,7 @@ def build_workbench_document(
             population=population,
             cases=case_views,
             ledger=ledger,
+            completed_session_reviews=completed_session_reviews,
         ),
     }
 
@@ -491,6 +496,7 @@ def write_workbench(
     runtime_state: Mapping[str, object] | None = None,
     ledger_population: Mapping[str, object] | None = None,
     recovered_cases: Sequence[TradeCase] | None = None,
+    completed_session_reviews: Mapping[str, object] | None = None,
 ) -> WorkbenchExport:
     """Write a self-contained, network-JavaScript-free Workbench directory."""
 
@@ -500,6 +506,7 @@ def write_workbench(
         runtime_state=runtime_state,
         ledger_population=ledger_population,
         recovered_cases=recovered_cases,
+        completed_session_reviews=completed_session_reviews,
     )
     destination = Path(output_dir).expanduser().resolve()
     if destination == _ASSET_ROOT.resolve():
@@ -511,6 +518,18 @@ def write_workbench(
         if not source.is_file():
             raise RuntimeError(f"Workbench source asset is missing: {name}")
         _write_text(destination / name, source.read_text(encoding="utf-8"))
+
+    review_section = document.get("review")
+    if not isinstance(review_section, dict):
+        raise ValueError("Workbench Review export must be an object")
+    review_data = review_section.get("completed")
+    if not isinstance(review_data, dict):
+        raise ValueError("completed Session Review export must be an object")
+    review_reference = dict(review_data)
+    review_reference["reviews"] = []
+    review_section["completed"] = review_reference
+    review_data_path = destination / _REVIEW_DATA_FILENAME
+    _write_review_data_when_changed(review_data_path, review_data)
 
     encoded = json.dumps(
         document,
@@ -525,6 +544,7 @@ def write_workbench(
         output_dir=destination,
         index_path=destination / "index.html",
         data_path=data_path,
+        review_data_path=review_data_path,
         stylesheet_path=destination / "styles.css",
         script_path=destination / "app.js",
     )
@@ -1484,6 +1504,7 @@ def _review_projection(
     population: Mapping[str, object],
     cases: Sequence[Mapping[str, object]],
     ledger: Mapping[str, object],
+    completed_session_reviews: Mapping[str, object] | None,
 ) -> dict[str, object]:
     decisions = _mapping(population.get("decisions"), "population.decisions")
     outcomes = _mapping(population.get("outcomes"), "population.outcomes")
@@ -1596,6 +1617,79 @@ def _review_projection(
             "human_gate": "AI 只能提出建议;新 Policy 必须由交易负责人在另一个授权任务中批准。",
         },
         "summary": ledger.get("summary"),
+        "completed": _completed_session_review_projection(completed_session_reviews),
+    }
+
+
+def _completed_session_review_projection(
+    value: Mapping[str, object] | None,
+) -> dict[str, object]:
+    if value is None:
+        return {
+            "status": "NOT_YET_AVAILABLE",
+            "reason": "NO_DAILY_SESSION_REVIEW_PROJECTION",
+            "projection_id": None,
+            "generated_at": None,
+            "automation": None,
+            "reviews": [],
+            "retained_review_count": 0,
+            "display_limit": 0,
+            "boundary": (
+                "No completed-Session Review projection was supplied to this static export."
+            ),
+        }
+    wrapper = _mapping(value, "completed_session_reviews")
+    status = _required_text(wrapper.get("status"), "completed_session_reviews.status")
+    reason = wrapper.get("reason")
+    if reason is not None and not isinstance(reason, str):
+        raise ValueError("completed_session_reviews.reason must be text or null")
+    raw_projection = wrapper.get("projection")
+    if status != "AVAILABLE" or raw_projection is None:
+        return {
+            "status": status,
+            "reason": reason or "AI_LAB_REVIEW_PROJECTION_UNAVAILABLE",
+            "projection_id": None,
+            "generated_at": None,
+            "automation": None,
+            "reviews": [],
+            "retained_review_count": 0,
+            "display_limit": 0,
+            "boundary": (
+                "AI Lab presentation is unavailable. Trading Runtime facts remain independent."
+            ),
+        }
+    projection = _mapping(raw_projection, "completed_session_reviews.projection")
+    reviews = projection.get("reviews")
+    if not isinstance(reviews, list) or not all(isinstance(item, Mapping) for item in reviews):
+        raise ValueError("completed Session Reviews must be an array of objects")
+    automation = projection.get("automation")
+    if not isinstance(automation, Mapping):
+        raise ValueError("completed Session Review automation must be an object")
+    return {
+        "status": status,
+        "reason": None,
+        "projection_id": _required_text(
+            projection.get("projection_id"),
+            "completed_session_reviews.projection.projection_id",
+        ),
+        "generated_at": _required_text(
+            projection.get("generated_at"),
+            "completed_session_reviews.projection.generated_at",
+        ),
+        "automation": dict(automation),
+        "reviews": [dict(item) for item in reviews],
+        "retained_review_count": _display_count(
+            projection.get("retained_review_count"),
+            "completed_session_reviews.projection.retained_review_count",
+        ),
+        "display_limit": _display_count(
+            projection.get("display_limit"),
+            "completed_session_reviews.projection.display_limit",
+        ),
+        "boundary": _required_text(
+            projection.get("boundary"),
+            "completed_session_reviews.projection.boundary",
+        ),
     }
 
 
@@ -1856,3 +1950,32 @@ def _write_text(path: Path, value: str) -> None:
     temporary = path.with_name(f".{path.name}.optimatrix-tmp")
     temporary.write_text(value, encoding="utf-8")
     temporary.replace(path)
+
+
+def _write_review_data_when_changed(path: Path, value: Mapping[str, object]) -> None:
+    marker = json.dumps(
+        {
+            "status": value.get("status"),
+            "reason": value.get("reason"),
+            "projection_id": value.get("projection_id"),
+        },
+        ensure_ascii=True,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    resolved = path.resolve()
+    if _WRITTEN_REVIEW_MARKERS.get(resolved) == marker and path.is_file():
+        return
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).replace("</", "<\\/")
+    _write_text(
+        path,
+        f"window.OPTIMATRIX_COMPLETED_SESSION_REVIEWS = Object.freeze({encoded});\n",
+    )
+    _WRITTEN_REVIEW_MARKERS[resolved] = marker

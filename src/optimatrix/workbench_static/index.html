@@ -155,75 +155,113 @@
       <header class="screen-heading review-heading">
         <div>
           <div class="title-row">
-            <h1>交易—学习双循环</h1>
-            <span class="truth-chip">目标标志数据</span>
+            <h1>每日 Session 复盘</h1>
+            <span class="truth-chip">D1 · 离线只读</span>
           </div>
-          <p>左侧看完整业务人口，右侧看冻结对照实验与人工决策门</p>
+          <p>在同一组预登记 Window 上审查 Base 取舍；事后证据不改写交易时事实</p>
         </div>
-        <span id="review-freeze-time" class="freeze-time">同一窗口集合上的离线复盘</span>
+        <div class="review-selector-block">
+          <label for="review-session-select">已完成 Session</label>
+          <select id="review-session-select" aria-label="选择已完成 Session"></select>
+          <span id="review-freeze-time" class="freeze-time">等待复盘投影</span>
+        </div>
       </header>
 
-      <div class="review-layout">
-        <section class="review-population panel" aria-labelledby="population-review-title">
+      <section id="review-unavailable" class="review-unavailable panel" hidden>
+        <strong>复盘报告暂不可用</strong>
+        <p id="review-unavailable-reason">尚未生成已完成 Session 的只读投影。</p>
+      </section>
+
+      <div id="review-report" class="daily-review-report" hidden>
+        <section class="review-verdict-panel panel" aria-labelledby="review-verdict-title">
           <header class="panel-heading">
             <div>
-              <span>全窗口业务人口</span>
-              <h2 id="population-review-title">今天产品闭环</h2>
+              <span id="review-session-subtitle">Policy-quality Review</span>
+              <h2 id="review-verdict-title">—</h2>
+            </div>
+            <span id="review-verdict-badge" class="state-badge">—</span>
+          </header>
+          <div class="review-verdict-body">
+            <div>
+              <span>本轮裁决</span>
+              <strong id="review-verdict-label">—</strong>
+              <p id="review-verdict-reason">—</p>
+            </div>
+            <dl id="review-automation-summary" class="review-automation-summary"></dl>
+          </div>
+        </section>
+
+        <div class="review-summary-grid">
+          <section class="review-summary-panel panel" aria-labelledby="review-population-title">
+            <header class="panel-heading">
+              <div>
+                <span>完整分母与四象限</span>
+                <h2 id="review-population-title">96 个预登记窗口</h2>
+              </div>
+              <span id="review-coverage-badge" class="state-badge">—</span>
+            </header>
+            <div id="review-population-grid" class="review-metric-grid"></div>
+            <div id="review-classification-grid" class="review-classification-grid"></div>
+            <div id="review-bounds-table" class="review-bounds-table"></div>
+          </section>
+
+          <section class="review-summary-panel panel" aria-labelledby="review-funnel-title">
+            <header class="panel-heading">
+              <div>
+                <span>事后 Oracle 漏斗</span>
+                <h2 id="review-funnel-title">从合法结构到已证实机会</h2>
+              </div>
+            </header>
+            <div id="review-funnel-grid" class="review-funnel-grid"></div>
+            <div class="review-blocker-pair">
+              <section>
+                <h3>Base 近端 blocker</h3>
+                <div id="review-base-blockers" class="review-key-counts"></div>
+              </section>
+              <section>
+                <h3>证据缺口</h3>
+                <div id="review-evidence-reasons" class="review-key-counts"></div>
+              </section>
+            </div>
+            <article id="review-official-evidence" class="review-evidence-card"></article>
+          </section>
+        </div>
+
+        <section class="review-curve-panel panel" aria-labelledby="review-curve-title">
+          <header class="panel-heading">
+            <div>
+              <span>事前可见代理</span>
+              <h2 id="review-curve-title">单日 IV / trailing RV 曲线</h2>
+            </div>
+            <div class="review-curve-legend">
+              <span>IV</span><span>trailing RV</span><small>断点 = UNKNOWN，不跨缺口连线</small>
+            </div>
+          </header>
+          <svg id="review-curve-chart" viewBox="0 0 1000 220" role="img" aria-label="单日 IV 与 trailing RV 曲线"></svg>
+        </section>
+
+        <section class="review-window-panel panel" aria-labelledby="review-window-title">
+          <header class="panel-heading">
+            <div>
+              <span>逐 Window 审判</span>
+              <h2 id="review-window-title">Base 结果、证据与事后分类</h2>
             </div>
             <span id="review-window-count" class="state-badge">—</span>
           </header>
-          <div id="review-flow" class="review-flow"></div>
-          <div id="case-traces" class="case-traces"></div>
-
-          <div class="outcome-pair">
-            <section class="outcome-card case-outcome-card">
-              <span>Case Outcome</span>
-              <h3>每宗产品的模拟经济结果</h3>
-              <dl id="case-outcome-summary"></dl>
-            </section>
-            <section class="outcome-card window-outcome-card">
-              <span>Window Outcome</span>
-              <h3>每个市场窗口的未来路径</h3>
-              <dl id="window-outcome-summary"></dl>
-            </section>
-          </div>
-
-          <section class="eligibility-panel" aria-labelledby="eligibility-title">
-            <div>
-              <h3 id="eligibility-title">学习资格不是一个绿灯</h3>
-              <p>八个事实必须逐项保留 YES / NO / UNKNOWN 与原因</p>
-            </div>
-            <div id="eligibility-grid" class="eligibility-grid"></div>
-          </section>
+          <div id="review-window-table" class="review-window-table" role="table"></div>
         </section>
 
-        <section class="challenger-panel panel" aria-labelledby="challenger-title">
-          <header class="panel-heading">
-            <div>
-              <span>在相同窗口集合上对照评估</span>
-              <h2 id="challenger-title">Challenger 对照实验</h2>
-            </div>
-            <span id="challenger-status" class="state-badge">—</span>
-          </header>
-          <div id="challenger-arms" class="challenger-arms"></div>
-          <div id="challenger-empty-chart" class="challenger-empty-chart">
-            <strong>D1 尚未授权</strong>
-            <span>没有冻结 Challenger Policy 与合格前向样本，不绘制虚假收益分布</span>
+        <section class="review-governance-panel panel" aria-labelledby="review-governance-title">
+          <div>
+            <span>证据边界</span>
+            <h2 id="review-governance-title">复盘不改写事实，也不自动晋升</h2>
+            <p id="review-evidence-boundary">—</p>
           </div>
-          <div id="challenger-table" class="comparison-table"></div>
-          <article class="challenger-conclusion">
-            <span>本轮对照结论</span>
-            <h3>NOT_YET_MEASURED</h3>
-            <p id="challenger-reason">—</p>
-          </article>
-          <section class="human-gate" aria-labelledby="human-gate-title">
-            <div>
-              <span>人工决策门</span>
-              <h3 id="human-gate-title">AI 不具备任何交易或晋升权限</h3>
-              <p id="human-gate-copy">—</p>
-            </div>
-            <button type="button" disabled>提交人工评审（尚未授权）</button>
-          </section>
+          <div class="review-human-gate">
+            <span>Challenger / 人工门</span>
+            <strong id="review-challenger-status">—</strong>
+            <p>AI 只能提出另行冻结、可证伪的研究建议；新 Policy 必须在独立任务中由人类批准。</p>
+          </div>
         </section>
       </div>
     </section>
@@ -257,6 +295,7 @@
   <div id="channel-notice" class="channel-notice" role="status" aria-live="polite" hidden></div>
 
   <script src="workbench-data.js"></script>
+  <script src="workbench-reviews.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -10,6 +10,8 @@ Challenger Lab；`Challenger` 只表示 Base 对照实验里的一个冻结角�
 ├── policy-quality-reviews.jsonl  # 当前规则质量 Review 哈希链
 ├── session-reviews.jsonl         # 旧终值筛选链，只验证，不进入规则质量记忆
 ├── codex-analyses.jsonl          # 可选结构化 Codex 分析哈希链
+├── daily-review-state.json        # 可覆盖的运行状态，不是业务事实
+├── workbench-review-projection.json # 最近 32 个当前 Review 的可重建 Web 投影
 ├── evidence/<session>/<evidence>/official-index-history.json
 └── reports/<session>/<review>/
     ├── policy-quality-review.json
@@ -19,6 +21,12 @@ Challenger Lab；`Challenger` 只表示 Base 对照实验里的一个冻结角�
 
 这个根与生产 ObservationLedger / CaseJournal 完全分开。AI Lab 只读 Ledger，不回填
 Decision、Outcome、Case 或 Position。
+
+`policy-quality-reviews.jsonl`、`evidence/` 和 `reports/` 是可验证的持久证据：Review 追加、
+证据和报告按内容身份寻址，不覆盖已有不同内容。另两个顶层 JSON 只服务运行与展示：状态
+文件可以更新，Workbench 投影经过内容密封、原子替换，并可随时从 Review 哈希链重建。
+它们都不是第二套业务事实。当前只有一个低频写者、每天至多一个新 Review，也没有跨表
+查询或并发事务需求，因此不引入数据库、队列、迁移或双写协议。
 
 ## AI Lab 真正在回答什么
 
@@ -116,6 +124,39 @@ optimatrix-ai-lab review-session \
 
 optimatrix-ai-lab verify-memory
 ```
+
+## 每日收盘复盘
+
+常态化入口是一次即退出的命令，而不是常驻循环：
+
+```bash
+optimatrix-ai-lab daily-review \
+  --ledger-root '/path/to/read-only/ledger' \
+  --lab-root '/path/to/separate/ai-lab' \
+  --first-session-id '2026-08-17T08:00:00Z'
+```
+
+它从授权的首个 Deribit Session 起按日连续寻找最早的未复盘 Session，而不是只从已有
+DecisionRecord 猜测日期。因此，即使某天完全没有记录，复盘仍保留注册的 `96` 个 Window，
+并把缺失明确记为 `UNKNOWN`，不会让整日从历史中消失。已有 DecisionRecord 必须各自已有
+append-once WindowOutcome；否则本次返回 `NOT_READY`，不请求事后历史，也不写部分 Review。
+
+准备就绪后，命令先用 Deribit UTC 确认 Session 已结束，再获取一次固定的官方
+`btc_usd/2d` 指数历史；每次最多处理一个 Session，不在进程内等待或重试。报告先按内容
+身份幂等落盘，随后才追加 Review 哈希链，因此报告与记忆之间的崩溃边界可以在下次调用
+恢复，且不会产生重复 Review。最后重建 Workbench 投影。默认不调用 Codex，也不创建、
+修改或晋升 Challenger/Policy。
+
+仓库 plist `deploy/com.optimatrix.d1-session-review.plist` 只用 `RunAtLoad` 和
+`StartInterval=900` 唤醒这个一次性命令；没有 `KeepAlive`、内部 sleep 或重试循环。没有
+准备好的已结束 Session 时，下一次 launchd 周期自然再检查。
+
+Workbench 只读取最多最近 `32` 个当前 V3 Review 的派生投影。用户可切换已完成 Session，
+查看 verdict、96-Window 分母、识别区间、四象限、结构漏斗、blocker、证据缺口、IV/RV
+曲线、逐 Window 分类及人类晋升门。投影缺失或损坏只显示明确的不可用状态，不能阻止 B3
+Runtime、改变 Decision，或赋予 Policy、执行、账户、订单、成交和资金权限。完整逐 Window
+明细作为独立的本地数据脚本只在投影身份变化时原子更新；每秒刷新的 Runtime 页面只携带
+小型引用，避免把数 MB 历史报告反复写盘。
 
 旧 D1 的 `seal/register/run/promotion` 只用于冻结 Base/Challenger、时间切分和人审边界。
 任何 `ACTUAL_PUBLIC_PATH` Challenger 数据集都必须绑定一个完整、eligible 的当前

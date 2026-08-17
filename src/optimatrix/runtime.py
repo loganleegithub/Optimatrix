@@ -14,6 +14,7 @@ from pathlib import Path
 from threading import Lock, Thread
 from typing import Protocol
 
+from optimatrix.ai_lab.web_projection import WorkbenchReviewProjectionReader
 from optimatrix.case_journal import CaseJournal
 from optimatrix.decision import DecisionRecord, DecisionResult, DecisionWindow
 from optimatrix.deribit_snapshot import (
@@ -100,7 +101,13 @@ _RUNTIME_TEMP_MEMBERS = {
     ".runtime-state.json.optimatrix-tmp",
     ".settlement.json.optimatrix-tmp",
 }
-_WORKBENCH_ALLOWED_MEMBERS = {"app.js", "index.html", "styles.css", "workbench-data.js"}
+_WORKBENCH_ALLOWED_MEMBERS = {
+    "app.js",
+    "index.html",
+    "styles.css",
+    "workbench-data.js",
+    "workbench-reviews.js",
+}
 _WORKBENCH_TEMP_MEMBERS = {f".{name}.optimatrix-tmp" for name in _WORKBENCH_ALLOWED_MEMBERS}
 
 
@@ -790,6 +797,9 @@ class BtcPublicShadowRuntime:
         self.source = source
         self.event_state = event_state
         self.sleep = sleep
+        self._review_projection_reader = (
+            WorkbenchReviewProjectionReader() if self._authorized_runtime_root else None
+        )
         self._uses_deribit_clock = now is None
         startup_preflight: PublicClockPreflight | None = None
         startup_preflight_attempt_count = 0
@@ -1100,6 +1110,11 @@ class BtcPublicShadowRuntime:
             runtime_state=runtime_state,
             ledger_population={"decisions": decisions, "outcomes": outcomes},
             recovered_cases=tuple(sorted(self.cases.values(), key=lambda case: case.identity)),
+            completed_session_reviews=(
+                self._review_projection_reader.read()
+                if self._review_projection_reader is not None
+                else None
+            ),
         )
         _atomic_json(self.root_owner.root / "latest-snapshot.json", self.latest_snapshot)
 

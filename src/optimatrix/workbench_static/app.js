@@ -2,7 +2,7 @@
   'use strict';
 
   const workbench = window.OPTIMATRIX_WORKBENCH;
-  if (!workbench || workbench.schema_version !== 7) {
+  if (!workbench || workbench.schema_version !== 8) {
     document.body.textContent = 'Workbench 数据缺失或版本不受支持。';
     return;
   }
@@ -12,6 +12,7 @@
     snapshotKnownAt: document.snapshot?.known_at,
     runtimeUpdatedAt: document.runtime?.updated_at,
     runtimeState: document.runtime?.state,
+    reviewProjectionId: document.review?.completed?.projection_id,
     ledgerCounts: document.ledger?.counts,
     cases: (document.cases || []).map(item => ({
       tradeCaseId: item.trade_case_id,
@@ -23,6 +24,23 @@
     }))
   });
   const initialDocumentSignature = documentSignature(workbench);
+
+  const completedReviewProjection = () => {
+    const expected = workbench.review.completed;
+    const external = window.OPTIMATRIX_COMPLETED_SESSION_REVIEWS;
+    if (
+      expected.status === 'AVAILABLE' &&
+      external?.status === expected.status &&
+      external?.projection_id === expected.projection_id
+    ) return external;
+    if (expected.status === 'AVAILABLE') return {
+      ...expected,
+      status: 'UNAVAILABLE',
+      reason: 'COMPLETED_SESSION_REVIEW_DATA_UNAVAILABLE',
+      reviews: []
+    };
+    return expected;
+  };
 
   const byId = id => document.getElementById(id);
   const create = (tag, className, text) => {
@@ -162,7 +180,36 @@
     NO_OBSERVATION: '无有效市场观察',
     POLICY_NOT_QUALIFIED: 'Policy 尚未资格化',
     PUBLIC_WINDOW_HAS_NO_EXECUTION: '公开行情窗口没有真实执行',
-    NOT_YET_MEASURED: '尚未测量'
+    NOT_YET_MEASURED: '尚未测量',
+    NOT_YET_AVAILABLE: '尚未生成',
+    NO_DAILY_SESSION_REVIEW_PROJECTION: '尚未生成每日 Session 复盘投影',
+    AI_LAB_REVIEW_PROJECTION_INVALID: 'AI Lab 复盘投影校验失败',
+    AI_LAB_REVIEW_PROJECTION_STAT_FAILED: '无法读取 AI Lab 复盘投影状态',
+    COMPLETED_SESSION_REVIEW_DATA_UNAVAILABLE: '已完成 Session 复盘明细未能加载',
+    NOT_READY: 'Session 尚未就绪',
+    SUCCEEDED: '复盘成功',
+    FAILED: '复盘失败',
+    PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR: '部分识别 · 未发现已知规则错误',
+    NO_OPPORTUNITY_CORRECTLY_AVOIDED: '没有事后机会 · Base 正确避开',
+    RULE_WELL_CALIBRATED: '本 Session 规则取舍一致',
+    RULE_TOO_CONSERVATIVE: '规则过于保守',
+    RULE_TOO_AGGRESSIVE: '规则过于激进',
+    MIXED_RULE_ERROR: '同时存在漏单与过度风险',
+    OBSERVED_RULE_TOO_CONSERVATIVE: '已观察到规则过于保守',
+    OBSERVED_RULE_TOO_AGGRESSIVE: '已观察到规则过于激进',
+    OBSERVED_MIXED_RULE_ERROR: '已观察到混合规则错误',
+    CAPTURED_OPPORTUNITY: '抓对机会',
+    CORRECT_AVOIDANCE: '正确避开',
+    MISSED_OPPORTUNITY: '漏掉机会',
+    OVER_RISK_SELECTION: '选择过度风险',
+    AUDITABLE: '可审判',
+    ABSTAIN: '不做',
+    REVIEW: '复核',
+    CANDIDATE: '候选',
+    FUTURE_VARIANCE_PATH_INCOMPLETE: '未来波动路径不完整',
+    DECISION_RECORD_MISSING: '缺少 DecisionRecord',
+    WINDOW_OUTCOME_MISSING: '缺少 WindowOutcome',
+    DECISION_OBSERVATION_MISSING: '缺少决策时市场观察'
   };
   function translate(value) {
     if (isUnknown(value)) return '未知';
@@ -179,6 +226,7 @@
     .join(' · ');
 
   let selectedCaseId = null;
+  let selectedReviewId = null;
   let lastFocusedElement = null;
 
   function routeFromHash() {
@@ -627,95 +675,272 @@
   }
 
   function renderReview() {
-    const review = workbench.review;
-    byId('review-freeze-time').textContent = `数据冻结：${formatTimestamp(workbench.runtime.updated_at)}`;
-    byId('review-window-count').textContent = `${countLabel(review.summary.recorded_windows)} / ${countLabel(review.summary.session_denominator)} 个市场窗口`;
-    const flow = byId('review-flow');
-    flow.replaceChildren();
-    review.flow.forEach(item => {
-      const node = create('div', 'flow-node');
-      node.dataset.tone = item.key === 'CANDIDATE' || item.key === 'CASE' || item.key === 'OUTCOME' ? 'positive' : item.key === 'REVIEW' ? 'warning' : 'info';
-      appendText(node, 'strong', '', item.count);
-      appendText(node, 'span', '', item.label);
-      flow.append(node);
-    });
-    const traces = byId('case-traces');
-    traces.replaceChildren();
-    if (!review.traces.length) {
-      traces.append(create('div', 'trace-empty', '当前没有 TradeCase 生命周期可展示；Window Outcome 仍是学习分母。'));
-    } else {
-      review.traces.forEach(trace => {
-        const row = create('div', 'case-trace');
-        appendText(row, 'span', 'trace-id', trace.short_id);
-        trace.timeline.forEach(step => {
-          const item = create('div', 'trace-step');
-          item.classList.toggle('is-done', step.state === 'DONE');
-          item.classList.toggle('is-current', step.state === 'CURRENT');
-          item.title = `${step.label} · ${step.at ? formatTimestamp(step.at) : translate(step.state)}`;
-          row.append(item);
-        });
-        row.addEventListener('click', () => navigate('product', trace.case_id));
-        traces.append(row);
-      });
+    const completed = completedReviewProjection();
+    const unavailable = byId('review-unavailable');
+    const report = byId('review-report');
+    const selector = byId('review-session-select');
+    selector.replaceChildren();
+    if (completed.status !== 'AVAILABLE' || !completed.reviews.length) {
+      unavailable.hidden = false;
+      report.hidden = true;
+      selector.disabled = true;
+      appendText(selector, 'option', '', '暂无已完成复盘');
+      byId('review-unavailable-reason').textContent = translate(completed.reason || completed.status);
+      byId('review-freeze-time').textContent = '复盘投影：不可用；交易 Runtime 不受影响';
+      return;
     }
-    renderOutcomeSummary('case-outcome-summary', [
-      ['Outcome 数', review.case_outcomes.population],
-      ['完整组合退出', review.case_outcomes.whole_product_exit],
-      ['到期交割结算', review.case_outcomes.contract_settlement],
-      ['未形成模拟头寸', review.case_outcomes.no_position]
-    ]);
-    renderOutcomeSummary('window-outcome-summary', [
-      ['已记录', `${countLabel(review.window_outcomes.recorded)} / ${countLabel(review.window_outcomes.denominator)}`],
-      ['未来路径已知', countLabel(review.window_outcomes.future_path_known)],
-      ['未来路径连续', countLabel(review.window_outcomes.future_path_continuous)],
-      ['学习边界', '全市场窗口']
-    ]);
-    const eligibility = byId('eligibility-grid');
-    eligibility.replaceChildren();
-    review.eligibility.forEach(item => {
-      const card = create('div', 'eligibility-item');
-      appendText(card, 'strong', '', item.label);
-      appendText(card, 'span', '', item.population ? `是 ${item.yes} · 否 ${item.no} · 未知 ${item.unknown}` : '尚无 Case Outcome 人口');
-      eligibility.append(card);
+    unavailable.hidden = true;
+    report.hidden = false;
+    selector.disabled = false;
+    completed.reviews.forEach(item => {
+      const option = create('option', '', `${formatDate(item.session_id)} · ${translate(item.verdict)}`);
+      option.value = item.review_id;
+      selector.append(option);
     });
-    renderChallenger(review.challenger);
+    if (!completed.reviews.some(item => item.review_id === selectedReviewId)) {
+      selectedReviewId = completed.reviews[0].review_id;
+    }
+    selector.value = selectedReviewId;
+    selector.onchange = () => {
+      selectedReviewId = selector.value;
+      renderSelectedReview(completed);
+    };
+    byId('review-freeze-time').textContent = `Web 投影：${formatTimestamp(completed.generated_at)} · 展示 ${completed.reviews.length}/${completed.retained_review_count}`;
+    renderSelectedReview(completed);
   }
 
-  function renderOutcomeSummary(targetId, values) {
+  function renderSelectedReview(completed) {
+    const review = completed.reviews.find(item => item.review_id === selectedReviewId) || completed.reviews[0];
+    selectedReviewId = review.review_id;
+    const verdictTone = review.verdict.includes('TOO_') || review.verdict.includes('MIXED') ? 'danger' : review.verdict.includes('UNKNOWN') || review.verdict.includes('PARTIALLY') || review.verdict.includes('OBSERVED') ? 'warning' : 'positive';
+    byId('review-session-subtitle').textContent = `Review ${shortValue(review.review_id)} · 冻结 Policy ${shortValue(review.policy_id)}`;
+    byId('review-verdict-title').textContent = `${formatDate(review.session_id)} Session`;
+    byId('review-verdict-badge').textContent = translate(review.verdict);
+    byId('review-verdict-badge').dataset.tone = verdictTone;
+    byId('review-verdict-label').textContent = translate(review.verdict);
+    byId('review-verdict-label').dataset.tone = verdictTone;
+    byId('review-verdict-reason').textContent = review.verdict_reason;
+    renderDefinitionList('review-automation-summary', [
+      ['自动复盘状态', translate(completed.automation?.status)],
+      ['最近运行', formatTimestamp(completed.automation?.updated_at)],
+      ['最近成功 Session', completed.automation?.last_success_session_id ? formatDate(completed.automation.last_success_session_id) : '尚无'],
+      ['本报告落盘', formatTimestamp(review.recorded_at)]
+    ]);
+
+    const population = review.population;
+    byId('review-population-title').textContent = `${population.expected_window_count} 个预登记窗口`;
+    byId('review-coverage-badge').textContent = `可审判 ${population.auditable_window_count}/${population.expected_window_count}`;
+    renderMetricCards('review-population-grid', [
+      ['预登记 Window', population.expected_window_count, '学习分母'],
+      ['DecisionRecord', population.recorded_decision_count, '事前 Base 决策'],
+      ['WindowOutcome', population.recorded_outcome_count, '实际未来路径'],
+      ['IV/RV 曲线点', population.curve_observation_count, '事前可见代理'],
+      ['可审判', population.auditable_window_count, '证据完整'],
+      ['证据不足', population.unknown_window_count, '保留 UNKNOWN']
+    ]);
+    renderClassificationCards(review.classifications);
+    renderBounds(review.bounds);
+    renderFunnel(review.funnel);
+    renderKeyCounts('review-base-blockers', review.base_blocker_counts);
+    renderKeyCounts('review-evidence-reasons', review.evidence_reason_counts);
+    renderOfficialEvidence(review.official_index_evidence);
+    renderReviewCurve(review.curve, review.windows);
+    renderReviewWindows(review.windows);
+    byId('review-window-count').textContent = `${review.windows.length} / ${population.expected_window_count}`;
+    byId('review-evidence-boundary').textContent = review.evidence_boundary;
+    const challenger = byId('review-challenger-status');
+    challenger.textContent = review.challenger_comparison_eligible ? 'ELIGIBLE · 仅可另行冻结实验' : 'NOT ELIGIBLE · 不启动 Challenger 对照';
+    challenger.dataset.tone = review.challenger_comparison_eligible ? 'positive' : 'warning';
+  }
+
+  function renderDefinitionList(targetId, rows) {
     const target = byId(targetId);
     target.replaceChildren();
-    values.forEach(([label, value]) => {
-      const wrapper = create('div');
-      appendText(wrapper, 'dt', '', label);
-      appendText(wrapper, 'dd', '', value);
-      target.append(wrapper);
+    rows.forEach(([label, value]) => {
+      const row = create('div');
+      appendText(row, 'dt', '', label);
+      appendText(row, 'dd', '', value);
+      target.append(row);
     });
   }
 
-  function renderChallenger(challenger) {
-    byId('challenger-status').textContent = challenger.status_label;
-    byId('challenger-status').dataset.tone = 'warning';
-    const arms = byId('challenger-arms');
-    arms.replaceChildren();
-    challenger.arms.forEach(arm => {
-      const item = create('div', `challenger-arm ${arm.available ? '' : 'is-disabled'}`);
-      appendText(item, 'strong', '', arm.label);
-      appendText(item, 'span', '', arm.available ? '冻结线上 Policy' : '尚未授权 / 尚未测量');
-      arms.append(item);
+  function renderMetricCards(targetId, rows) {
+    const target = byId(targetId);
+    target.replaceChildren();
+    rows.forEach(([label, value, note]) => {
+      const card = create('div', 'review-metric-card');
+      appendText(card, 'span', '', label);
+      appendText(card, 'strong', '', countLabel(value));
+      appendText(card, 'small', '', note);
+      target.append(card);
     });
-    const table = byId('challenger-table');
-    table.replaceChildren();
-    const header = create('div', 'comparison-row');
-    ['关键风险与收益指标', 'Base', 'Challenger', '无筛选铁鹰', '不交易'].forEach(value => appendText(header, 'span', '', value));
-    table.append(header);
-    challenger.metrics.forEach(metric => {
-      const row = create('div', 'comparison-row');
-      appendText(row, 'span', '', metric);
-      ['尚未测量', '尚未测量', '尚未测量', '尚未测量'].forEach(value => appendText(row, 'span', '', value));
-      table.append(row);
+  }
+
+  function renderClassificationCards(values) {
+    const target = byId('review-classification-grid');
+    target.replaceChildren();
+    [
+      ['captured_opportunity_window_count', '抓对机会', 'positive'],
+      ['correct_avoidance_window_count', '正确避开', 'info'],
+      ['missed_opportunity_window_count', '漏掉机会', 'warning'],
+      ['over_risk_window_count', '过度风险', 'danger'],
+      ['unknown_window_count', '证据不足', 'neutral']
+    ].forEach(([key, label, tone]) => {
+      const card = create('div', 'review-classification-card');
+      card.dataset.tone = tone;
+      appendText(card, 'strong', '', countLabel(values[key]));
+      appendText(card, 'span', '', label);
+      target.append(card);
     });
-    byId('challenger-reason').textContent = challenger.reason;
-    byId('human-gate-copy').textContent = challenger.human_gate;
+  }
+
+  function formatRate(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? `${(parsed * 100).toFixed(2)}%` : '未知';
+  }
+
+  function renderBounds(values) {
+    const target = byId('review-bounds-table');
+    target.replaceChildren();
+    const header = create('div', 'review-bounds-row is-header');
+    ['逻辑识别区间', '下界', '上界'].forEach(value => appendText(header, 'span', '', value));
+    target.append(header);
+    [
+      ['漏掉机会率', values.miss_rate_lower_bound, values.miss_rate_upper_bound],
+      ['过度冒险率', values.over_risk_rate_lower_bound, values.over_risk_rate_upper_bound],
+      ['机会出现率', values.opportunity_rate_lower_bound, values.opportunity_rate_upper_bound]
+    ].forEach(([label, lower, upper]) => {
+      const row = create('div', 'review-bounds-row');
+      appendText(row, 'span', '', label);
+      appendText(row, 'strong', '', formatRate(lower));
+      appendText(row, 'strong', '', formatRate(upper));
+      target.append(row);
+    });
+  }
+
+  function renderFunnel(values) {
+    const target = byId('review-funnel-grid');
+    target.replaceChildren();
+    [
+      ['legal_structure_count', '合法四腿'],
+      ['price_evaluable_count', '完整数量可估价'],
+      ['control_candidate_count', '通过硬控制'],
+      ['hindsight_opportunity_structure_count', 'Policy 合格且事后成立'],
+      ['hindsight_positive_policy_reject_structure_count', '事后有利但 Policy 拒绝']
+    ].forEach(([key, label], index) => {
+      const node = create('div', 'review-funnel-node');
+      appendText(node, 'span', '', `0${index + 1}`);
+      appendText(node, 'strong', '', countLabel(values[key]));
+      appendText(node, 'small', '', label);
+      target.append(node);
+    });
+  }
+
+  function renderKeyCounts(targetId, values) {
+    const target = byId(targetId);
+    target.replaceChildren();
+    const rows = Object.entries(values || {}).sort((left, right) => Number(right[1]) - Number(left[1]) || left[0].localeCompare(right[0]));
+    if (!rows.length) {
+      target.append(create('div', 'review-empty-row', '无'));
+      return;
+    }
+    rows.slice(0, 8).forEach(([key, count]) => {
+      const row = create('div');
+      appendText(row, 'span', '', translate(key));
+      appendText(row, 'strong', '', countLabel(count));
+      target.append(row);
+    });
+  }
+
+  function renderOfficialEvidence(evidence) {
+    const target = byId('review-official-evidence');
+    target.replaceChildren();
+    if (!evidence) {
+      appendText(target, 'strong', '', '官方事后指数证据：未提供');
+      appendText(target, 'p', '', '缺失不会被终值或浏览器展示补齐；相关 Window 保持 UNKNOWN。');
+      return;
+    }
+    appendText(target, 'strong', '', `Deribit 官方指数证据 · ${evidence.point_count} 点`);
+    appendText(target, 'p', '', `${evidence.session_coverage_complete ? '完整覆盖 Session' : `存在 ${evidence.coverage_gaps.length} 个 Gap`} · cadence ${evidence.cadence_ms}ms · ${shortValue(evidence.evidence_id)}`);
+  }
+
+  function renderReviewCurve(points, windows) {
+    const svg = byId('review-curve-chart');
+    svg.replaceChildren();
+    const namespace = 'http://www.w3.org/2000/svg';
+    const pointByWindow = new Map((points || []).map(point => [point.decision_window_id, point]));
+    const values = (windows || []).map(windowReview => {
+      const point = pointByWindow.get(windowReview.decision_window_id);
+      return {
+        iv: point ? Number(point.implied_variance_proxy) : Number.NaN,
+        rv: point ? Number(point.trailing_realized_variance_proxy) : Number.NaN
+      };
+    });
+    const finiteValues = values.flatMap(point => [point.iv, point.rv]).filter(Number.isFinite);
+    if (finiteValues.length < 2 || values.length < 2) {
+      const text = document.createElementNS(namespace, 'text');
+      text.setAttribute('x', '500');
+      text.setAttribute('y', '112');
+      text.setAttribute('text-anchor', 'middle');
+      text.textContent = '可用 IV / RV 曲线点不足';
+      svg.append(text);
+      return;
+    }
+    const maximum = Math.max(...finiteValues, 0.000001);
+    [0, 0.25, 0.5, 0.75, 1].forEach(ratio => {
+      const line = document.createElementNS(namespace, 'line');
+      const y = 190 - ratio * 160;
+      line.setAttribute('x1', '50');
+      line.setAttribute('x2', '970');
+      line.setAttribute('y1', String(y));
+      line.setAttribute('y2', String(y));
+      line.setAttribute('class', 'review-chart-grid');
+      svg.append(line);
+    });
+    const segments = key => {
+      const output = [];
+      let current = [];
+      values.forEach((point, index) => {
+        if (!Number.isFinite(point[key])) {
+          if (current.length > 1) output.push(current);
+          current = [];
+          return;
+        }
+        const x = 50 + index / (values.length - 1) * 920;
+        const y = 190 - point[key] / maximum * 160;
+        current.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+      });
+      if (current.length > 1) output.push(current);
+      return output;
+    };
+    [['iv', 'review-chart-iv'], ['rv', 'review-chart-rv']].forEach(([key, className]) => {
+      segments(key).forEach(segment => {
+        const line = document.createElementNS(namespace, 'polyline');
+        line.setAttribute('points', segment.join(' '));
+        line.setAttribute('class', className);
+        svg.append(line);
+      });
+    });
+  }
+
+  function renderReviewWindows(windows) {
+    const target = byId('review-window-table');
+    target.replaceChildren();
+    const header = create('div', 'review-window-row is-header');
+    ['窗口', 'Base', '证据', '事后分类', '结构漏斗', '首要原因'].forEach(value => appendText(header, 'span', '', value));
+    target.append(header);
+    windows.forEach(windowReview => {
+      const row = create('div', 'review-window-row');
+      appendText(row, 'span', '', formatTimestamp(windowReview.starts_at));
+      appendText(row, 'span', '', translate(windowReview.base_result));
+      appendText(row, 'span', '', translate(windowReview.evidence_status));
+      const classification = appendText(row, 'strong', '', translate(windowReview.classification));
+      classification.dataset.tone = windowReview.classification === 'MISSED_OPPORTUNITY' ? 'warning' : windowReview.classification === 'OVER_RISK_SELECTION' ? 'danger' : windowReview.classification === 'UNKNOWN' ? 'neutral' : 'positive';
+      appendText(row, 'span', '', `${windowReview.legal_structure_count} → ${windowReview.price_evaluable_count} → ${windowReview.control_candidate_count}`);
+      const reasons = windowReview.evidence_reasons?.length ? windowReview.evidence_reasons : windowReview.base_blockers;
+      appendText(row, 'span', '', reasons?.length ? reasons.slice(0, 2).map(translate).join(' · ') : '无');
+      target.append(row);
+    });
   }
 
   function renderEvidence() {

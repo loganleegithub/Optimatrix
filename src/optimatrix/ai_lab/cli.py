@@ -15,6 +15,7 @@ from optimatrix.ai_lab.canonical import (
     write_new_json,
 )
 from optimatrix.ai_lab.codex_analysis import CodexCliAnalyzer
+from optimatrix.ai_lab.daily_review import run_next_daily_review
 from optimatrix.ai_lab.demo import run_demo
 from optimatrix.ai_lab.evaluation import ExperimentRunner
 from optimatrix.ai_lab.hindsight_evidence import (
@@ -33,6 +34,10 @@ from optimatrix.ai_lab.promotion import record_promotion_decision
 from optimatrix.ai_lab.report import write_analysis_report, write_session_report
 from optimatrix.ai_lab.session_review import SessionVerdict, review_ledger_session
 from optimatrix.ai_lab.store import AuditStore
+from optimatrix.ai_lab.web_projection import (
+    write_daily_state,
+    write_workbench_review_projection,
+)
 from optimatrix.policy import DEFAULT_BTC_SHORT_VOL_POLICY_PATH, load_btc_short_vol_policy
 
 
@@ -113,6 +118,15 @@ def _parser() -> argparse.ArgumentParser:
         help="verify append-only Session reviews and Codex analyses",
     )
     verify_memory.add_argument("--lab-root", type=Path, default=AI_LAB_DURABLE_ROOT)
+
+    daily_review = subcommands.add_parser(
+        "daily-review",
+        help="review at most one ready ended Session without waiting or retrying",
+    )
+    daily_review.add_argument("--ledger-root", type=Path, required=True)
+    daily_review.add_argument("--lab-root", type=Path, default=AI_LAB_DURABLE_ROOT)
+    daily_review.add_argument("--first-session-id", required=True)
+    daily_review.add_argument("--policy", type=Path, default=DEFAULT_BTC_SHORT_VOL_POLICY_PATH)
     return parser
 
 
@@ -207,10 +221,37 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
             return 0
+        if args.command == "daily-review":
+            return _run_daily_review_command(args)
         if args.command == "review-session":
             _require_separate_roots(args.ledger_root, args.lab_root)
             policy = load_btc_short_vol_policy(args.policy)
             memory = AiLabMemoryStore(args.lab_root)
+            existing = next(
+                (
+                    payload
+                    for payload in memory.current_review_entries()
+                    if payload["session_id"] == args.session_id
+                ),
+                None,
+            )
+            if existing is not None:
+                projection = write_workbench_review_projection(
+                    memory=memory,
+                    generated_at=datetime.now(UTC),
+                    root=args.lab_root,
+                )
+                review = existing["review"]
+                assert isinstance(review, dict)
+                _print(
+                    {
+                        "status": "AI_LAB_POLICY_QUALITY_REVIEW_ALREADY_RECORDED",
+                        "review_id": review["review_id"],
+                        "session_id": args.session_id,
+                        "projection_id": projection["projection_id"],
+                    }
+                )
+                return 0
             official_evidence = None
             if args.official_index_evidence is not None:
                 _require_evidence_in_lab_root(args.official_index_evidence, args.lab_root)
@@ -228,14 +269,14 @@ def main(argv: list[str] | None = None) -> int:
                 if args.recorded_at
                 else datetime.now(UTC)
             )
-            review_event, review_appended = memory.append_review(
-                review,
-                recorded_at=recorded_at,
-            )
             json_path, markdown_path = write_session_report(
                 review=review,
                 memory=prior_memory,
                 root=args.lab_root,
+            )
+            review_event, review_appended = memory.append_review(
+                review,
+                recorded_at=recorded_at,
             )
             analysis = None
             codex_status = "NOT_REQUESTED"
@@ -264,6 +305,11 @@ def main(argv: list[str] | None = None) -> int:
                     codex_error = str(exc)[:500]
             elif args.with_codex:
                 codex_status = "SKIPPED_BY_POLICY_QUALITY_WORKFLOW"
+            projection = write_workbench_review_projection(
+                memory=memory,
+                generated_at=recorded_at,
+                root=args.lab_root,
+            )
             _print(
                 {
                     "status": "AI_LAB_POLICY_QUALITY_REVIEW_RECORDED",
@@ -311,6 +357,7 @@ def main(argv: list[str] | None = None) -> int:
                     "analysis_markdown_report": (
                         str(analysis_markdown_path) if analysis_markdown_path is not None else None
                     ),
+                    "workbench_projection_id": projection["projection_id"],
                 }
             )
             return 0
@@ -325,6 +372,61 @@ def main(argv: list[str] | None = None) -> int:
 
 def _print(value: object) -> None:
     print(json.dumps(value, allow_nan=False, ensure_ascii=False, indent=2, sort_keys=True))
+
+
+def _run_daily_review_command(args: argparse.Namespace) -> int:
+    _require_separate_roots(args.ledger_root, args.lab_root)
+    started_at = datetime.now(UTC)
+    write_daily_state(
+        root=args.lab_root,
+        status="RUNNING",
+        updated_at=started_at,
+        target_session_id=None,
+        detail="BOUNDED_DAILY_REVIEW_STARTED",
+    )
+    memory = AiLabMemoryStore(args.lab_root)
+    try:
+        result = run_next_daily_review(
+            ledger_root=args.ledger_root,
+            lab_root=args.lab_root,
+            first_session_id=args.first_session_id,
+            policy=load_btc_short_vol_policy(args.policy),
+        )
+        finished_at = datetime.now(UTC)
+        write_daily_state(
+            root=args.lab_root,
+            status=result.status,
+            updated_at=finished_at,
+            target_session_id=result.target_session_id,
+            detail=result.detail,
+            review_id=result.review_id,
+        )
+        projection = write_workbench_review_projection(
+            memory=memory,
+            generated_at=finished_at,
+            root=args.lab_root,
+        )
+    except (OSError, ValueError) as exc:
+        failed_at = datetime.now(UTC)
+        write_daily_state(
+            root=args.lab_root,
+            status="FAILED",
+            updated_at=failed_at,
+            target_session_id=None,
+            detail=f"{type(exc).__name__}:{str(exc)[:400]}",
+        )
+        try:
+            write_workbench_review_projection(
+                memory=memory,
+                generated_at=failed_at,
+                root=args.lab_root,
+            )
+        except (OSError, ValueError):
+            pass
+        print(f"optimatrix-ai-lab: {exc}", file=sys.stderr)
+        return 2
+    _print({**result.as_object(), "workbench_projection_id": projection["projection_id"]})
+    return 0
 
 
 def _require_separate_roots(ledger_root: Path, lab_root: Path) -> None:

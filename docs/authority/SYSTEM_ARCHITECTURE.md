@@ -164,3 +164,23 @@ cannot block or alter the Review. Superseded Policy-quality Reviews and retired 
 reviews remain in verified append-only history and are excluded from current verdict memory and
 Challenger gates. The Lab never writes Ledger/Journal facts and has no continuous runtime, private
 market-data, account, order, Policy-mutation, deployment, or promotion path.
+
+When separately authorized, daily review is a bounded one-shot Lab command launched periodically by
+the operating system, not a second runtime loop. It enumerates canonical Session expiries from one
+fixed enrollment boundary so a zero-record day still becomes a 96-Window `UNKNOWN` Review instead
+of disappearing. It processes only the earliest unreviewed Session, requires every recorded
+Decision to have its append-once WindowOutcome, and lets the Deribit clock prove that the Session
+has ended before fetching post-Session history. One invocation writes at most one immutable Review
+and deterministic report, performs no internal wait or retry, and never calls Codex by default.
+
+The Lab's append-only Policy-quality memory plus content-addressed evidence and reports remain the
+truth owners. A small mutable daily-status file owns operation status only. A bounded,
+content-sealed, atomically replaced Workbench projection is derived from terminal current Reviews
+and can be rebuilt from memory; it is not a second Review ledger. The B3 Runtime reads that file
+through a fail-closed cached presentation adapter. A missing, foreign, or corrupt projection is
+shown as unavailable and cannot interrupt market observation, mutate Ledger/Journal records, or
+alter a Decision. This one-writer, one-Review-per-Session path has no current consumer for a
+database, queue, service, migration, or dual-write protocol. Full Window detail is exported as a
+separate loopback data asset only when its projection identity changes; the high-frequency Runtime
+document carries only its small validated reference and therefore does not amplify historical
+Review bytes on each publish.

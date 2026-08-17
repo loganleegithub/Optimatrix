@@ -165,6 +165,14 @@ class AiLabMemoryStore:
         ]
         return str(matches[-1]["review"]["review_id"]) if matches else None
 
+    def current_review_entries(self) -> tuple[JsonObject, ...]:
+        """Return the validated terminal V3 memory payload for each reviewed Session."""
+
+        return self._current_review_payloads()
+
+    def current_review_session_ids(self) -> frozenset[str]:
+        return frozenset(str(payload["session_id"]) for payload in self._current_review_payloads())
+
     def append_analysis(self, analysis: Mapping[str, object]) -> tuple[JsonObject, bool]:
         from optimatrix.ai_lab.codex_analysis import validate_analysis
 

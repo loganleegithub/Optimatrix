@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import plistlib
 import re
 from pathlib import Path
 
@@ -84,11 +85,33 @@ def test_authorized_runtime_matches_active_b3_deployment() -> None:
     if "**Target maturity stage:** `B3_ATOMIC_PUBLIC_SHADOW`" in task_text:
         assert str(expected_root) in task_text
     elif task_text:
-        assert "outside this branch and unchanged" in stage
+        assert "retains its exact" in stage
+        assert "replaced exactly once" in stage
         assert "deployment" in task_text
-        assert "NONE" in task_text
+        assert "No other process control" in task_text
     else:
         assert "existing B3 launchd job remains unchanged" in stage
+
+
+def test_daily_review_launchagent_is_bounded_and_has_no_keepalive_loop() -> None:
+    path = ROOT / "deploy" / "com.optimatrix.d1-session-review.plist"
+    with path.open("rb") as handle:
+        manifest = plistlib.load(handle)
+
+    assert manifest["Label"] == "com.optimatrix.d1-session-review"
+    assert manifest["RunAtLoad"] is True
+    assert manifest["StartInterval"] == 900
+    assert "KeepAlive" not in manifest
+    assert manifest["ProgramArguments"] == [
+        "/Users/logan/Optimatrix/.venv/bin/optimatrix-ai-lab",
+        "daily-review",
+        "--ledger-root",
+        "/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2",
+        "--lab-root",
+        "/Users/logan/Library/Application Support/Optimatrix/ai-lab",
+        "--first-session-id",
+        "2026-08-17T08:00:00Z",
+    ]
 
 
 def test_capability_acceptance_does_not_manufacture_market_evidence() -> None:

@@ -1,8 +1,8 @@
 # Optimatrix Current Stage
 
-**Status:** D1 AI LAB — RISK-QUALITY V3 PARTIALLY IDENTIFIED THROUGH 2026-08-16
+**Status:** D1 DAILY SESSION REVIEW AND WORKBENCH — ACTIVE
 
-**Current maturity:** `D1_AI_LAB_RISK_QUALITY_V3`
+**Current maturity:** `D1_AI_LAB_DAILY_SESSION_REVIEW`
 
 **Product Authority:** `INVERSE_BTC_SHORT_VOL`
 
@@ -11,31 +11,44 @@
 **Frozen Base Policy identity:**
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** [`D1_DAILY_SESSION_REVIEW_WORKBENCH`](../../tasks/D1_DAILY_SESSION_REVIEW_WORKBENCH.md)
 
 ## Current permissions
 
-**Offline checks and simulation:** existing repository checks only; no new durable evidence
+**Offline checks and simulation:** implementation and deterministic tests under caller-supplied
+ignored roots are authorized; production durable evidence is limited to the exact live command
+boundary in the active task
 
-**Public market calls:** `NONE_AUTHORIZED`
+**Public market calls:** only the task-bounded daily LaunchAgent may make one unauthenticated
+Deribit `public/get_time` preflight and one `public/get_index_chart_data` `btc_usd/2d` call for at
+most one ready Session per invocation; the existing B3 runtime retains its unchanged public surface
 
 **Stable ObservationLedger root:** `/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2`
-remains the B3 runtime root outside AI Lab and may not be opened or mutated without a new exact task
+remains writable only by the existing B3 runtime; the daily Review job and Workbench integration may
+open it read-only under the active task
 
-**Stable CaseJournal root:** `NONE`
+**Stable CaseJournal root:** the existing B3 root remains writable only by the existing B3 runtime;
+the daily Review path owns no CaseJournal write or derived Case fact
 
-**Continuous runtime:** existing B3 launchd job remains unchanged; no process control or deployment
+**Continuous runtime:** existing launchd label `com.optimatrix.b3-public-shadow` retains its exact
+command, root, Policy, EventState, and loopback port. After the repository gate and commit, it may be
+replaced exactly once only to load the read-only Review projection. One separate
+`com.optimatrix.d1-session-review` LaunchAgent may be installed with `RunAtLoad`, `StartInterval=900`,
+and at most one Session per invocation; it contains no daemon loop or KeepAlive retry
 
-**AI Lab stable durable root:** `/Users/logan/Library/Application Support/Optimatrix/ai-lab` is
-read-only until a later exact task
+**AI Lab stable durable root:** `/Users/logan/Library/Application Support/Optimatrix/ai-lab` may be
+read and may append only content-sealed official evidence, one V3 Review per new Session, and its
+deterministic reports; one bounded derived Web projection and one mutable operational-status file
+are also authorized and own no business truth
 
 **Codex CLI:** `NONE`
 
 **Private read-only account permission:** `NONE`
 
-**Orders, capital, and deployment:** `NONE`
+**Orders, capital, and deployment:** no order, fill, capital, private, or remote permission. Local
+deployment is limited to the exact two launchd actions in the active task
 
 **Policy mutation / promotion:** `NONE`
 
