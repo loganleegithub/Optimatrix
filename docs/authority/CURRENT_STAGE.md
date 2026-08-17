@@ -1,54 +1,54 @@
 # Optimatrix Current Stage
 
-**Status:** D1 DAILY SESSION REVIEW AND WORKBENCH — ACTIVE
+**Status:** D1 DAILY SESSION REVIEW AND WORKBENCH — ACCEPTED AND DEPLOYED
 
 **Current maturity:** `D1_AI_LAB_DAILY_SESSION_REVIEW`
 
 **Product Authority:** `INVERSE_BTC_SHORT_VOL`
 
-**Active Policy:** `src/optimatrix/data/btc-inverse-0dte-two-sided-short-vol.json`
+**Implementation:** `BTC_0DTE_TWO_SIDED_PREMIUM_SALE_V1`
 
 **Frozen Base Policy identity:**
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `NONE`
 
-**Sole authorized closure:** [`D1_DAILY_SESSION_REVIEW_WORKBENCH`](../../tasks/D1_DAILY_SESSION_REVIEW_WORKBENCH.md)
+**Sole authorized closure:** `NONE`
 
 ## Current permissions
 
-**Offline checks and simulation:** implementation and deterministic tests under caller-supplied
-ignored roots are authorized; production durable evidence is limited to the exact live command
-boundary in the active task
+No new validation, process control, deployment, durable write, or live command is authorized while
+there is no active task.
 
-**Public market calls:** only the task-bounded daily LaunchAgent may make one unauthenticated
-Deribit `public/get_time` preflight and one `public/get_index_chart_data` `btc_usd/2d` call for at
-most one ready Session per invocation; the existing B3 runtime retains its unchanged public surface
+**Offline checks and simulation:** existing repository checks and caller-supplied disposable roots
+only
+
+**Public market calls:** `NONE_AUTHORIZED` for new or manual Agent actions. The already deployed B3
+and daily Review LaunchAgents may continue only their exact frozen public-method manifests.
 
 **Stable ObservationLedger root:** `/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2`
-remains writable only by the existing B3 runtime; the daily Review job and Workbench integration may
-open it read-only under the active task
+remains writable only by the existing B3 runtime. The deployed daily Review job and Workbench
+adapter open it read-only and cannot repair, backfill, or replace a Decision or Outcome.
 
-**Stable CaseJournal root:** the existing B3 root remains writable only by the existing B3 runtime;
-the daily Review path owns no CaseJournal write or derived Case fact
+**Stable CaseJournal root:** the same B3 root remains writable only by the existing B3 runtime; AI
+Lab owns no CaseJournal write or derived Case fact
 
-**Continuous runtime:** existing launchd label `com.optimatrix.b3-public-shadow` retains its exact
-command, root, Policy, EventState, and loopback port. After the repository gate and commit, it may be
-replaced exactly once only to load the read-only Review projection. One separate
-`com.optimatrix.d1-session-review` LaunchAgent may be installed with `RunAtLoad`, `StartInterval=900`,
-and at most one Session per invocation; it contains no daemon loop or KeepAlive retry
+**Continuous runtime:** existing B3 launchd job remains unchanged at label
+`com.optimatrix.b3-public-shadow`, EventState `NONE`, the stable root above, and loopback port
+`8765`. Existing daily label `com.optimatrix.d1-session-review` may run its repository-owned
+one-shot command at load and every `900` seconds, enroll from `2026-08-17T08:00:00Z`, and process
+at most one ready Session per invocation. It has no `KeepAlive`, internal wait, or retry loop.
 
-**AI Lab stable durable root:** `/Users/logan/Library/Application Support/Optimatrix/ai-lab` may be
-read and may append only content-sealed official evidence, one V3 Review per new Session, and its
-deterministic reports; one bounded derived Web projection and one mutable operational-status file
-are also authorized and own no business truth
+**AI Lab stable durable root:** `/Users/logan/Library/Application Support/Optimatrix/ai-lab` remains
+separate from B3. The deployed daily job may append only content-sealed official evidence, one
+terminal V3 Review per Session, and deterministic reports; its mutable operation state and bounded
+Workbench projection own no business truth.
 
 **Codex CLI:** `NONE`
 
 **Private read-only account permission:** `NONE`
 
-**Orders, capital, and deployment:** no order, fill, capital, private, or remote permission. Local
-deployment is limited to the exact two launchd actions in the active task
+**Orders, capital, and deployment:** `NONE`; the two existing local LaunchAgents remain unchanged
 
 **Policy mutation / promotion:** `NONE`
 
@@ -56,77 +56,54 @@ deployment is limited to the exact two launchd actions in the active task
 
 ## Implemented business state
 
-- AI Lab V3 keeps the complete 96-Window denominator but adjudicates each Window independently.
-  Missing facts remain `UNKNOWN` and widen logical identification bounds without erasing known
-  classifications.
-- A hindsight opportunity must have zero frozen Candidate-level Policy blockers before IV/RV,
-  continuous path, and fee-after settlement can establish favorable hindsight economics. A
-  profitable structure behind a minimum-credit, credit-to-payoff, net-Delta, or other Candidate
-  blocker is `HINDSIGHT_POSITIVE_POLICY_REJECT`, never a missed opportunity.
-- Official post-Session index history may establish future sampled variance. It cannot reconstruct
-  an absent decision-time option book, rewrite a Base Decision, prove executable liquidity, or
-  create a fill or account PnL.
-- Policy-quality memory is append-only. Each successor names the exact predecessor, only one
-  terminal V3 Review per Session is current, and V1/V2 bytes remain verifiable but excluded from
-  current verdict memory and Challenger gates.
-- Deterministic JSON/Markdown reports are trader-readable and precede any optional Codex analysis.
-  No Codex analysis was invoked for either current Session.
-- Repository gate passed `282` tests, `52` subtests, and `8/8` business scenarios plus formatting,
-  Ruff, mypy, compilation, Authority, compatibility, and diff checks.
+- Human acceptance establishes `B3_PIPELINE_CAPABILITY_ACCEPTED`; it does not manufacture a natural
+  Candidate or execution chain. `natural_chain=NOT_YET_OBSERVED`,
+  `policy_reachability=COMPLETED_SESSION_LOCAL_RESPONSIBILITY_MEASURED`,
+  `policy_qualification=NONE`, and `edge_claim=NONE` remain the evidence boundary.
+- Daily Review enumerates canonical Session expiries from the fixed enrollment boundary instead of
+  discovering dates only from existing records. A zero-record day therefore remains a registered
+  `96`-Window `UNKNOWN` Review rather than disappearing.
+- Each invocation requires every recorded Decision to have its append-once WindowOutcome, lets the
+  Deribit clock prove Session end, reuses the first valid stored official evidence after a crash,
+  and writes the deterministic report before append-only Review memory. It never calls Codex by
+  default and cannot create, mutate, or promote a Challenger or Policy.
+- `policy-quality-reviews.jsonl`, content-addressed `evidence/`, and deterministic `reports/` remain
+  the durable truth. `daily-review-state.json` is operation state only.
+  `workbench-review-projection.json` is content-sealed, atomically replaced, bounded to the latest
+  `32` current V3 Reviews, and rebuildable from memory; no database, queue, migration, or dual write
+  was added.
+- Workbench schema `8` exposes completed-Session selection, verdict, exact denominator, logical
+  bounds, four quadrants, structure funnel, blockers, official evidence, IV/RV curves with explicit
+  `UNKNOWN` breaks, all Window classifications, evidence boundary, and the human promotion gate.
+  Full report detail is a separate local asset updated only when projection identity changes, so
+  high-frequency Runtime publication does not rewrite historical Review bytes.
+- Missing or corrupt AI Lab presentation is explicit and cannot stop the B3 runtime, alter a
+  Decision, or grant execution, account, order, fill, capital, Policy, or promotion permission.
 
-## 2026-08-15 observed result
+## Current observed evidence
 
-- Official evidence
-  `sha256:5605536e56e3c726d2cb3f9446c654449d3bfceb9d612078f61ea74ba5290444`
-  contains `2879` one-minute `btc_usd` points, zero gaps, and complete sampled path coverage.
-- Terminal V3 Review
-  `sha256:e301d06fdaf77de7ea5a7ebc38f20cfbfccdb65254e674d3a73b4b94996dcca0`
-  and report `sha256:bba29ea1883ee6bef8721913d33ce47f2f461cc9ecbd4d8b2e47ad9d83c2e850`
-  supersede V2 Review
-  `sha256:573144dd67bf88b270252463094c2a0937b526961265978ff018b23e07f33167`
-  without changing any earlier event, evidence, or report byte.
-- Exact population is `96`: `64` auditable and `32` unknown. Known classifications are `0`
-  captured, `64` correct avoidance, `0` missed, and `0` over-risk. Verdict is
-  `PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR`; miss, over-risk, and opportunity rates are each bounded
-  by `[0/96, 32/96]`.
-- The V2 labels for `10` missed Windows are retracted. Their `245` favorable structures all failed
-  `BOUNDARY_NET_CREDIT_TOO_SMALL` and `CREDIT_TO_PAYOFF_CAP_TOO_SMALL`; `11` also failed
-  `NET_DELTA_TOO_DIRECTIONAL`. Maximum boundary credit was `$6.8253337875` against the frozen `$10`
-  minimum, and maximum credit/payoff-cap ratio was `5.0332224%` against the frozen `7%` minimum.
-  These are diagnostic Policy rejects, not missed orders.
-- Trader report:
-  `/Users/logan/Library/Application Support/Optimatrix/ai-lab/reports/20260815T080000Z/e301d06fdaf77de7/policy-quality-review.md`.
+- Final repository gate passed `288` tests, `52` subtests, and `8/8` deterministic business
+  scenarios, plus formatting, Ruff, strict mypy, compilation, Authority, compatibility, and diff
+  checks.
+- Daily LaunchAgent completed its first automatic invocation with exit code `0`. AI Lab memory is
+  `VALID_AI_LAB_MEMORY` with `3` current V3 Reviews and `0` Codex analyses. Workbench projection
+  contains Sessions `2026-08-17`, `2026-08-16`, and `2026-08-15`, newest first.
+- For `2026-08-17T08:00:00Z`, Review
+  `sha256:0fa091e47f1f7dfdfd2350431ec91f8250ed6d14da32e8d6f72b6a416f564c72`
+  binds official evidence
+  `sha256:c7c5adc450bedce38c11f242014ce31295716c25c297a54e8a64eaef7f198370`:
+  `2879` one-minute index points, complete Session coverage, and zero gaps. The exact population is
+  `96` DecisionRecords and `96` WindowOutcomes; `86` Windows are auditable and `10` remain
+  `UNKNOWN`. Known classifications are `0` captured, `86` correct avoidance, `0` missed, and `0`
+  over-risk. Verdict is `PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR`; miss, over-risk, and opportunity
+  rates are each bounded by `[0/96, 10/96]`. Challenger comparison is not eligible.
+- After the one authorized B3 replacement, one process owns the runtime lock and loopback listener.
+  The public WebSocket opened a new epoch, resumed market frames, produced a complete public-market
+  cut, and advanced the current Session Decision population from `40` to `41`. Browser acceptance
+  observed the latest report and a historical Session selector with no reproducible console error.
 
-## 2026-08-16 observed result
-
-- Official evidence
-  `sha256:40b798a527b8537799385cf836fc40200b542990d27f45da2f0e994facdf0f7e`
-  contains `2879` one-minute `btc_usd` points, zero gaps, and complete sampled path coverage.
-- Terminal V3 Review
-  `sha256:69419e565c97719e9d30aea409e8bd80b50656dac359673b11927d26c78d5228`
-  and report `sha256:d9a1713f47b149d1a3df5837e2f9e4ccdfe7492c7ac13d1910101aeb09b011ee`
-  are the first Policy-quality facts for the Session.
-- Exact population is `96`: all DecisionRecords and WindowOutcomes exist, but only `64` have a
-  decision-time observation and `32` remain unknown. Known classifications are `0` captured, `64`
-  correct avoidance, `0` missed, and `0` over-risk. Verdict is
-  `PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR`; miss, over-risk, and opportunity rates are each bounded
-  by `[0/96, 32/96]`.
-- The hindsight funnel contains `546` legal structures, `171` complete-amount priceable structures,
-  and `0` structures surviving the fixed hard-control layer. All `171` failed Combo fee-burden
-  control and `108` also failed boundary-reference-loss control. There are `0` Policy-eligible
-  opportunities and `0` favorable Policy-reject diagnostics.
-- Trader report:
-  `/Users/logan/Library/Application Support/Optimatrix/ai-lab/reports/20260816T080000Z/69419e565c97719e/policy-quality-review.md`.
-
-Memory verification is `VALID_AI_LAB_MEMORY`: two current V3 Reviews, one superseded V1 Review, one
-superseded V2 Review, one invalid-for-Policy-quality legacy Session Review, and zero Codex analyses.
-
-`B3_PIPELINE_CAPABILITY_ACCEPTED` remains prior mechanism evidence;
-`natural_chain=NOT_YET_OBSERVED`,
-`policy_reachability=COMPLETED_SESSION_LOCAL_RESPONSIBILITY_MEASURED`,
-`policy_qualification=NONE`, and `edge_claim=NONE` remain unchanged.
-
-**Primary blocker:** `DECISION_TIME_OBSERVATION_COVERAGE_INCOMPLETE` — each reviewed Session still has
-`32/96` unknown Windows. Post-Session public history can repair future RV evidence but cannot recreate
-the absent causal option books, so neither Session proves that the full day contained no opportunity
-or that the Policy is well calibrated.
+**Primary blocker:** `DECISION_TIME_OBSERVATION_COVERAGE_INCOMPLETE` — the latest completed Session
+still has `10/96` causally missing decision-time observations. Post-Session index history repairs
+future sampled variance only; it cannot recreate absent option books, prove executable liquidity,
+qualify the Policy, or establish Edge. Any new implementation, validation, Policy experiment,
+deployment, or live command requires one new exact task and matching Stage activation.
