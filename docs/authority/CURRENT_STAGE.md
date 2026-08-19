@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 WEBSOCKET ROUTE/LIVENESS DIAGNOSIS — CLIENT TIMEOUT ESTABLISHED, SHADOWROCKET PLAUSIBLE
+**Status:** C1/C2 REPOSITORY CONSOLIDATION — ACTIVE
 
 **Current maturity:** `D1_AI_LAB_DAILY_SESSION_REVIEW`
 
@@ -11,17 +11,19 @@
 **Frozen Base Policy identity:**
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`
 
-**Current task kind:** `NONE`
+**Current task kind:** `IMPLEMENTATION`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** [`C1_C2_BRANCH_CONSOLIDATION.md`](../../tasks/C1_C2_BRANCH_CONSOLIDATION.md)
 
 ## Current permissions
 
-No new validation, process control, deployment, durable write, or live command is authorized while
-there is no active task.
+Only the active task's bounded repository merge, owner reconciliation, offline verification, Git
+commit/push, and proven merged worktree/branch cleanup are authorized. No market call, credential,
+account read, order, process control, restart, deployment, Policy change, or durable runtime access
+is authorized.
 
-**Offline checks and simulation:** existing repository checks and caller-supplied disposable roots
-only
+**Offline checks and simulation:** focused C1/C2 tests, the existing repository gate, and
+caller-supplied disposable roots only
 
 **Public market calls:** `NONE_AUTHORIZED` for new or manual Agent actions. The already deployed B3
 and daily Review LaunchAgents may continue only their exact frozen public-method manifests.
@@ -33,9 +35,10 @@ adapter open it read-only and cannot repair, backfill, or replace a Decision or 
 **Stable CaseJournal root:** the same B3 root remains writable only by the existing B3 runtime; AI
 Lab owns no CaseJournal write or derived Case fact
 
-**Continuous runtime:** existing B3 launchd job remains unchanged at label
+**Continuous runtime:** existing B3 launchd job retains its exact label
 `com.optimatrix.b3-public-shadow`, EventState `NONE`, the stable root above, and loopback port
-`8765`. Existing daily label
+`8765`; it was replaced exactly once under the closed deployment and is not restarted, replaced,
+or deployed by this task. Existing daily label
 `com.optimatrix.d1-session-review` may run its repository-owned
 one-shot command at load and every `900` seconds, enroll from `2026-08-17T08:00:00Z`, and process
 at most one ready Session per invocation. It has no `KeepAlive`, internal wait, or retry loop.
@@ -45,7 +48,7 @@ separate from B3. The deployed daily job may append only content-sealed official
 terminal V3 Review per Session, and deterministic reports; its mutable operation state and bounded
 Workbench projection own no business truth.
 
-**Codex CLI:** `NONE`
+**Codex CLI:** repository consolidation only; no market or private call
 
 **Private read-only account permission:** `NONE`
 
