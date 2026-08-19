@@ -11,6 +11,8 @@ requires-python = ">=3.13,<3.15"
 dependencies = ["websockets==17.0.1"]
 
 [project.scripts]
+optimatrix-account = "optimatrix.private_cli:main"
+optimatrix-combo = "optimatrix.combo_cli:main"
 optimatrix-shadow = "optimatrix.cli:main"
 optimatrix-ai-lab = "optimatrix.ai_lab.cli:main"
 

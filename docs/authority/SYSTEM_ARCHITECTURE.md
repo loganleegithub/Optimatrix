@@ -29,6 +29,9 @@ session.py           Deribit Session and phase classification
 market.py            typed market facts, settlement facts, and evidence validation
 deribit_snapshot.py  bounded public-response translation
 deribit_websocket.py BTC-only public incremental cache, continuity, watermark, and REST resync
+account.py           isolated authenticated account and credential-capability facts
+deribit_private.py   fixed-host Deribit fixed-read-method response translation
+deribit_combo.py     fixed-Testnet existing-Combo order and reconciliation lifecycle
 pricing.py           neutral depth projections plus fee, payoff, valuation, and settlement math
 policy.py            fixed launch hypotheses and causal budgets
 structure.py         BTC 0DTE whole-four-leg discovery and ranking
@@ -40,8 +43,10 @@ lifecycle.py         atomic BTC Shadow TradeCase, Position, trigger, terminal, a
 case_journal.py      append-only TradeCase snapshots and accepted-prefix recovery
 engine.py            BTC 0DTE Short Vol path composition
 runtime.py           one manifest-enrolled BTC public cross-Session scheduler and recovery owner
-workbench.py         read-only display projection
-cli.py               offline and explicitly authorized entrypoints
+workbench.py         read-only public-Shadow display projection
+cli.py               public offline and explicitly authorized entrypoints
+private_cli.py       credential-safe explicit fixed-read-method account capture and safe receipt
+combo_cli.py         explicit one-run Testnet Combo lifecycle and safe receipt
 scenarios.py         deterministic evidence, not product Authority
 ai_lab/              ended-Session adjudication, append-only research memory, and offline AI
 ```
@@ -184,3 +189,17 @@ database, queue, service, migration, or dual-write protocol. Full Window detail 
 separate loopback data asset only when its projection identity changes; the high-frequency Runtime
 document carries only its small validated reference and therefore does not amplify historical
 Review bytes on each publish.
+
+`AuthenticatedAccountObservation` is a separate one-shot `PRIVATE_EXECUTION` fact owner. It is
+constructed only from the fixed Deribit mainnet environment, one bounded authentication response,
+and the independently validated BTC account-summary and BTC-position responses. Its account-scope
+identity, user-declared credential boundary, unavailable token-scope-normalization label, fixed
+application-method permission, order-activity label, known-at boundaries, component completeness,
+summary, and Position facts remain one-shot process memory. The CLI receipt exposes only component
+status, Position count, capture boundary, blockers, and fixed permission labels. Raw auth-response
+scope text is neither a read gate nor a record or output field. Safety is bounded by the
+user-declared read-only mainnet credential, the exact requested read scope, the fixed host, and the
+three-method application allowlist. Credentials and bearer tokens are never record fields. The
+observation is not written to `ObservationLedger` or `CaseJournal`, does not enter the public
+runtime, and cannot create or mutate a Decision, Shadow allocation, TradeCase, Position, lifecycle,
+reservation, order, or attribution fact.

@@ -194,6 +194,94 @@ A future real Position requires a separate `AccountRiskReservation` derived from
 equity, margin, existing positions, available capacity, account-specific fees, and reservation
 state. It belongs to private stages and cannot be inferred from Shadow allocation or public depth.
 
+## C1 authenticated account observation
+
+C1 adds one isolated, explicitly invoked `AuthenticatedAccountObservation`; it does not add real
+Entry. The observation binds the exact Deribit `MAINNET` environment, an opaque account-scope
+identity, authentication response boundary, independently
+validated BTC account-summary and BTC-position components, each component's causal response
+boundary, and exact blockers.
+
+The only C1 exchange methods are:
+
+```text
+public/auth                       client_credentials with account:read trade:read
+private/get_account_summary      currency=BTC, extended=false
+private/get_positions            currency=BTC
+```
+
+Host selection is closed to the fixed Deribit mainnet endpoint. Arbitrary URL or host
+input, every method outside this list, and every parameter expansion fail before transport. The
+requested scope is always exactly `account:read trade:read`, because the summary requires the former
+capability and Positions require the latter. The machine credential is explicitly supplied under a
+user-declared read-only mainnet contract. The auth-response scope text is not normalized and never
+decides whether these two fixed reads are called; it is not output, serialized, persisted, or
+projected. `TOKEN_SCOPE_NORMALIZATION=UNAVAILABLE` prevents an invented exact-effective-scope claim.
+Missing or malformed access token, bearer type, expiry, mainnet environment, response envelope, or
+timing remains closed before the two private reads.
+Authentication, environment, currency, response-envelope timing, known-at, required numeric
+values, instrument identity, and duplicate Position names are validated before a component becomes
+known.
+
+The two private components are independent. A known empty BTC-position array means empty only at
+that response boundary. A failed or malformed component remains `UNKNOWN`; the other known
+component may remain visible, but partial truth cannot infer flat risk, margin capacity, capital
+availability, or a reservation. Credentials and bearer tokens are transport-only process memory:
+they are absent from CLI arguments, identities, exceptions, safe receipts, Ledger, Journal, and
+every durable observation field.
+
+Credential injection is explicit and local. The CLI either reads both selected-environment values
+from an interactive no-echo terminal or from one caller-supplied credential-file path. It never
+searches for or implicitly loads `.env`, process environment, browser state, Keychain state, or a
+user directory. A credential file must be a same-owner, non-symlink regular file with exact mode
+`0600`; only the selected `DERIBIT_MAINNET_*` pair is retained by the C1 command. Duplicate or
+unknown keys, missing environment pairs, quotes, shell syntax, wider permissions, file replacement,
+and non-regular input fail with value-free codes.
+
+This observation is `truth_layer=PRIVATE_EXECUTION` and separates
+`CREDENTIAL_SCOPE=USER_DECLARED_READ_ONLY|UNKNOWN`,
+`TOKEN_SCOPE_NORMALIZATION=UNAVAILABLE`,
+`APPLICATION_METHOD_PERMISSION=READ_ONLY_FIXED_ALLOWLIST`, and `ORDERS_EXECUTED=NONE`. The last label
+means this application executed no order during the capture; it does not claim that the account has
+no external activity.
+The observation cannot become a `ShadowRiskAllocation`, `AccountRiskReservation`, TradeCase,
+Position, route, Entry, order, trade, fill, PnL, or execution attribution. C2 requires a separate
+task, contract closure, and permission boundary.
+
+## C2 Testnet Combo lifecycle
+
+C2 is `TESTNET / PRIVATE_EXECUTION / NO_REAL_CAPITAL`. It is an explicitly invoked one-order
+exchange-mechanism probe, not a mainnet Entry, Policy-selected TradeCase, capital reservation, or
+realized-PnL fact. Mainnet execution remains `NONE`.
+
+The fixed Testnet method surface is `public/auth`, `public/get_combos`,
+`public/get_instrument`, `public/get_order_book`, `private/get_positions`, `private/buy`,
+`private/sell`, `private/get_order_state`, `private/get_user_trades_by_order`, and
+`private/cancel`. It requests `trade:read_write`, uses only `test.deribit.com`, and contains no
+`private/create_combo`, RFQ, block-trade, wallet, transfer, WebSocket, daemon, or generic broker
+path. Auth-response scope text is not a local permission gate; the fixed host, method, parameter,
+credential, and task boundaries own application permission.
+
+The probe deterministically selects an existing active BTC `future_combo` or `option_combo` whose
+instrument and book are open, whose minimum amount and tick are valid, and whose Combo and legs do
+not conflict with a nonzero baseline Position. It submits that minimum amount at the same-side best
+book price as one `good_til_cancelled` limit order with `post_only=true`,
+`reject_post_only=true`, and `reduce_only=false`. The selected book price is retained exactly,
+including a negative Combo price; it is not re-rounded across tick-size-step boundaries.
+
+Order state, final `filled_amount`, unique per-order trades, top-level actual fee grouped by
+`fee_currency`, and all BTC Positions are separate response facts. Empty trades imply zero actual
+fee for this order only. A no-fill order is cancelled by its exact order ID and accepted only after
+final `cancelled/filled_amount=0`, another empty trade response, and an unchanged Position snapshot.
+This proves interface connectivity and cleanup, not natural fill, nonzero fee, or reduce-only exit.
+
+After a natural partial fill, the unfilled remainder is cancelled before exit. The opposite
+same-Combo market exit uses the final actual entry `filled_amount`, `post_only=false`, and
+`reduce_only=true`. Closure requires the exit facts and related Positions to return to baseline.
+Deribit's generic buy/sell contract exposes reduce-only and Combo trade fields, but does not
+pre-prove that every Combo accepts a market reduce-only exit; rejection or incomplete Position
+reconciliation remains explicit `UNVERIFIED` evidence rather than selecting a different method.
+
 ## Decision result and TradeCase boundary
 
 The BTC contract owns each enrolled-Window `DecisionRecord`: it freezes DecisionWindow, Base Policy,

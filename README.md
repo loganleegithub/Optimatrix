@@ -55,3 +55,34 @@ The runtime establishes Deribit UTC before it creates or mutates the stable root
 Session, Window, lifecycle, expiry, and settlement boundaries; the host wall clock is not a business
 input. The Workbench receives UTC facts and lets the browser render marked timestamps in the
 trader's local timezone without changing backend identities or calculations.
+
+## C1 private read-only account capture
+
+This entrypoint is usable only when both `CURRENT_STAGE` and its sole active task authorize a
+bounded private canary. The machine-local call is:
+
+```bash
+.venv/bin/optimatrix-account \
+  --environment mainnet \
+  --credentials-file /Users/logan/.config/optimatrix/credentials.env
+```
+
+The machine-level credential and caller contract is
+`/Users/logan/.config/optimatrix/README.md`. The repository contains no credential template and the
+CLI never searches for a credential source. It emits only a status receipt, not credential,
+account-value, or Position-detail output. Exact method, credential-file, truth, and failure
+semantics belong to
+[`BTC_0DTE_TWO_SIDED_SHORT_VOL.md`](docs/contracts/BTC_0DTE_TWO_SIDED_SHORT_VOL.md).
+
+## C2 Testnet Combo lifecycle
+
+This entrypoint is usable only when the sole active task authorizes one bounded Testnet lifecycle:
+
+```bash
+.venv/bin/optimatrix-combo \
+  --credentials-file /Users/logan/.config/optimatrix/credentials.env
+```
+
+The command is fixed to Testnet and returns a status-only receipt without credential, token,
+account-value, or Position-detail output. Exact order, reconciliation, cleanup, and permission
+semantics belong to the BTC contract above; package availability does not authorize an invocation.

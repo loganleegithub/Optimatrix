@@ -114,6 +114,93 @@ def test_daily_review_launchagent_is_bounded_and_has_no_keepalive_loop() -> None
     ]
 
 
+def test_c1_private_account_boundary_is_isolated_and_read_only() -> None:
+    architecture = (AUTHORITY / "SYSTEM_ARCHITECTURE.md").read_text(encoding="utf-8")
+    btc_contract = (ROOT / "docs/contracts/BTC_0DTE_TWO_SIDED_SHORT_VOL.md").read_text(
+        encoding="utf-8"
+    )
+    case_contract = (ROOT / "docs/contracts/CASE_POSITION_OUTCOME.md").read_text(encoding="utf-8")
+    manifest = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    c1_source = "\n".join(
+        (ROOT / "src/optimatrix" / name).read_text(encoding="utf-8")
+        for name in ("account.py", "deribit_private.py", "private_cli.py")
+    )
+
+    for owner in (architecture, btc_contract, case_contract):
+        assert "AuthenticatedAccountObservation" in owner
+    assert "CREDENTIAL_SCOPE=USER_DECLARED_READ_ONLY|UNKNOWN" in btc_contract
+    assert "TOKEN_SCOPE_NORMALIZATION=UNAVAILABLE" in btc_contract
+    assert "APPLICATION_METHOD_PERMISSION=READ_ONLY_FIXED_ALLOWLIST" in btc_contract
+    assert "ORDERS_EXECUTED=NONE" in btc_contract
+    assert "account:read trade:read" in btc_contract
+    assert "optimatrix-account" in manifest
+    for allowed in (
+        "public/auth",
+        "private/get_account_summary",
+        "private/get_positions",
+    ):
+        assert allowed in c1_source
+    for forbidden in (
+        "private/buy",
+        "private/sell",
+        "private/cancel",
+        "private/create_combo",
+        "private/get_order_state",
+        "private/get_user_trades",
+        "private/withdraw",
+        "private/transfer",
+    ):
+        assert forbidden not in c1_source
+
+
+def test_credentials_are_machine_local_and_project_has_no_template() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert not (ROOT / ".env").exists()
+    assert not (ROOT / ".env.example").exists()
+    assert "/Users/logan/.config/optimatrix/credentials.env" in readme
+    assert "/Users/logan/.config/optimatrix/README.md" in readme
+    assert "repository contains no credential template" in readme
+
+
+def test_c2_combo_boundary_is_testnet_only_and_separate_from_c1() -> None:
+    btc_contract = (ROOT / "docs/contracts/BTC_0DTE_TWO_SIDED_SHORT_VOL.md").read_text(
+        encoding="utf-8"
+    )
+    manifest = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    c2_source = "\n".join(
+        (ROOT / "src/optimatrix" / name).read_text(encoding="utf-8")
+        for name in ("deribit_combo.py", "combo_cli.py")
+    )
+
+    for label in ("TESTNET", "PRIVATE_EXECUTION", "NO_REAL_CAPITAL"):
+        assert label in btc_contract
+    assert "optimatrix-combo" in manifest
+    assert "test.deribit.com" in c2_source
+    assert "www.deribit.com" not in c2_source
+    for allowed in (
+        "public/auth",
+        "public/get_combos",
+        "public/get_instrument",
+        "public/get_order_book",
+        "private/get_positions",
+        "private/buy",
+        "private/sell",
+        "private/get_order_state",
+        "private/get_user_trades_by_order",
+        "private/cancel",
+    ):
+        assert allowed in c2_source
+    for forbidden in (
+        "private/create_combo",
+        "private/withdraw",
+        "private/transfer",
+        "public/subscribe",
+        "private/subscribe",
+    ):
+        assert forbidden not in c2_source
+
+
 def test_capability_acceptance_does_not_manufacture_market_evidence() -> None:
     constitution = (AUTHORITY / "PRODUCT_CONSTITUTION.md").read_text(encoding="utf-8")
     stage = (AUTHORITY / "CURRENT_STAGE.md").read_text(encoding="utf-8")

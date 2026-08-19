@@ -1,6 +1,6 @@
 # Case, Position, and Outcome Contract
 
-**Status:** ACTIVE BUSINESS CONTRACT — B3 PUBLIC SHADOW SOURCE CONFORMANT; D1 AI LAB POLICY QUALITY
+**Status:** ACTIVE BUSINESS CONTRACT — B3 PUBLIC SHADOW SOURCE CONFORMANT; C1/C2 ISOLATED; D1 AI LAB POLICY QUALITY
 
 This contract owns the chain after each Window Decision: TradeCase, Position, monitoring,
 management, trigger, exit, terminality, Outcome, recovery, and offline learning. DecisionRecord and
@@ -44,6 +44,19 @@ An unresolved same-Session Shadow Case retains its frozen `stress_reserve_usd` w
 pending or a Position exists. Recovery verifies the allocation identity and conservative component
 maximum before reconstructing capacity. A terminal no-Position Entry or terminal Position Outcome
 releases that exact reserve; restart, Gap, ExitIntent, or a merely attempted exit does not.
+
+A C1 `AuthenticatedAccountObservation` remains outside this chain. Its known account summary and
+BTC Position list do not open a TradeCase, create a Position, reserve risk, release a Shadow
+reserve, reconcile a trade, or establish execution attribution. A complete known-empty response is
+only a capture-boundary account fact. Any missing component remains `UNKNOWN` and cannot prove
+flatness, capacity, terminality, or absence of risk responsibility.
+
+A C2 Testnet Combo lifecycle is also outside the Public Shadow and real-mainnet Case chain. Its
+order, trade, actual-fee, and Testnet Position facts are real exchange responses under
+`PRIVATE_EXECUTION`, but `NO_REAL_CAPITAL`; they cannot create or close a mainnet Position, reserve
+capital, rewrite a Shadow Outcome, qualify Policy, or establish strategy Edge. Any natural Testnet
+fill remains open responsibility until its opposite reduce-only response and Position reconciliation
+return to the baseline, or an exact unresolved blocker is reported.
 
 ## Position truth
 
