@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 THREE-WINDOW RUNTIME OBSERVATION — ACTIVE
+**Status:** B3 THREE-WINDOW RUNTIME OBSERVATION — DEGRADED BUT FAIL-CLOSED
 
 **Current maturity:** `D1_AI_LAB_DAILY_SESSION_REVIEW`
 
@@ -11,20 +11,20 @@
 **Frozen Base Policy identity:**
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`
 
-**Current task kind:** `VALIDATION_ONLY`
+**Current task kind:** `NONE`
 
-**Sole authorized closure:** [`B3_THREE_WINDOW_RUNTIME_OBSERVATION.md`](../../tasks/B3_THREE_WINDOW_RUNTIME_OBSERVATION.md)
+**Sole authorized closure:** `NONE`
 
 ## Current permissions
 
-Only the bounded read-only process, CPU, socket, Workbench, runtime-audit, and durable-record
-observations declared by the active task are authorized. No runtime mutation is permitted.
+No new validation, process control, deployment, durable write, or live command is authorized while
+there is no active task.
 
-**Offline checks and simulation:** Authority and diff checks for this validation task only
+**Offline checks and simulation:** existing repository checks and caller-supplied disposable roots
+only
 
-**Public market calls:** `NONE_AUTHORIZED` for manual Agent actions. The already deployed B3 and
-daily Review LaunchAgents may continue only their exact frozen public-method manifests while their
-outputs are observed read-only.
+**Public market calls:** `NONE_AUTHORIZED` for new or manual Agent actions. The already deployed B3
+and daily Review LaunchAgents may continue only their exact frozen public-method manifests.
 
 **Stable ObservationLedger root:** `/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2`
 remains writable only by the existing B3 runtime. The deployed daily Review job and Workbench
@@ -33,10 +33,9 @@ adapter open it read-only and cannot repair, backfill, or replace a Decision or 
 **Stable CaseJournal root:** the same B3 root remains writable only by the existing B3 runtime; AI
 Lab owns no CaseJournal write or derived Case fact
 
-**Continuous runtime:** existing B3 launchd job retains its exact label
+**Continuous runtime:** existing B3 launchd job remains unchanged at label
 `com.optimatrix.b3-public-shadow`, EventState `NONE`, the stable root above, and loopback port
-`8765`. It was replaced exactly once under the closed deployment; no replacement is authorized by
-this validation. Existing daily label `com.optimatrix.d1-session-review` may run its repository-owned
+`8765`. Existing daily label `com.optimatrix.d1-session-review` may run its repository-owned
 one-shot command at load and every `900` seconds, enroll from `2026-08-17T08:00:00Z`, and process
 at most one ready Session per invocation. It has no `KeepAlive`, internal wait, or retry loop.
 
@@ -90,6 +89,24 @@ Workbench projection own no business truth.
 
 ## Current observed evidence
 
+- Three exact forward Windows were observed from `16:45` through the final `17:31 UTC` input
+  deadline and classified `DEGRADED_BUT_FAIL_CLOSED`. PID `67653`, launchd run count `3`, loopback
+  listener, Workbench HTTP `200`, and the direct `:443` socket remained stable; no socket returned
+  to `127.0.0.1:1082` and no process restart occurred.
+- The `16:45 UTC` Window received a complete cut at `16:45:01.129` with source watermark
+  `16:45:00.059`, then appended exactly one `ABSTAIN/SESSION_VRP_PROXY_BELOW_THRESHOLD` record at
+  `17:01`. Epoch `1` later lost its connection at `16:55:36.702` to a keepalive ping timeout. The
+  runtime opened epoch `2`, recovered index history, and resumed real market frames by
+  `16:55:41.481`, approximately `4.8` seconds later.
+- The `17:00 UTC` Window preserved that transport gap as `PUBLIC_MARKET_GAP` and appended exactly
+  one `UNKNOWN/NO_OBSERVATION` record at `17:16`; it did not consume recovered epoch-2 data or
+  backfill the missing causal cut. The `17:15 UTC` Window then received a complete epoch-2 cut at
+  `17:15:01.835` with source watermark `17:15:00.651` and appended exactly one
+  `ABSTAIN/SESSION_VRP_PROXY_BELOW_THRESHOLD` record at `17:31`.
+- All eighteen declared per-Window CPU samples were below `20%`; a separate pre-Window sample had
+  one transient `31.8%` value but no sustained one-core saturation. The validated Ledger population
+  advanced from `499` to `503` because it also included the ordinary preceding `16:30` Window; the
+  three target identities each occur exactly once.
 - Final repository gate passed `290` tests, `52` subtests, and `8/8` deterministic business
   scenarios, plus formatting, Ruff, strict mypy, compilation, Authority, compatibility, and diff
   checks. Focused ledger and WebSocket coverage passed `29` tests.
@@ -118,13 +135,11 @@ Workbench projection own no business truth.
   `UNKNOWN`. Known classifications are `0` captured, `86` correct avoidance, `0` missed, and `0`
   over-risk. Verdict is `PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR`; miss, over-risk, and opportunity
   rates are each bounded by `[0/96, 10/96]`. Challenger comparison is not eligible.
-**Primary blocker:** `THREE_WINDOW_FORWARD_RELIABILITY_NOT_YET_OBSERVED` — the active task must
-classify three exact forward Windows as `NORMAL`, `DEGRADED_BUT_FAIL_CLOSED`, or `FAILED` without
-changing the running system. The underlying business blocker remains
-`DECISION_TIME_OBSERVATION_COVERAGE_INCOMPLETE`: the latest completed Session
-still has `10/96` causally missing decision-time observations. Post-Session index history repairs
-future sampled variance only; it cannot recreate absent option books, prove executable liquidity,
-qualify the Policy, or establish Edge. `LEDGER_REPLAY_PER_TICK` and `SYSTEM_PROXY_INHERITANCE` are
-closed implementation blockers; their closure does not repair prior gaps. Any new implementation,
-validation, Policy experiment, deployment, or live command requires one new exact task and matching
-Stage activation.
+**Primary blocker:** `PUBLIC_WEBSOCKET_KEEPALIVE_TIMEOUT_OBSERVED` — explicit direct routing closed
+system-proxy inheritance and the runtime recovered automatically, but one direct connection still
+timed out during the three-Window observation and causally cost the `17:00 UTC` Window. The system
+failed closed and recovered; the remaining transport cause is not established by this validation.
+The underlying `DECISION_TIME_OBSERVATION_COVERAGE_INCOMPLETE` blocker also remains: a later history
+seed cannot repair an absent decision-time option cut, qualify Policy, or establish Edge. Any new
+diagnosis, implementation, validation, deployment, or live command requires one exact task and
+matching Stage activation.
