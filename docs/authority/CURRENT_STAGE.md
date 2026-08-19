@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** C1/C2 REPOSITORY CONSOLIDATION — ACTIVE
+**Status:** D1 DAILY REVIEW — C1/C2 ISOLATED CAPABILITIES CONSOLIDATED
 
 **Current maturity:** `D1_AI_LAB_DAILY_SESSION_REVIEW`
 
@@ -11,19 +11,17 @@
 **Frozen Base Policy identity:**
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`
 
-**Current task kind:** `IMPLEMENTATION`
+**Current task kind:** `NONE`
 
-**Sole authorized closure:** [`C1_C2_BRANCH_CONSOLIDATION.md`](../../tasks/C1_C2_BRANCH_CONSOLIDATION.md)
+**Sole authorized closure:** `NONE`
 
 ## Current permissions
 
-Only the active task's bounded repository merge, owner reconciliation, offline verification, Git
-commit/push, and proven merged worktree/branch cleanup are authorized. No market call, credential,
-account read, order, process control, restart, deployment, Policy change, or durable runtime access
-is authorized.
+No new validation, process control, deployment, durable write, merge, or live command is authorized
+while there is no active task.
 
-**Offline checks and simulation:** focused C1/C2 tests, the existing repository gate, and
-caller-supplied disposable roots only
+**Offline checks and simulation:** existing repository checks and caller-supplied disposable roots
+only
 
 **Public market calls:** `NONE_AUTHORIZED` for new or manual Agent actions. The already deployed B3
 and daily Review LaunchAgents may continue only their exact frozen public-method manifests.
@@ -35,10 +33,9 @@ adapter open it read-only and cannot repair, backfill, or replace a Decision or 
 **Stable CaseJournal root:** the same B3 root remains writable only by the existing B3 runtime; AI
 Lab owns no CaseJournal write or derived Case fact
 
-**Continuous runtime:** existing B3 launchd job retains its exact label
+**Continuous runtime:** existing B3 launchd job remains unchanged at label
 `com.optimatrix.b3-public-shadow`, EventState `NONE`, the stable root above, and loopback port
-`8765`; it was replaced exactly once under the closed deployment and is not restarted, replaced,
-or deployed by this task. Existing daily label
+`8765`. Existing daily label
 `com.optimatrix.d1-session-review` may run its repository-owned
 one-shot command at load and every `900` seconds, enroll from `2026-08-17T08:00:00Z`, and process
 at most one ready Session per invocation. It has no `KeepAlive`, internal wait, or retry loop.
@@ -48,9 +45,10 @@ separate from B3. The deployed daily job may append only content-sealed official
 terminal V3 Review per Session, and deterministic reports; its mutable operation state and bounded
 Workbench projection own no business truth.
 
-**Codex CLI:** repository consolidation only; no market or private call
+**Codex CLI:** `NONE`
 
-**Private read-only account permission:** `NONE`
+**Private read-only account permission:** `NONE`; the integrated C1 source grants no credential or
+account-read permission
 
 **Orders, capital, and deployment:** `NONE`; the two existing local LaunchAgents remain unchanged
 
@@ -91,6 +89,11 @@ Workbench projection own no business truth.
   high-frequency Runtime publication does not rewrite historical Review bytes.
 - Missing or corrupt AI Lab presentation is explicit and cannot stop the B3 runtime, alter a
   Decision, or grant execution, account, order, fill, capital, Policy, or promotion permission.
+- The modular monolith includes isolated C1 mainnet fixed-read-method account capture and C2
+  fixed-Testnet existing-Combo lifecycle entrypoints. Their CLIs, safe receipts, and fail-closed
+  boundaries are offline verified and remain outside the B3 runtime, Ledger, Journal, D1 Lab, and
+  shared Workbench. Package availability grants no credential, private-call, account, order, fill,
+  Position, capital, or deployment permission.
 
 ## Current observed evidence
 
@@ -137,9 +140,10 @@ Workbench projection own no business truth.
   one transient `31.8%` value but no sustained one-core saturation. The validated Ledger population
   advanced from `499` to `503` because it also included the ordinary preceding `16:30` Window; the
   three target identities each occur exactly once.
-- Final repository gate passed `290` tests, `52` subtests, and `8/8` deterministic business
+- Final repository gate passed `336` tests, `52` subtests, and `8/8` deterministic business
   scenarios, plus formatting, Ruff, strict mypy, compilation, Authority, compatibility, and diff
-  checks. Focused ledger and WebSocket coverage passed `29` tests.
+  checks. The focused C1/C2 and Authority population passed `53` tests. No live private interface,
+  account, order, fill, Position, process, or deployment check was authorized or performed.
 - One bounded direct production canary received a BTC index notification in its second inbound
   frame. On a copied production root, startup performed the required full validation in `1.510`
   seconds, while a representative steady tick completed in `0.078` seconds with `8` public ledger
