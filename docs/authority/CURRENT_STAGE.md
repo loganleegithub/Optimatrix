@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 THREE-WINDOW RUNTIME OBSERVATION — DEGRADED BUT FAIL-CLOSED
+**Status:** B3 WEBSOCKET ROUTE/LIVENESS DIAGNOSIS — ACTIVE
 
 **Current maturity:** `D1_AI_LAB_DAILY_SESSION_REVIEW`
 
@@ -11,14 +11,16 @@
 **Frozen Base Policy identity:**
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`
 
-**Current task kind:** `NONE`
+**Current task kind:** `VALIDATION_ONLY`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** [`tasks/B3_WEBSOCKET_ROUTE_LIVENESS_DIAGNOSIS.md`](../../tasks/B3_WEBSOCKET_ROUTE_LIVENESS_DIAGNOSIS.md)
 
 ## Current permissions
 
-No new validation, process control, deployment, durable write, or live command is authorized while
-there is no active task.
+Only the active task's single bounded read-only route, socket, DNS/TUN, historical-audit, local
+loopback, and primary-documentation diagnosis is authorized. No Deribit call, process control,
+restart, deployment, configuration change, durable runtime write, repair, or backfill is
+authorized.
 
 **Offline checks and simulation:** existing repository checks and caller-supplied disposable roots
 only
@@ -33,9 +35,11 @@ adapter open it read-only and cannot repair, backfill, or replace a Decision or 
 **Stable CaseJournal root:** the same B3 root remains writable only by the existing B3 runtime; AI
 Lab owns no CaseJournal write or derived Case fact
 
-**Continuous runtime:** existing B3 launchd job remains unchanged at label
+**Continuous runtime:** existing B3 launchd job retains its exact label
 `com.optimatrix.b3-public-shadow`, EventState `NONE`, the stable root above, and loopback port
-`8765`. Existing daily label `com.optimatrix.d1-session-review` may run its repository-owned
+`8765`. It was replaced exactly once under the closed deployment; no replacement is authorized by
+this validation. Existing daily label
+`com.optimatrix.d1-session-review` may run its repository-owned
 one-shot command at load and every `900` seconds, enroll from `2026-08-17T08:00:00Z`, and process
 at most one ready Session per invocation. It has no `KeepAlive`, internal wait, or retry loop.
 
@@ -44,7 +48,7 @@ separate from B3. The deployed daily job may append only content-sealed official
 terminal V3 Review per Session, and deterministic reports; its mutable operation state and bounded
 Workbench projection own no business truth.
 
-**Codex CLI:** `NONE`
+**Codex CLI:** bounded local diagnosis only; no market or private call
 
 **Private read-only account permission:** `NONE`
 
