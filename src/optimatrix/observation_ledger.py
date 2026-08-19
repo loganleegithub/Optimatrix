@@ -10,6 +10,8 @@ from optimatrix.channels import CHANNELS
 from optimatrix.decision import DecisionRecord, DecisionResult, DecisionWindow
 from optimatrix.lifecycle import WindowOutcome
 
+type _FileSignature = tuple[int, int, int, int, int]
+
 
 @dataclass(frozen=True)
 class WindowPopulationSummary:
@@ -71,6 +73,10 @@ class ObservationLedger:
     def __init__(self, root: Path) -> None:
         self.path = root / "decision-records.jsonl"
         self.outcome_path = root / "window-outcomes.jsonl"
+        self._records_cache: tuple[DecisionRecord, ...] | None = None
+        self._records_signature: _FileSignature | None = None
+        self._outcomes_cache: tuple[WindowOutcome, ...] | None = None
+        self._outcomes_signature: _FileSignature | None = None
 
     def append(self, record: DecisionRecord) -> bool:
         existing = {item.window.identity: item for item in self.read()}
@@ -91,10 +97,18 @@ class ObservationLedger:
             handle.write(line + "\n")
             handle.flush()
             os.fsync(handle.fileno())
+        self._records_cache = (*existing.values(), record)
+        self._records_signature = _file_signature(self.path)
         return True
 
     def read(self) -> tuple[DecisionRecord, ...]:
-        return self._read_records(recover_unterminated_tail=False)
+        signature = _file_signature(self.path)
+        if self._records_cache is not None and signature == self._records_signature:
+            return self._records_cache
+        records = self._read_records(recover_unterminated_tail=False)
+        self._records_cache = records
+        self._records_signature = _file_signature(self.path)
+        return records
 
     def _read_records(
         self,
@@ -161,10 +175,18 @@ class ObservationLedger:
             handle.write(line + "\n")
             handle.flush()
             os.fsync(handle.fileno())
+        self._outcomes_cache = (*existing.values(), outcome)
+        self._outcomes_signature = _file_signature(self.outcome_path)
         return True
 
     def read_outcomes(self) -> tuple[WindowOutcome, ...]:
-        return self._read_outcomes(recover_unterminated_tail=False)
+        signature = _file_signature(self.outcome_path)
+        if self._outcomes_cache is not None and signature == self._outcomes_signature:
+            return self._outcomes_cache
+        outcomes = self._read_outcomes(recover_unterminated_tail=False)
+        self._outcomes_cache = outcomes
+        self._outcomes_signature = _file_signature(self.outcome_path)
+        return outcomes
 
     def _read_outcomes(
         self,
@@ -205,6 +227,10 @@ class ObservationLedger:
 
         records = self._read_records(recover_unterminated_tail=True)
         outcomes = self._read_outcomes(recover_unterminated_tail=True)
+        self._records_cache = records
+        self._records_signature = _file_signature(self.path)
+        self._outcomes_cache = outcomes
+        self._outcomes_signature = _file_signature(self.outcome_path)
         return records, outcomes
 
     def summarize(
@@ -271,3 +297,11 @@ def _truncate(path: Path, accepted_bytes: int) -> None:
         handle.truncate(accepted_bytes)
         handle.flush()
         os.fsync(handle.fileno())
+
+
+def _file_signature(path: Path) -> _FileSignature | None:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)

@@ -798,7 +798,7 @@ def test_first_valid_market_frame_resets_reconnect_failure_streak() -> None:
     assert waits == [1.0, 1.0]
 
 
-def test_open_connection_enables_protocol_ping_and_pong_timeout(monkeypatch) -> None:
+def test_open_connection_uses_direct_route_with_protocol_liveness(monkeypatch) -> None:
     connection = _NoopConnection()
     captured: list[tuple[str, dict[str, object]]] = []
 
@@ -813,6 +813,7 @@ def test_open_connection_enables_protocol_ping_and_pong_timeout(monkeypatch) -> 
         (
             DEFAULT_DERIBIT_WEBSOCKET_API,
             {
+                "proxy": None,
                 "open_timeout": 10.0,
                 "close_timeout": 10.0,
                 "ping_interval": 10.0,

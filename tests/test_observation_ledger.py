@@ -188,6 +188,73 @@ def test_ledger_fsyncs_record_and_outcome_appends(policy, tmp_path, monkeypatch)
     assert len(fsynced) == 2
 
 
+def test_unchanged_ledger_reads_reuse_validated_populations(policy, tmp_path) -> None:
+    engine = Btc0DteShortVolEngine(policy=policy)
+    window = engine.decision_windows(at=datetime(2026, 8, 12, 18, 0, tzinfo=UTC))[0]
+    record = unassessed_decision_record(
+        window=window,
+        decision_policy_id=policy.identity,
+        known_at=window.input_deadline,
+        observation=None,
+    )
+    writer = ObservationLedger(tmp_path / "ledger")
+    writer.append(record)
+    writer.append_outcome(_unknown_outcome(record))
+    reader = ObservationLedger(writer.path.parent)
+
+    records = reader.read()
+    outcomes = reader.read_outcomes()
+
+    assert reader.read() is records
+    assert reader.read_outcomes() is outcomes
+
+
+def test_append_and_external_change_refresh_ledger_caches(policy, tmp_path) -> None:
+    engine = Btc0DteShortVolEngine(policy=policy)
+    windows = engine.decision_windows(at=datetime(2026, 8, 12, 18, 0, tzinfo=UTC))
+    records = tuple(
+        unassessed_decision_record(
+            window=window,
+            decision_policy_id=policy.identity,
+            known_at=window.input_deadline,
+            observation=None,
+        )
+        for window in windows[:3]
+    )
+    ledger = ObservationLedger(tmp_path / "ledger")
+    assert ledger.append(records[0])
+    cached_records = ledger.read()
+
+    assert ledger.append(records[1])
+    appended_records = ledger.read()
+    assert appended_records == records[:2]
+    assert appended_records is ledger.read()
+    assert appended_records is not cached_records
+
+    other_writer = ObservationLedger(ledger.path.parent)
+    assert other_writer.append(records[2])
+    externally_extended = ledger.read()
+    assert externally_extended == records
+    assert externally_extended is ledger.read()
+    assert externally_extended is not appended_records
+
+    outcomes = tuple(_unknown_outcome(record) for record in records)
+    assert ledger.append_outcome(outcomes[0])
+    cached_outcomes = ledger.read_outcomes()
+    assert ledger.append_outcome(outcomes[1])
+    appended_outcomes = ledger.read_outcomes()
+    assert appended_outcomes == outcomes[:2]
+    assert appended_outcomes is ledger.read_outcomes()
+    assert appended_outcomes is not cached_outcomes
+
+    other_writer = ObservationLedger(ledger.path.parent)
+    assert other_writer.append_outcome(outcomes[2])
+    externally_extended_outcomes = ledger.read_outcomes()
+    assert externally_extended_outcomes == outcomes
+    assert externally_extended_outcomes is ledger.read_outcomes()
+    assert externally_extended_outcomes is not appended_outcomes
+
+
 def test_ledger_recovers_only_unterminated_final_record_and_outcome_writes(
     policy,
     tmp_path,

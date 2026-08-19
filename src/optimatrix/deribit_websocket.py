@@ -1107,6 +1107,7 @@ def _open_connection(url: str, timeout_seconds: float) -> WebSocketConnection:
         WebSocketConnection,
         connect(
             url,
+            proxy=None,
             open_timeout=timeout_seconds,
             close_timeout=timeout_seconds,
             ping_interval=DERIBIT_HEARTBEAT_INTERVAL_SECONDS,
