@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 WEBSOCKET ROUTE/LIVENESS DIAGNOSIS — ACTIVE
+**Status:** B3 WEBSOCKET ROUTE/LIVENESS DIAGNOSIS — CLIENT TIMEOUT ESTABLISHED, SHADOWROCKET PLAUSIBLE
 
 **Current maturity:** `D1_AI_LAB_DAILY_SESSION_REVIEW`
 
@@ -11,16 +11,14 @@
 **Frozen Base Policy identity:**
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`
 
-**Current task kind:** `VALIDATION_ONLY`
+**Current task kind:** `NONE`
 
-**Sole authorized closure:** [`tasks/B3_WEBSOCKET_ROUTE_LIVENESS_DIAGNOSIS.md`](../../tasks/B3_WEBSOCKET_ROUTE_LIVENESS_DIAGNOSIS.md)
+**Sole authorized closure:** `NONE`
 
 ## Current permissions
 
-Only the active task's single bounded read-only route, socket, DNS/TUN, historical-audit, local
-loopback, and primary-documentation diagnosis is authorized. No Deribit call, process control,
-restart, deployment, configuration change, durable runtime write, repair, or backfill is
-authorized.
+No new validation, process control, deployment, durable write, or live command is authorized while
+there is no active task.
 
 **Offline checks and simulation:** existing repository checks and caller-supplied disposable roots
 only
@@ -35,10 +33,9 @@ adapter open it read-only and cannot repair, backfill, or replace a Decision or 
 **Stable CaseJournal root:** the same B3 root remains writable only by the existing B3 runtime; AI
 Lab owns no CaseJournal write or derived Case fact
 
-**Continuous runtime:** existing B3 launchd job retains its exact label
+**Continuous runtime:** existing B3 launchd job remains unchanged at label
 `com.optimatrix.b3-public-shadow`, EventState `NONE`, the stable root above, and loopback port
-`8765`. It was replaced exactly once under the closed deployment; no replacement is authorized by
-this validation. Existing daily label
+`8765`. Existing daily label
 `com.optimatrix.d1-session-review` may run its repository-owned
 one-shot command at load and every `900` seconds, enroll from `2026-08-17T08:00:00Z`, and process
 at most one ready Session per invocation. It has no `KeepAlive`, internal wait, or retry loop.
@@ -48,7 +45,7 @@ separate from B3. The deployed daily job may append only content-sealed official
 terminal V3 Review per Session, and deterministic reports; its mutable operation state and bounded
 Workbench projection own no business truth.
 
-**Codex CLI:** bounded local diagnosis only; no market or private call
+**Codex CLI:** `NONE`
 
 **Private read-only account permission:** `NONE`
 
@@ -65,8 +62,9 @@ Workbench projection own no business truth.
   recovery refresh that cache without changing durable bytes, identities, ordering, duplicate
   rules, or denominator semantics.
 - The production public WebSocket explicitly disables the client library's system-proxy discovery.
-  It uses the same direct-network boundary as the existing REST client while disconnect,
-  discontinuity, staleness, and incomplete cuts continue to produce `UNKNOWN` or Gap.
+  This prevents an application-level connection to the configured loopback proxy, but it does not
+  bypass a macOS TUN route or fake-IP DNS mapping. Disconnect, discontinuity, staleness, and
+  incomplete cuts continue to produce `UNKNOWN` or Gap.
 - Human acceptance establishes `B3_PIPELINE_CAPABILITY_ACCEPTED`; it does not manufacture a natural
   Candidate or execution chain. `natural_chain=NOT_YET_OBSERVED`,
   `policy_reachability=COMPLETED_SESSION_LOCAL_RESPONSIBILITY_MEASURED`,
@@ -93,6 +91,31 @@ Workbench projection own no business truth.
 
 ## Current observed evidence
 
+- The bounded route diagnosis found the unchanged B3 process still owns one established `:443`
+  socket, but `www.deribit.com` resolves locally to `198.18.0.14`, that address routes through
+  `utun4`, the socket is `198.18.0.1:54052 -> 198.18.0.14:443`, and Shadowrocket components plus
+  the system HTTP/HTTPS proxy on `127.0.0.1:1082` are active. IANA reserves `198.18.0.0/15` for
+  non-globally-reachable benchmarking, so the production path remains under Shadowrocket TUN even
+  though `websockets.connect(proxy=None)` no longer opens the loopback proxy itself.
+- The immediate disconnect mechanism is established as the local `websockets==17.0.1` client:
+  production config sends a protocol Ping every `10` seconds and closes after a `10`-second missed
+  Pong. The audit shows Deribit `public/test` responses through `16:55:14.725` followed by the
+  client-originated `1011 keepalive ping timeout` at `16:55:36.702`; there was no REST book resync
+  before the loss. Since the deployment opened epoch `1`, the audit contains `416` successful
+  exchange-heartbeat responses, exactly one connection loss, epoch `2` recovery, and no second
+  loss at diagnosis time.
+- A loopback-only saturated-consumer reproduction with no Shadowrocket produced the exact same
+  `sent 1011 (internal error) keepalive ping timeout; no close frame received` when the library's
+  default `max_queue=16` paused network reads. The same bounded reproduction stayed open when
+  protocol Pings remained enabled but `ping_timeout=None`. This proves that the exception text does
+  not identify the network path and that receive backpressure can starve Pong handling locally.
+- Shadowrocket is therefore `PLAUSIBLE_CONTRIBUTOR`, not `ESTABLISHED_CAUSE`: it is conclusively in
+  the socket path, but neither historical proxy telemetry nor a Shadowrocket-off/direct A/B run was
+  available to distinguish a TUN/egress stall from client receive-queue starvation. The mature
+  remediation order is to make the Deribit route explicit and A/B it, prevent the aggressive
+  protocol-Pong timeout from racing the existing Deribit heartbeat plus `30`-second inbound/market
+  silence guards, instrument Ping latency and receive backlog, then run a multi-Window forward
+  comparison without changing fail-closed epoch, Gap, or no-backfill semantics.
 - Three exact forward Windows were observed from `16:45` through the final `17:31 UTC` input
   deadline and classified `DEGRADED_BUT_FAIL_CLOSED`. PID `67653`, launchd run count `3`, loopback
   listener, Workbench HTTP `200`, and the direct `:443` socket remained stable; no socket returned
@@ -139,10 +162,13 @@ Workbench projection own no business truth.
   `UNKNOWN`. Known classifications are `0` captured, `86` correct avoidance, `0` missed, and `0`
   over-risk. Verdict is `PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR`; miss, over-risk, and opportunity
   rates are each bounded by `[0/96, 10/96]`. Challenger comparison is not eligible.
-**Primary blocker:** `PUBLIC_WEBSOCKET_KEEPALIVE_TIMEOUT_OBSERVED` — explicit direct routing closed
-system-proxy inheritance and the runtime recovered automatically, but one direct connection still
-timed out during the three-Window observation and causally cost the `17:00 UTC` Window. The system
-failed closed and recovered; the remaining transport cause is not established by this validation.
+**Primary blocker:** `PUBLIC_WEBSOCKET_TUN_VS_RECEIVE_BACKPRESSURE_NOT_DISAMBIGUATED` — application-
+level proxy inheritance is closed, but the deployed socket still traverses Shadowrocket TUN and
+the aggressive `10`-second protocol-Pong timeout can also be reproduced from local receive
+backpressure without Shadowrocket. The client-originated close mechanism is established;
+Shadowrocket is only a plausible contributor until one controlled route A/B and backlog/latency
+instrumentation distinguish the underlying missed-Pong cause. No liveness or route hardening has
+been implemented or deployed.
 The underlying `DECISION_TIME_OBSERVATION_COVERAGE_INCOMPLETE` blocker also remains: a later history
 seed cannot repair an absent decision-time option cut, qualify Policy, or establish Edge. Any new
 diagnosis, implementation, validation, deployment, or live command requires one exact task and
