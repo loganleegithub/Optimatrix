@@ -1,6 +1,6 @@
 # Optimatrix Current Stage
 
-**Status:** B3 RUNTIME LEDGER AND TRANSPORT RELIABILITY — ACCEPTED AND DEPLOYED
+**Status:** B3 THREE-WINDOW RUNTIME OBSERVATION — ACTIVE
 
 **Current maturity:** `D1_AI_LAB_DAILY_SESSION_REVIEW`
 
@@ -11,20 +11,20 @@
 **Frozen Base Policy identity:**
 `sha256:b282de121a676da13c16d73d41ac19c4b5a17366bd89b7036ef07d0bd05e9888`
 
-**Current task kind:** `NONE`
+**Current task kind:** `VALIDATION_ONLY`
 
-**Sole authorized closure:** `NONE`
+**Sole authorized closure:** [`B3_THREE_WINDOW_RUNTIME_OBSERVATION.md`](../../tasks/B3_THREE_WINDOW_RUNTIME_OBSERVATION.md)
 
 ## Current permissions
 
-No new validation, process control, deployment, durable write, or live command is authorized while
-there is no active task.
+Only the bounded read-only process, CPU, socket, Workbench, runtime-audit, and durable-record
+observations declared by the active task are authorized. No runtime mutation is permitted.
 
-**Offline checks and simulation:** existing repository checks and caller-supplied disposable roots
-only
+**Offline checks and simulation:** Authority and diff checks for this validation task only
 
-**Public market calls:** `NONE_AUTHORIZED` for new or manual Agent actions. The already deployed B3
-and daily Review LaunchAgents may continue only their exact frozen public-method manifests.
+**Public market calls:** `NONE_AUTHORIZED` for manual Agent actions. The already deployed B3 and
+daily Review LaunchAgents may continue only their exact frozen public-method manifests while their
+outputs are observed read-only.
 
 **Stable ObservationLedger root:** `/Users/logan/Library/Application Support/Optimatrix/b3-natural-forward-chain-v2`
 remains writable only by the existing B3 runtime. The deployed daily Review job and Workbench
@@ -33,9 +33,10 @@ adapter open it read-only and cannot repair, backfill, or replace a Decision or 
 **Stable CaseJournal root:** the same B3 root remains writable only by the existing B3 runtime; AI
 Lab owns no CaseJournal write or derived Case fact
 
-**Continuous runtime:** existing B3 launchd job remains unchanged at label
+**Continuous runtime:** existing B3 launchd job retains its exact label
 `com.optimatrix.b3-public-shadow`, EventState `NONE`, the stable root above, and loopback port
-`8765`. Existing daily label `com.optimatrix.d1-session-review` may run its repository-owned
+`8765`. It was replaced exactly once under the closed deployment; no replacement is authorized by
+this validation. Existing daily label `com.optimatrix.d1-session-review` may run its repository-owned
 one-shot command at load and every `900` seconds, enroll from `2026-08-17T08:00:00Z`, and process
 at most one ready Session per invocation. It has no `KeepAlive`, internal wait, or retry loop.
 
@@ -117,7 +118,10 @@ Workbench projection own no business truth.
   `UNKNOWN`. Known classifications are `0` captured, `86` correct avoidance, `0` missed, and `0`
   over-risk. Verdict is `PARTIALLY_IDENTIFIED_NO_KNOWN_RULE_ERROR`; miss, over-risk, and opportunity
   rates are each bounded by `[0/96, 10/96]`. Challenger comparison is not eligible.
-**Primary blocker:** `DECISION_TIME_OBSERVATION_COVERAGE_INCOMPLETE` — the latest completed Session
+**Primary blocker:** `THREE_WINDOW_FORWARD_RELIABILITY_NOT_YET_OBSERVED` — the active task must
+classify three exact forward Windows as `NORMAL`, `DEGRADED_BUT_FAIL_CLOSED`, or `FAILED` without
+changing the running system. The underlying business blocker remains
+`DECISION_TIME_OBSERVATION_COVERAGE_INCOMPLETE`: the latest completed Session
 still has `10/96` causally missing decision-time observations. Post-Session index history repairs
 future sampled variance only; it cannot recreate absent option books, prove executable liquidity,
 qualify the Policy, or establish Edge. `LEDGER_REPLAY_PER_TICK` and `SYSTEM_PROXY_INHERITANCE` are
