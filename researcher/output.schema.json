@@ -1,0 +1,299 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "research-action-v1"
+      ]
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "read_result",
+        "run_backtest",
+        "compare_fees",
+        "finish"
+      ]
+    },
+    "explanation": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 5000
+    },
+    "plan": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "hypothesis": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "comparison": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "price_source": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "falsification": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            }
+          },
+          "required": [
+            "hypothesis",
+            "comparison",
+            "price_source",
+            "falsification"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "experiment": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "start_date": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "end_date": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "session_bucket": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "entry_weekdays": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 6
+              },
+              "maxItems": 30
+            },
+            "option_type": {
+              "type": "string",
+              "enum": [
+                "call",
+                "put"
+              ]
+            },
+            "delta": {
+              "type": "number"
+            },
+            "expiry": {
+              "type": "integer"
+            },
+            "quantity": {
+              "type": "number"
+            },
+            "option_transaction_cost_bp": {
+              "type": "number"
+            }
+          },
+          "required": [
+            "start_date",
+            "end_date",
+            "session_bucket",
+            "entry_weekdays",
+            "option_type",
+            "delta",
+            "expiry",
+            "quantity",
+            "option_transaction_cost_bp"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "run_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 5000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "higher_fee_bp": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "final": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "question": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "hypothesis": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "值得继续",
+                "否定候选",
+                "数据不足",
+                "结果不确定"
+              ]
+            },
+            "conclusion": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "counterexamples": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 5000
+              },
+              "maxItems": 30
+            },
+            "unknowns": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 5000
+              },
+              "maxItems": 30
+            },
+            "next_step": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 5000
+            },
+            "claims": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 5000
+                  },
+                  "run_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 5000
+                  },
+                  "field": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 5000
+                  }
+                },
+                "required": [
+                  "text",
+                  "run_id",
+                  "field"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 30
+            },
+            "experiments": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "run_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 5000
+                  },
+                  "role": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 5000
+                  }
+                },
+                "required": [
+                  "run_id",
+                  "role"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 30
+            },
+            "suggested_experiments": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 5000
+              },
+              "maxItems": 30
+            }
+          },
+          "required": [
+            "question",
+            "hypothesis",
+            "verdict",
+            "conclusion",
+            "counterexamples",
+            "unknowns",
+            "next_step",
+            "claims",
+            "experiments",
+            "suggested_experiments"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "action",
+    "explanation",
+    "plan",
+    "experiment",
+    "run_id",
+    "higher_fee_bp",
+    "final"
+  ],
+  "additionalProperties": false
+}

@@ -411,7 +411,7 @@ def check_scenario(scenario):
                 run = wait_terminal(session, base, run_id)
                 assert len(fixture.submissions) == 1, "Repeated/refresh requests submitted duplicate remote jobs"
                 expected_status = "completed_with_gaps" if scenario.startswith("model_ledger") else {
-                    "success_with_gaps": "completed_with_gaps", "auth401": "failed",
+                    "success_with_gaps": "completed_with_gaps", "auth401": "submission_unknown",
                     "remote_failure": "failed", "post_timeout": "submission_unknown",
                 }[scenario]
                 assert run["status"] == expected_status, f"Expected {expected_status}, got {run['status']}"

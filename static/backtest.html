@@ -13,11 +13,11 @@
     <div class="page-shell backtest-shell">
       <header class="masthead">
         <div class="brand"><span class="brand-mark" aria-hidden="true">O</span><span>Optimatrix</span><span class="stage">S2</span></div>
-        <a class="back-link" href="/">← 公共行情首页</a>
+        <nav class="backtest-nav" aria-label="主导航"><a class="back-link" href="/">公共行情</a><a class="back-link" href="/research">研究 Agent</a></nav>
       </header>
       <main>
         <div class="page-heading">
-          <div><p class="eyebrow">GREEKS.LIVE / BTC BACKTEST</p><h1>回测与 BTC 计量</h1><p class="subtitle">一次固定参数的买方实验。保留真实请求、结果和无法确认的部分。</p></div>
+          <div><p class="eyebrow">GREEKS.LIVE / BTC BACKTEST</p><h1>回测与 BTC 计量</h1><p class="subtitle">保留 S2 固定实验与研究 Agent 的真实运行记录、金额核对和数据缺口。</p></div>
           <span id="backend-status" class="badge badge-warning" role="status">正在确认本地服务</span>
         </div>
         <div class="mode-notice"><span class="notice-dot" aria-hidden="true"></span><div><strong>研究回测 · 无账户连接</strong><span>交易模块尚未实现；没有获批策略或资金授权。0.2 BTC 仅为假设初始资金，不是真实余额。</span></div></div>
@@ -36,7 +36,7 @@
             <p class="fineprint">检查动作只核对配置与回测服务，不提交回测任务。是否调用服务及失败原因以返回状态为准。</p>
           </article>
           <article class="panel backtest-panel">
-            <div class="panel-topline"><h2>本次固定实验</h2><span class="count-label">不扫描参数</span></div>
+            <div class="panel-topline"><h2>S2 固定实验样例</h2><span class="count-label">保留原始记录</span></div>
             <h3 id="experiment-title" class="experiment-title">等待服务返回任务定义</h3>
             <p id="experiment-description" class="body-copy">未取得参数，不能提交。</p>
             <dl class="backtest-facts"><div><dt>实验标识</dt><dd id="experiment-id">未取得数据</dd></div></dl>
@@ -44,7 +44,7 @@
             <ul id="experiment-assumptions" class="plain-list"><li>未取得假设说明。</li></ul>
             <button id="start-run" class="button" type="button" disabled>提交一次真实回测</button>
             <p id="submit-reason" class="fineprint">等待本地服务确认。</p>
-            <p class="fineprint">本阶段只提交一次固定实验。已有提交记录时只查看原任务；刷新、并发点击或重新启动不会重复提交该实验。</p>
+            <p class="fineprint">本入口保留原固定实验；已有记录时查看原任务。新研究实验请到研究页提出问题并授权预算，刷新不会重新提交。</p>
           </article>
         </section>
         <p id="action-message" class="action-message" role="status" hidden></p>
@@ -58,6 +58,7 @@
             <div class="run-heading"><div><span class="field-label">本地 run_id</span><strong id="run-id" class="run-id"></strong></div><span id="run-status" class="badge badge-neutral">状态未确认</span></div>
             <dl class="run-facts backtest-facts"><div><dt>创建时间</dt><dd id="run-created">未取得数据</dd></div><div><dt>提交时间</dt><dd id="run-submitted">尚未提交</dd></div><div><dt>完成时间</dt><dd id="run-completed">尚未完成</dd></div><div><dt>服务任务标识</dt><dd id="service-task-id">未提供</dd></div></dl>
             <p id="run-error" class="result-error" hidden></p>
+            <div class="recovery-controls"><button id="resume-run" class="button" type="button" disabled hidden>继续获取结果（仅 GET）</button><button id="retry-run" class="button button-secondary" type="button" disabled hidden>建立关联的新尝试</button><a id="research-recovery-link" class="button button-secondary" href="/research" hidden>前往研究页处理（沿用研究预算）</a><p id="run-recovery-reason" class="fineprint"></p><p id="previous-run" class="fineprint" hidden></p></div>
             <details class="json-detail run-request"><summary>本次保存的实际请求参数</summary><pre id="run-request">未取得数据</pre></details>
             <div class="btc-result-heading"><h3>模型 BTC 结果与可核对范围</h3><p id="analysis-status" class="body-copy">未取得真实服务结果。</p></div>
             <div id="analysis-detail" hidden>
@@ -77,7 +78,7 @@
           </div>
         </section>
       </main>
-      <footer><span>Optimatrix · S2 回测接入与 BTC 计量</span><span>账户未接入 · 内部 Agent 未运行 · 无下单功能</span></footer>
+      <footer><span>Optimatrix · 回测记录与 BTC 模型计量</span><span>账户未接入 · 研究入口独立授权 · 无下单功能</span></footer>
     </div>
   </body>
 </html>

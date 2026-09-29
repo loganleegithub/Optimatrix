@@ -1,0 +1,12 @@
+{
+  "role": "researcher",
+  "model": "gpt-6-astra",
+  "reasoning_effort": "high",
+  "speed": "standard",
+  "service_tier": "default",
+  "prompt_version": "btc-researcher-v1",
+  "output_schema_version": "research-action-v1",
+  "allowed_tools": ["read_result", "run_backtest", "compare_fees", "finish"],
+  "limits": {"model_calls": 6, "backtest_creations": 2, "model_timeout_seconds": 240, "task_timeout_seconds": 1200},
+  "cli_version_verified": "0.158.0-alpha.2.1"
+}

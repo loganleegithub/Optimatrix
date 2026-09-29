@@ -5,9 +5,9 @@
   const TIMEOUT_MS = 4000;
   const HEARTBEAT_MS = 10000;
   const $ = (id) => document.getElementById(id);
-  const session = { snapshot: null, heartbeat: null, failure: null, verifying: true, posting: false, selected: null };
+  const session = { snapshot: null, heartbeat: null, failure: null, verifying: true, posting: false, selected: new URLSearchParams(location.search).get("run_id"), retryKeys: {} };
   const activeStatuses = new Set(["queued", "pending", "running", "submitted", "submitting", "fetching", "checking"]);
-  const labels = { queued: "等待运行", pending: "等待运行", running: "正在运行", submitted: "已提交服务", submitting: "正在提交服务", fetching: "正在读取结果", checking: "检查中", completed: "服务任务完成", succeeded: "服务任务完成", success: "服务任务完成", failed: "运行失败", error: "运行失败", interrupted: "运行中断", cancelled: "已取消", unknown: "状态未知", submission_unknown: "提交结果未确认", retrieval_failed: "结果读取失败", result_incomplete: "结果不完整", completed_with_gaps: "服务已返回 · 存在数据缺口", unchecked: "尚未检查", ready: "检查完成" };
+  const labels = { queued: "等待运行", pending: "等待运行", running: "正在运行", submitted: "已提交服务", submitting: "正在提交服务", fetching: "正在读取结果", checking: "检查中", completed: "服务任务完成", succeeded: "服务任务完成", success: "服务任务完成", failed: "运行失败", error: "运行失败", interrupted: "运行中断", cancelled: "已取消", unknown: "状态未知", submission_unknown: "提交结果未确认", retrieval_failed: "结果读取失败", result_incomplete: "结果不完整", completed_with_gaps: "服务已返回 · 存在数据缺口", unchecked: "尚未检查", ready: "检查完成", paused: "已暂停 · 等待显式继续", not_submitted: "明确未创建远端任务", unrecoverable: "远端结果不可恢复" };
   let pollTimer = null;
   let pollController = null;
   let retryImmediately = false;
@@ -29,8 +29,8 @@
   function statusLabel(value) { return labels[value] || (value ? `服务状态：${value}` : "状态未确认"); }
   function badge(id, value, kind) { const element = $(id); element.textContent = value; element.className = `badge badge-${kind}`; }
   function statusKind(value) {
-    if (["failed", "error", "interrupted", "cancelled", "retrieval_failed"].includes(value)) return "error";
-    if (["unknown", "submission_unknown", "result_incomplete", "completed_with_gaps"].includes(value)) return "warning";
+    if (["failed", "error", "interrupted", "cancelled", "retrieval_failed", "unrecoverable"].includes(value)) return "error";
+    if (["unknown", "submission_unknown", "result_incomplete", "completed_with_gaps", "paused", "not_submitted"].includes(value)) return "warning";
     if (activeStatuses.has(value)) return "warning";
     if (["ready", "completed", "succeeded", "success"].includes(value)) return "live";
     return "neutral";
@@ -78,12 +78,15 @@
     const configured = state && state.configuration && state.configuration.configured === true;
     const active = state && state.runs.some((run) => activeStatuses.has(run.status));
     const hasExperiment = state && state.experiment && state.experiment.id === "S2_BTC_LONG_CALL_V1" && state.experiment.request && typeof state.experiment.request === "object";
-    const existing = state && state.runs.some((run) => present(run.submitted_at));
+    const existing = state && state.runs.some((run) => run.experiment_id === "S2_BTC_LONG_CALL_V1");
     $("check-connection").disabled = !online || session.posting || capabilities.status === "checking" || active;
     $("check-connection").textContent = capabilities.status === "checking" ? "正在检查服务能力…" : "检查连接与服务能力";
     $("start-run").disabled = existing ? session.posting : !online || session.posting || !configured || capabilities.status !== "ready" || active || !hasExperiment;
     $("start-run").textContent = existing ? "查看已有固定回测" : active ? "已有任务正在运行" : "提交一次真实回测";
     text("submit-reason", existing ? "该固定实验已有提交记录，只读取原任务；即使结果未确认也不会自动重复提交。" : !online ? "等待本地服务连接恢复。" : session.posting ? "正在提交请求，请勿重复操作。" : !configured ? "Greeks.live 配置不齐备，请按说明在本地 .env 中填写；不要在聊天中提供密钥。" : capabilities.status !== "ready" ? "先检查连接与服务能力，确认当前支持范围后才能提交。" : active ? "等待当前任务结束；刷新页面只会读取它的状态。" : !hasExperiment ? "固定实验参数尚未取得，暂时不能提交。" : "将按上方固定参数调用 Greeks.live 一次，不进行批量优化。");
+    const selected = state && state.runs.find((run) => run.run_id === session.selected);
+    $("resume-run").disabled = !online || session.posting || active || !selected || selected.can_resume !== true;
+    $("retry-run").disabled = !online || session.posting || active || !selected || selected.can_retry !== true || selected.experiment_id !== "S2_BTC_LONG_CALL_V1";
   }
   function renderRun(run) {
     $("run-detail").hidden = !run;
@@ -98,6 +101,17 @@
     time("run-completed", run.completed_at, "尚未完成");
     text("service-task-id", present(run.service_task_id) ? run.service_task_id : "服务未提供任务标识");
     text("run-error", run.error || ""); $("run-error").hidden = !run.error;
+    $("resume-run").hidden = run.can_resume !== true;
+    const researchOwned = run.experiment_id !== "S2_BTC_LONG_CALL_V1";
+    $("retry-run").hidden = run.can_retry !== true || researchOwned;
+    $("research-recovery-link").hidden = !researchOwned;
+    const researchId = typeof run.logical_id === "string" && /^([a-f0-9]{32}):step:/.exec(run.logical_id);
+    $("research-recovery-link").href = researchId ? `/research?research_id=${encodeURIComponent(researchId[1])}` : "/research";
+    $("research-recovery-link").textContent = run.can_retry ? "到研究页处理新尝试（受原研究预算约束）" : "查看关联研究与调用预算";
+    text("run-recovery-reason", (run.recovery_reason || (run.status === "submission_unknown" ? "是否创建远端任务尚未确认。不能依据无 task_id 自动重发。" : "已有远端任务只继续读取结果；新尝试只限于明确确认未创建远端任务的记录。")) + (researchOwned && run.can_retry ? " 该记录属于研究任务，本页不会绕过研究预算建立新尝试。" : ""));
+    $("previous-run").hidden = !run.previous_run_id;
+    $("previous-run").replaceChildren();
+    if (run.previous_run_id) { const anchor = make("a", run.previous_run_id); anchor.href = `/backtest?run_id=${encodeURIComponent(run.previous_run_id)}`; $("previous-run").append(make("span", "关联的前次记录："), anchor); }
     json("run-request", run.request);
     const result = run.analysis;
     $("analysis-detail").hidden = !result;
@@ -107,7 +121,7 @@
     }
     const modelVerified = result.model_ledger_verified === true;
     const netKnown = modelVerified && present(result.btc_net_pnl);
-    text("analysis-status", modelVerified ? "已核对一笔模型开平仓账本与服务汇总；未核对真实成交或账户收益。下列现金流均为模型金额，请同时查看数据缺口与限制。" : "无法可靠重建 BTC 净收益。下方保留服务报告结果和已知模型金额，缺失值不按零处理。");
+    text("analysis-status", modelVerified ? "已核对受支持的模型账本与服务汇总；未核对真实成交或账户收益。下列现金流均为模型金额，请同时查看数据缺口与限制。" : "无法可靠重建 BTC 净收益。下方保留服务报告结果和已知模型金额，缺失值不按零处理。");
     text("btc-net-pnl", netKnown ? amount(result.btc_net_pnl, "BTC", "无法可靠重建 BTC 净收益") : "无法可靠重建 BTC 净收益");
     $("btc-net-pnl").className = netKnown ? "" : "is-unknown";
     text("premium-paid", amount(result.premium_paid_btc, "BTC", "未提供"));
@@ -206,7 +220,7 @@
       if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
       if (!result.run_id && !result.status) throw new Error("提交响应不完整，操作结果尚未确认，请先查看历史状态");
       if (result.run_id) session.selected = result.run_id;
-      message.textContent = result.run_id ? `已受理运行 ${result.run_id}。正在读取实际状态与结果；受理不代表回测完成。` : "已受理连接与服务能力检查，等待返回确认信息。";
+      message.textContent = result.run_id ? `${result.reused ? "复用已有运行" : "已受理运行"} ${result.run_id}。正在读取实际状态与结果；受理不代表回测完成。` : "已受理连接与服务能力检查，等待返回确认信息。";
     } catch (error) {
       message.className = "action-message is-error";
       message.textContent = error.name === "AbortError" || error instanceof TypeError ? "提交结果未确认：连接中断或请求超时。请先查看已保存记录与服务状态，不要立即重复提交。" : `操作未完成：${error.message || "请求失败"}`;
@@ -218,13 +232,21 @@
   $("check-connection").addEventListener("click", () => { if (!$("check-connection").disabled) post("/api/backtests/check-connection", {}); });
   $("start-run").addEventListener("click", () => {
     if ($("start-run").disabled) return;
-    const existing = session.snapshot && session.snapshot.runs.find((run) => present(run.submitted_at));
+    const existing = session.snapshot && session.snapshot.runs.find((run) => run.experiment_id === "S2_BTC_LONG_CALL_V1");
     if (existing) {
       session.selected = existing.run_id; $("run-select").value = existing.run_id; renderRun(existing);
       $("results-title").scrollIntoView({ behavior: "smooth", block: "start" });
     } else post("/api/backtests", { experiment_id: "S2_BTC_LONG_CALL_V1" });
   });
-  $("run-select").addEventListener("change", () => { session.selected = $("run-select").value; if (session.snapshot) renderRun(session.snapshot.runs.find((run) => run.run_id === session.selected)); });
+  $("resume-run").addEventListener("click", () => { if (!$("resume-run").disabled) post(`/api/backtests/${encodeURIComponent(session.selected)}/resume`, {}); });
+  $("retry-run").addEventListener("click", () => {
+    if ($("retry-run").disabled) return;
+    const id = session.selected;
+    if (!session.snapshot || !session.snapshot.runs.some((run) => run.run_id === id && run.experiment_id === "S2_BTC_LONG_CALL_V1")) return;
+    session.retryKeys[id] = session.retryKeys[id] || (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    post(`/api/backtests/${encodeURIComponent(id)}/retry`, { idempotency_key: session.retryKeys[id] });
+  });
+  $("run-select").addEventListener("change", () => { session.selected = $("run-select").value; if (session.snapshot) renderRun(session.snapshot.runs.find((run) => run.run_id === session.selected)); updateControls(); });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "visible") return;
     session.verifying = true; session.failure = null; renderConnection(); clearTimeout(pollTimer);

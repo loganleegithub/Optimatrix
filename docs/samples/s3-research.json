@@ -1,0 +1,357 @@
+{
+  "kind": "redacted_live_S3_evidence_summary",
+  "base_commit": "422b3224cb348f9cd752a7b53b522dd3b9006372",
+  "research_id": "bde2026f95b24da5bea7ce8ca80755e8",
+  "status": "completed",
+  "created_at": "2026-09-29T16:14:05.742Z",
+  "completed_at": "2026-09-29T16:25:39.097Z",
+  "configuration_snapshot": {
+    "role": "researcher",
+    "model": "gpt-6-astra",
+    "reasoning_effort": "high",
+    "speed": "standard",
+    "service_tier": "default",
+    "prompt_version": "btc-researcher-v1",
+    "output_schema_version": "research-action-v1",
+    "allowed_tools": [
+      "read_result",
+      "run_backtest",
+      "compare_fees",
+      "finish"
+    ],
+    "limits": {
+      "model_calls": 6,
+      "backtest_creations": 2,
+      "model_timeout_seconds": 240,
+      "task_timeout_seconds": 1200
+    },
+    "cli_version_verified": "0.158.0-alpha.2.1",
+    "prompt_sha256": "4d51e230001c9ebad0074bd801adf7058db94d4e0e612772d9fe8013668b0d50",
+    "schema_sha256": "1f3c12a495edb5b4a4abe36e1be107b63cdd82d45436ebdc0b2dbc198fb0e7f7"
+  },
+  "budget": {
+    "model_calls_used": 6,
+    "backtest_creations_used": 2,
+    "model_calls_limit": 6,
+    "backtest_creations_limit": 2,
+    "corrections_used": 0
+  },
+  "implementation_probe_calls": 2,
+  "total_live_model_calls": 8,
+  "total_new_backtest_creation_attempts": 2,
+  "model_calls": [
+    {
+      "call": 1,
+      "exit_code": 0,
+      "elapsed_seconds": 46.011,
+      "input_sha256": "a1f78e503bd436720953c4559d012d79a5d0045b6eb175d5e84e02773f86c628",
+      "events_sha256": "f1d9bf159acdd769923cad07146178c9223f1a3a8470b86c18d51deee8ec560b",
+      "final_sha256": "0886cd02cde98ec5861e0450e68b6c3c15622edf16b205d963776463abc6baa7"
+    },
+    {
+      "call": 2,
+      "exit_code": 0,
+      "elapsed_seconds": 31.628,
+      "input_sha256": "1b97830def3a15c1760cbaa56eb620c86e4ea173a3afc1132b13fb3e4899b851",
+      "events_sha256": "b7d71dc44b7899b5be7ac2029c256ca2efcecdf5bd314bce2f47ffbb2b8b63b7",
+      "final_sha256": "c92326e85fec314a0a5cd5f5e1aa5210c77ede300baf9e0abafe35112b569966"
+    },
+    {
+      "call": 3,
+      "exit_code": 0,
+      "elapsed_seconds": 47.62,
+      "input_sha256": "4f62bb909ba9d1182a56308323868cca17d6f8c998ca0d26b1ae03fb8210bfd0",
+      "events_sha256": "b4f56c913859a9c8c8a94bfe3658d75836765f5959e40be9a1a2f33fdfc63c56",
+      "final_sha256": "4393b2b9126683bba3f24aa4e5ff6fcc6b32d48698c09e2085942d3839c64e4f"
+    },
+    {
+      "call": 4,
+      "exit_code": 0,
+      "elapsed_seconds": 36.75,
+      "input_sha256": "3ee1e92c88189306dab233704a888bf035bec0aec6bf764a4c77e86b7cf165d9",
+      "events_sha256": "d33e624a1e5a6867e99f89756342eb417f8d71f5e5d44b94aa74fdd95916b0da",
+      "final_sha256": "725143b1f401b1696fb3ace3f1a522f9484dfd2923674a0cf3ab66799d309e9c"
+    },
+    {
+      "call": 5,
+      "exit_code": -15,
+      "elapsed_seconds": 32.371,
+      "input_sha256": "1527a2e2660168e4038b3c9aaa2ec96d38cc7b05174833bb275b5b199e0330a0",
+      "events_sha256": "a77b6ebf3fa163e9a63b80b653b988898c78f02a6382d0d33e8be753ee8c0b37",
+      "final_sha256": null
+    },
+    {
+      "call": 6,
+      "exit_code": 0,
+      "elapsed_seconds": 79.946,
+      "input_sha256": "2d30f755661a4eeafe7b0972347407abe2d168880f49adceee5f77e94520712f",
+      "events_sha256": "c3113174dc08f9ed0fd1cbedac39c4c7ceb7575203b03f1c1d5069f4cad9b0dd",
+      "final_sha256": "a9959ddad868c211968bcedca8c8f09660d7d7431b1288e9b390508aea1dcd3f"
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "47244e3c2dc44c5981cb145708c53e5d",
+      "service_task_id": "60b9363f71c54afb",
+      "actual_request": {
+        "name": "Optimatrix S3 BTC buyer d9ff6c8ee404",
+        "asset": "BTC",
+        "start_date": "2026-08-31",
+        "end_date": "2026-09-27",
+        "session_bucket": "09:00:00",
+        "entry_weekdays": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "mode": "reopen",
+        "hedge_mode": "none",
+        "hedge_delta_mode": "bs",
+        "skew_beta": 1.5,
+        "option_transaction_cost_bp": 1,
+        "hedge_transaction_cost_bp": 0,
+        "numeraire": "BTC",
+        "save_detail_csv": true,
+        "calculate_annual_return": false,
+        "annual_return_principal": 0.2,
+        "legs": [
+          {
+            "side": "long",
+            "option_type": "call",
+            "delta": 0.5,
+            "expiry": 7,
+            "close_dte": 0,
+            "quantity": 0.01
+          }
+        ],
+        "indicators": [],
+        "signal": null,
+        "exposure_band": null,
+        "selected_chart_columns": []
+      },
+      "submitted_at": "2026-09-29T16:15:27.785Z",
+      "completed_at": "2026-09-29T16:15:33.825Z",
+      "model_accounting": {
+        "status": "model_ledger_verified",
+        "model_ledger_verified": true,
+        "premium_paid_btc": "0.00380127946134484737",
+        "exit_income_btc": "0.00386610605743188",
+        "fees_btc": "0.00004",
+        "btc_net_pnl": "0.00002482659608703263",
+        "audit": {
+          "calculation_version": "backtest_v20",
+          "detail_rows": 40,
+          "daily_rows": 28,
+          "absolute_tolerance_btc": "0.000000000000001",
+          "reconstructed_net_btc": "0.00002482659608703263",
+          "detail_pnl_sum_btc": "0.0000248265960870325724",
+          "daily_pnl_sum_btc": "0.0000248265960870325718",
+          "reported_pnl_btc": "0.00002482659608703262",
+          "reported_difference_btc": "0.00000000000000000001",
+          "fees_already_in_reported_pnl": true,
+          "nominal_quantity_btc": "0.01",
+          "value_already_includes_quantity": true,
+          "open_forward_usd": "78521.16005952381",
+          "close_forward_usd": "84241.35255952382",
+          "base_option_fee_bp": "1",
+          "traded_nominal_btc": "0.4",
+          "trade_event_count": 40,
+          "mark_event_count": 0,
+          "lot_count": 20,
+          "planned_weekday_filtered_days": 7,
+          "checks": [
+            "request_and_version",
+            "closed_lot_leg_chains",
+            "BTC_currency",
+            "event_fee_identities",
+            "marks_are_not_cash",
+            "detail_pnl",
+            "daily_pnl",
+            "service_kpis",
+            "no_double_quantity_or_fee"
+          ]
+        }
+      },
+      "fee_comparison": {
+        "status": "computed_from_verified_ledger",
+        "run_id": "47244e3c2dc44c5981cb145708c53e5d",
+        "method": "同一原始模型记录、同一数量与全部价格路径，仅替换开平仓费用 bp；确定性费用敏感性，不是第二次远端回测。",
+        "base_fee_bp": "1",
+        "higher_fee_bp": "5",
+        "traded_nominal_btc": "0.4",
+        "trade_event_count": 40,
+        "gross_pnl_btc": "0.00006482659608703263",
+        "base_fees_btc": "0.00004",
+        "higher_fees_btc": "0.0002",
+        "base_net_btc": "0.00002482659608703263",
+        "higher_net_btc": "-0.00013517340391296737",
+        "incremental_cost_btc": "0.00016",
+        "gross_profit_consumed_base_pct": "61.703070058310936667890842579950109016227795510518279837142790016268805774506239",
+        "gross_profit_consumed_higher_pct": "308.51535029155468333945421289975054508113897755259139918571395008134402887253119",
+        "base_cost_as_premium_pct": "1.0522772768158560149017389171541509365477149707905897142386496892962193347917289",
+        "higher_cost_as_premium_pct": "5.2613863840792800745086945857707546827385748539529485711932484464810966739586443",
+        "ratio_note": "只有毛模型收益为正时才计算成本占毛收益比例；累计开仓权利金并非最大资金占用。",
+        "evidence_fields": [
+          "analysis.premium_paid_btc",
+          "analysis.exit_income_btc",
+          "analysis.fees_btc",
+          "analysis.btc_net_pnl",
+          "analysis.audit.traded_nominal_btc",
+          "analysis.audit.base_option_fee_bp"
+        ],
+        "remote_backtest_created": false,
+        "executable_edge_established": false
+      },
+      "artifact_sha256": {
+        "request.json": "20f071c7c4c9a70181f6e415d849a30ccf106791bc90e66de117457cd2466c10",
+        "submit.raw.json": "c7075807c6c405c4dcbececf9702473a6c3382c0c4dcdfdbd1de8b1779f5cf6f",
+        "status.raw.json": "9931211722537ae40434cb2e34c222b6a632b0bbc0c32ba862fa711463858e73",
+        "report.raw.json": "445167c9abe5bf044e3b088034a3c85bb406883778ab0d457b072fa4bb10b17b",
+        "report.txt": "336fe22d6846198f4a04f56d15ecb91ee37a006a153b14d3d0467c7f8da0d2bf",
+        "details.csv": "850aeefad7fb071d8c56fe3aa59d03dfffaa36576a1bc8ee3e783f0af5526fdd",
+        "daily.csv": "4827d5d5d1baf58b3c46cac757df54bb1d8207c99e563689a481b436284dbfa6"
+      }
+    },
+    {
+      "run_id": "9edb508a44de4fa48a0610115c287a60",
+      "service_task_id": "b5e7c0a2900e4432",
+      "actual_request": {
+        "name": "Optimatrix S3 BTC buyer c75b77b32bf6",
+        "asset": "BTC",
+        "start_date": "2026-09-21",
+        "end_date": "2026-09-22",
+        "session_bucket": "09:00:00",
+        "entry_weekdays": [
+          0
+        ],
+        "mode": "reopen",
+        "hedge_mode": "none",
+        "hedge_delta_mode": "bs",
+        "skew_beta": 1.5,
+        "option_transaction_cost_bp": 1,
+        "hedge_transaction_cost_bp": 0,
+        "numeraire": "BTC",
+        "save_detail_csv": true,
+        "calculate_annual_return": false,
+        "annual_return_principal": 0.2,
+        "legs": [
+          {
+            "side": "long",
+            "option_type": "call",
+            "delta": 0.5,
+            "expiry": 7,
+            "close_dte": 0,
+            "quantity": 0.01
+          }
+        ],
+        "indicators": [],
+        "signal": null,
+        "exposure_band": null,
+        "selected_chart_columns": []
+      },
+      "submitted_at": "2026-09-29T16:17:13.388Z",
+      "completed_at": "2026-09-29T16:17:19.761Z",
+      "model_accounting": {
+        "status": "model_ledger_verified",
+        "model_ledger_verified": true,
+        "premium_paid_btc": "0.00021450789835553507",
+        "exit_income_btc": "0.0003553481779116794",
+        "fees_btc": "0.000002",
+        "btc_net_pnl": "0.00013884027955614433",
+        "audit": {
+          "calculation_version": "backtest_v20",
+          "detail_rows": 2,
+          "daily_rows": 2,
+          "absolute_tolerance_btc": "0.000000000000001",
+          "reconstructed_net_btc": "0.00013884027955614433",
+          "detail_pnl_sum_btc": "0.0001388402795561443",
+          "daily_pnl_sum_btc": "0.0001388402795561443",
+          "reported_pnl_btc": "0.0001388402795561443",
+          "reported_difference_btc": "0.00000000000000000003",
+          "fees_already_in_reported_pnl": true,
+          "nominal_quantity_btc": "0.01",
+          "value_already_includes_quantity": true,
+          "open_forward_usd": "83861.80732142857",
+          "close_forward_usd": "86286.05597222221",
+          "base_option_fee_bp": "1",
+          "traded_nominal_btc": "0.02",
+          "trade_event_count": 2,
+          "mark_event_count": 0,
+          "lot_count": 1,
+          "planned_weekday_filtered_days": 0,
+          "checks": [
+            "request_and_version",
+            "closed_lot_leg_chains",
+            "BTC_currency",
+            "event_fee_identities",
+            "marks_are_not_cash",
+            "detail_pnl",
+            "daily_pnl",
+            "service_kpis",
+            "no_double_quantity_or_fee"
+          ]
+        }
+      },
+      "fee_comparison": {
+        "status": "computed_from_verified_ledger",
+        "run_id": "9edb508a44de4fa48a0610115c287a60",
+        "method": "同一原始模型记录、同一数量与全部价格路径，仅替换开平仓费用 bp；确定性费用敏感性，不是第二次远端回测。",
+        "base_fee_bp": "1",
+        "higher_fee_bp": "5",
+        "traded_nominal_btc": "0.02",
+        "trade_event_count": 2,
+        "gross_pnl_btc": "0.00014084027955614433",
+        "base_fees_btc": "0.000002",
+        "higher_fees_btc": "0.00001",
+        "base_net_btc": "0.00013884027955614433",
+        "higher_net_btc": "0.00013084027955614433",
+        "incremental_cost_btc": "0.000008",
+        "gross_profit_consumed_base_pct": "1.4200483031579920959440985036381078188589924947031967648847251029303700143664749",
+        "gross_profit_consumed_higher_pct": "7.1002415157899604797204925181905390942949624735159838244236255146518500718323744",
+        "base_cost_as_premium_pct": "0.93236660063915677070359130919703811853696598496942756367075874889411918650574308",
+        "higher_cost_as_premium_pct": "4.6618330031957838535179565459851905926848299248471378183537937444705959325287154",
+        "ratio_note": "只有毛模型收益为正时才计算成本占毛收益比例；累计开仓权利金并非最大资金占用。",
+        "evidence_fields": [
+          "analysis.premium_paid_btc",
+          "analysis.exit_income_btc",
+          "analysis.fees_btc",
+          "analysis.btc_net_pnl",
+          "analysis.audit.traded_nominal_btc",
+          "analysis.audit.base_option_fee_bp"
+        ],
+        "remote_backtest_created": false,
+        "executable_edge_established": false
+      },
+      "artifact_sha256": {
+        "request.json": "bfb74981d5c5da8f0c89ba3140badf65a6116d6b18b4dca7bc433fc6c9f1f06e",
+        "submit.raw.json": "b02b89c39d4be1aab8e2794b9987dbf149294feb3cda1e1cf182e6b5c6377603",
+        "status.raw.json": "c77058b8f4b226b08762e2f2703ff66e02a27d3dd4d98662b60fb6bca3b1c4c6",
+        "report.raw.json": "cd168c6a471deb61a467693fd5f93f688236c070d07aa19c5fbd7bdacf66d844",
+        "report.txt": "12ca21d211c12b1b72c3350bf349f0258ecbcfeaa444495a23cf2ba76c455f6c",
+        "details.csv": "6b7fd4cb5a4fb845d209be7ccc413d85a404772d15a32a5c62c0e23436a09d75",
+        "daily.csv": "fdc60d155c4159b715bbfbd3003dbfb8ebf08918fa794c3daf46ebc642396332"
+      }
+    }
+  ],
+  "conclusion_verdict": "否定候选",
+  "validated_claim_count": 14,
+  "validation_recovery": [
+    {
+      "at": "2026-09-29T16:25:39.086Z",
+      "previous_status": "invalid_output",
+      "previous_error": "最终结论不得替换原始研究问题",
+      "source_call": "call-6",
+      "new_model_calls": 0
+    }
+  ],
+  "limitations": [
+    "这是脱敏摘要，不是完整原始结果或模型输出；完整文件留在忽略的local。",
+    "四周主窗口固定未优化；第二窗口是旧核账器误拒绝后追加的独立核账对照，与主窗口重叠，不能作样本外证据。",
+    "费用情景在各自同一原始记录上仅改费用，未创建较高费率远端回测。",
+    "开发暂停过一次模型调用以修复planned weekday filter计量；该调用仍消耗预算。",
+    "最终模型原始输出曾被过严文本校验拒绝，修复后仅本地重校；旧拒绝及原始输出均保留。",
+    "模型估值缺少真实买卖价、深度、滑点及实际账户费用，未建立可交易优势。"
+  ]
+}

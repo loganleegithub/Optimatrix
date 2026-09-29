@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Optimatrix · BTC 研究</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/backtest.css">
+  <link rel="stylesheet" href="/static/research.css">
+  <script defer src="/static/research.js"></script>
+</head>
+<body>
+<div class="page-shell backtest-shell">
+  <header class="masthead">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">O</span><span>Optimatrix</span><span class="stage">S3</span></div>
+    <nav class="page-nav" aria-label="主导航"><a class="back-link" href="/">公共行情</a><a class="back-link" href="/backtest">回测记录</a><span aria-current="page">研究</span></nav>
+  </header>
+  <main>
+    <div class="page-heading"><div><p class="eyebrow">CODEX CLI / BTC RESEARCH</p><h1>BTC 币本位研究</h1><p class="subtitle">一个 researcher 提出实验，程序执行回测，结论引用真实记录。</p></div><span id="backend-status" class="badge badge-warning" role="status">正在确认本地服务</span></div>
+    <div class="mode-notice"><span class="notice-dot" aria-hidden="true"></span><div><strong>研究建议 · 没有交易授权</strong><span>模型结果不等于可成交收益；本页没有账户连接、策略批准或下单功能。关闭页面不会停止已经授权的研究。</span></div></div>
+    <noscript><p class="error-notice">请开启 JavaScript，以读取任务状态并主动授权研究。</p></noscript>
+    <p id="connection-notice" class="connection-notice" role="status">尚未收到本地服务响应。</p>
+    <section class="research-setup" aria-label="问题与研究授权">
+      <article class="panel backtest-panel">
+        <div class="panel-topline"><h2>本次研究问题</h2><span class="count-label">同时仅一个任务</span></div>
+        <label for="research-question" class="question-label">输入问题，或使用示范问题</label>
+        <textarea id="research-question" rows="7" maxlength="3000" placeholder="例如：比较基础费用与较高费用假设对简单 BTC inverse 期权买方实验的影响。" disabled></textarea>
+        <button id="use-example" class="button button-secondary" type="button" disabled>使用示范问题</button>
+        <p class="fineprint">实验日期、Call / Put、Delta、期限和数量由内部 researcher 在下方已核实范围内提出。尚无逐笔卖压与同步买卖盘口，曲面回测不能验证这类成交机制。</p>
+        <div id="budget-summary" class="budget-box">等待取得后端预算。</div>
+        <label class="approval-label"><input id="approve-budget" type="checkbox" disabled><span>我批准本次问题及上方研究调用预算；这不是交易授权。</span></label>
+        <button id="start-research" class="button" type="button" disabled>开始本次研究</button>
+        <p id="start-reason" class="fineprint">等待配置与本地服务确认。</p>
+      </article>
+      <article class="panel backtest-panel">
+        <div class="panel-topline"><h2>固定 researcher 与工具</h2><span id="researcher-availability" class="badge badge-neutral">尚未确认</span></div>
+        <p id="availability-reason" class="body-copy">仅检查认证状态，不展示凭据。</p>
+        <dl class="backtest-facts"><div><dt>模型 / 推理强度</dt><dd id="config-model">未取得</dd></div><div><dt>Prompt / 输出结构</dt><dd id="config-prompt">未取得</dd></div><div><dt>CLI / 登录方式</dt><dd id="config-cli">未取得</dd></div><div><dt>实际权限检查</dt><dd id="config-isolation">未确认</dd></div><div><dt>允许的研究工具</dt><dd id="config-tools">未取得</dd></div></dl>
+        <h3 class="subheading">本次可提出的实验</h3>
+        <ul id="capabilities-readable" class="plain-list"><li>尚未取得已核实的参数范围。</li></ul>
+        <p id="capabilities-pricing" class="body-copy">价格来源未确认。</p>
+        <details class="json-detail"><summary>完整工具范围与来源记录</summary><pre id="config-capabilities">未取得</pre></details>
+        <details class="json-detail"><summary>当前固定配置</summary><pre id="config-json">未取得</pre></details>
+      </article>
+    </section>
+    <p id="action-message" class="action-message" role="status" hidden></p>
+    <section class="panel results-panel" aria-labelledby="history-title">
+      <div class="section-heading"><div><h2 id="history-title">研究任务与历史</h2><p>页面读取已保存状态；刷新和重启不会自行发起新调用。</p></div><span id="research-count" class="count-label">尚未读取</span></div>
+      <div class="history-picker"><label for="research-select">查看研究</label><select id="research-select" disabled><option value="">尚未读取</option></select></div>
+      <p id="history-error" class="result-error" hidden></p>
+      <p id="no-research" class="result-empty">尚未取得研究记录。</p>
+      <div id="research-detail" hidden>
+        <div class="run-heading"><div><span class="field-label">research_id</span><strong id="research-id" class="run-id"></strong></div><span id="research-status" class="badge badge-neutral">未确认</span></div>
+        <div class="research-body">
+          <p id="saved-question" class="saved-question"></p>
+          <div id="run-budget" class="budget-box"></div>
+          <div class="research-controls"><button id="stop-research" class="button button-secondary" type="button" disabled>停止本次研究</button><button id="resume-research" class="button" type="button" disabled>继续本次研究</button></div>
+          <p id="recovery-reason" class="fineprint">停止只结束本任务拥有的本地工作，已建立的远端回测仍可保留并取回。</p>
+          <p id="research-error" class="result-error" hidden></p>
+          <details class="json-detail"><summary>本任务配置快照与输入引用</summary><pre id="saved-config"></pre></details>
+          <section class="research-section"><h3>真实执行事件</h3><p class="fineprint">由程序保存的实际进度，不展示内部推理或估算百分比。</p><ol id="research-events" class="event-list"></ol></section>
+          <section class="research-section"><h3>实验提案与工具动作</h3><div id="research-actions"></div></section>
+          <section class="research-section"><h3>证据与程序计算</h3><p class="fineprint">金额只来自后端确定性计算。服务汇总、模型 BTC 账本、可成交收益分别识别。</p><div id="research-evidence"></div></section>
+          <section id="final-section" class="research-section" hidden><h3>中文研究结论</h3><div id="final-result"></div></section>
+        </div>
+      </div>
+    </section>
+  </main>
+  <footer><span>Optimatrix · S3 单 researcher 真实工具循环</span><span>本机订阅 · 本地证据 · 无交易授权</span></footer>
+</div>
+</body>
+</html>
