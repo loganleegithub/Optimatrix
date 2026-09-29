@@ -1,0 +1,237 @@
+{
+  "purpose": "真实公共接口检查样本；只作审阅，程序不读取它，不替代实时行情。",
+  "started_at_utc": "2026-09-29T05:39:26.299Z",
+  "completed_at_utc": "2026-09-29T05:39:28.352Z",
+  "credentials_used": false,
+  "entries": [
+    {
+      "url": "https://www.deribit.com/api/v2/public/get_index_price?index_name=btc_usd",
+      "received_at_utc": "2026-09-29T05:39:27.135Z",
+      "response": {
+        "jsonrpc": "2.0",
+        "result": {
+          "estimated_delivery_price": 83065.3,
+          "index_price": 83065.3
+        },
+        "usIn": 1790660367085468,
+        "usOut": 1790660367085908,
+        "usDiff": 440,
+        "testnet": false
+      }
+    },
+    {
+      "url": "https://www.deribit.com/api/v2/public/get_instruments?currency=BTC&kind=option&expired=false",
+      "received_at_utc": "2026-09-29T05:39:27.573Z",
+      "response": {
+        "jsonrpc": "2.0",
+        "result": [
+          {
+            "state": "open",
+            "price_index": "btc_usd",
+            "kind": "option",
+            "instrument_name": "BTC-29SEP26-83000-C",
+            "maker_commission": 0.0003,
+            "taker_commission": 0.0003,
+            "product_group": "BTC",
+            "instrument_type": "reversed",
+            "underlying_type": "crypto",
+            "instrument_id": 702939,
+            "expiration_timestamp": 1790668800000,
+            "creation_timestamp": 1790323226000,
+            "is_active": true,
+            "tick_size": 0.0001,
+            "contract_size": 1.0,
+            "strike": 83000.0,
+            "counter_currency": "USD",
+            "option_type": "call",
+            "min_trade_amount": 0.1,
+            "block_trade_commission": 0.0003,
+            "block_trade_min_trade_amount": 25,
+            "block_trade_tick_size": 0.0001,
+            "settlement_currency": "BTC",
+            "settlement_period": "day",
+            "base_currency": "BTC",
+            "index_id": 1000033,
+            "quote_currency": "BTC",
+            "tick_size_steps": [
+              {
+                "tick_size": 0.0005,
+                "above_price": 0.005
+              }
+            ],
+            "lot_size": 1,
+            "base_currency_uuid": "5b71fc48-3dd3-540c-809b-f8c94d0e68b5",
+            "quote_currency_uuid": "5b71fc48-3dd3-540c-809b-f8c94d0e68b5"
+          },
+          {
+            "state": "open",
+            "price_index": "btc_usd",
+            "kind": "option",
+            "instrument_name": "BTC-29SEP26-83000-P",
+            "maker_commission": 0.0003,
+            "taker_commission": 0.0003,
+            "product_group": "BTC",
+            "instrument_type": "reversed",
+            "underlying_type": "crypto",
+            "instrument_id": 702940,
+            "expiration_timestamp": 1790668800000,
+            "creation_timestamp": 1790323226000,
+            "is_active": true,
+            "tick_size": 0.0001,
+            "contract_size": 1.0,
+            "strike": 83000.0,
+            "counter_currency": "USD",
+            "option_type": "put",
+            "min_trade_amount": 0.1,
+            "block_trade_commission": 0.0003,
+            "block_trade_min_trade_amount": 25,
+            "block_trade_tick_size": 0.0001,
+            "settlement_currency": "BTC",
+            "settlement_period": "day",
+            "base_currency": "BTC",
+            "index_id": 1000033,
+            "quote_currency": "BTC",
+            "tick_size_steps": [
+              {
+                "tick_size": 0.0005,
+                "above_price": 0.005
+              }
+            ],
+            "lot_size": 1,
+            "base_currency_uuid": "5b71fc48-3dd3-540c-809b-f8c94d0e68b5",
+            "quote_currency_uuid": "5b71fc48-3dd3-540c-809b-f8c94d0e68b5"
+          }
+        ],
+        "usIn": 1790660362007621,
+        "usOut": 1790660362007844,
+        "usDiff": 223,
+        "testnet": false
+      },
+      "full_response_canonical_json_sha256": "bf365dddc98b6a9b50db27b5fe08adccc90fda401d533b96fbfe93c4f2b7839f",
+      "extraction_note": "get_instruments 的 result 仅保留本次展示的两条原始合约记录；其余响应字段原样保留。哈希对应缩减前、排序键且无空白的 UTF-8 JSON，不是 HTTP 原始字节。",
+      "full_result_count": 946
+    },
+    {
+      "url": "https://www.deribit.com/api/v2/public/get_order_book?instrument_name=BTC-29SEP26-83000-C&depth=1",
+      "received_at_utc": "2026-09-29T05:39:27.979Z",
+      "response": {
+        "jsonrpc": "2.0",
+        "result": {
+          "timestamp": 1790660367063,
+          "state": "open",
+          "stats": {
+            "high": 0.0105,
+            "low": 0.0022,
+            "price_change": -60.0,
+            "volume": 69.4,
+            "volume_usd": 18760.92
+          },
+          "greeks": {
+            "delta": 0.57645,
+            "gamma": 0.00126,
+            "vega": 5.3273,
+            "theta": -60.93132,
+            "rho": 0.12803
+          },
+          "change_id": 176423464122,
+          "index_price": 83065.3,
+          "instrument_name": "BTC-29SEP26-83000-C",
+          "bids": [
+            [
+              0.0016,
+              3.6
+            ]
+          ],
+          "asks": [
+            [
+              0.0021,
+              15.0
+            ]
+          ],
+          "last_price": 0.003,
+          "settlement_price": 0.00684186,
+          "min_price": 0.0001,
+          "max_price": 0.0345,
+          "open_interest": 67.3,
+          "mark_price": 0.0019,
+          "interest_rate": 0.0,
+          "estimated_delivery_price": 83065.3,
+          "best_ask_price": 0.0021,
+          "best_bid_price": 0.0016,
+          "mark_iv": 22.88,
+          "bid_iv": 18.51,
+          "ask_iv": 26.31,
+          "underlying_price": 83059.4,
+          "underlying_index": "BTC-29SEP26",
+          "best_ask_amount": 15.0,
+          "best_bid_amount": 3.6
+        },
+        "usIn": 1790660367919151,
+        "usOut": 1790660367919409,
+        "usDiff": 258,
+        "testnet": false
+      }
+    },
+    {
+      "url": "https://www.deribit.com/api/v2/public/get_order_book?instrument_name=BTC-29SEP26-83000-P&depth=1",
+      "received_at_utc": "2026-09-29T05:39:28.351Z",
+      "response": {
+        "jsonrpc": "2.0",
+        "result": {
+          "timestamp": 1790660368154,
+          "state": "open",
+          "stats": {
+            "high": 0.008,
+            "low": 0.0005,
+            "price_change": -78.5714,
+            "volume": 332.7,
+            "volume_usd": 111846.03
+          },
+          "greeks": {
+            "delta": -0.42355,
+            "gamma": 0.00126,
+            "vega": 5.3273,
+            "theta": -60.93132,
+            "rho": -0.09463
+          },
+          "change_id": 176423467499,
+          "index_price": 83065.3,
+          "instrument_name": "BTC-29SEP26-83000-P",
+          "bids": [
+            [
+              0.001,
+              33.6
+            ]
+          ],
+          "asks": [
+            [
+              0.0014,
+              17.1
+            ]
+          ],
+          "last_price": 0.0015,
+          "settlement_price": 0.00815817,
+          "min_price": 0.0001,
+          "max_price": 0.0355,
+          "open_interest": 376.6,
+          "mark_price": 0.0012,
+          "interest_rate": 0.0,
+          "estimated_delivery_price": 83065.3,
+          "best_ask_price": 0.0014,
+          "best_bid_price": 0.001,
+          "mark_iv": 22.88,
+          "bid_iv": 20.32,
+          "ask_iv": 26.55,
+          "underlying_price": 83059.4,
+          "underlying_index": "BTC-29SEP26",
+          "best_ask_amount": 17.1,
+          "best_bid_amount": 33.6
+        },
+        "usIn": 1790660368309520,
+        "usOut": 1790660368309871,
+        "usDiff": 351,
+        "testnet": false
+      }
+    }
+  ]
+}
