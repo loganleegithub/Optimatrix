@@ -6,6 +6,8 @@ import logging
 import math
 import threading
 import time
+import traceback
+from pathlib import Path
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -16,6 +18,13 @@ REFRESH_SECONDS = 15
 STALE_SECONDS = 60
 CATALOG_SECONDS = 300
 PUBLIC_METHODS = {"get_index_price", "get_instruments", "get_order_book"}
+
+
+def safe_traceback(error):
+    """Keep exception type and frame locations, never messages, source lines or locals."""
+    frames = [f"{Path(frame.f_code.co_filename).name}:{line}:{frame.f_code.co_name}"
+              for frame, line in traceback.walk_tb(error.__traceback__)]
+    return f"{type(error).__name__}; stack=" + " > ".join(frames)
 
 
 def iso(seconds=None):
@@ -259,13 +268,13 @@ class MarketService:
                     failures += 1
                     delay = retry_delay(failures, error.retry_after)
                     logging.warning("public refresh failed: %s; retry in %.0fs", error, delay)
-                except Exception:
+                except Exception as error:
                     # Keep the process observable even if a new remote schema causes an unexpected error.
                     failures += 1
                     delay = retry_delay(failures)
                     with self.lock:
                         self.state["collector"]["error"] = "采集内部异常；保留上次数据，等待重试"
-                    logging.error("unexpected collector error; retry in %.0fs", delay)
+                    logging.error("unexpected collector error; %s; retry in %.0fs", safe_traceback(error), delay)
                 with self.lock:
                     self.state["collector"]["next_retry_at"] = iso(time.time() + delay)
                 self.stop_event.wait(delay)

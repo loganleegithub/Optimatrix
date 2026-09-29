@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-Hans">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Optimatrix · Greeks.live 回测</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/backtest.css">
+    <script defer src="/static/backtest.js"></script>
+  </head>
+  <body>
+    <div class="page-shell backtest-shell">
+      <header class="masthead">
+        <div class="brand"><span class="brand-mark" aria-hidden="true">O</span><span>Optimatrix</span><span class="stage">S2</span></div>
+        <a class="back-link" href="/">← 公共行情首页</a>
+      </header>
+      <main>
+        <div class="page-heading">
+          <div><p class="eyebrow">GREEKS.LIVE / BTC BACKTEST</p><h1>回测与 BTC 计量</h1><p class="subtitle">一次固定参数的买方实验。保留真实请求、结果和无法确认的部分。</p></div>
+          <span id="backend-status" class="badge badge-warning" role="status">正在确认本地服务</span>
+        </div>
+        <div class="mode-notice"><span class="notice-dot" aria-hidden="true"></span><div><strong>研究回测 · 无账户连接</strong><span>交易模块尚未实现；没有获批策略或资金授权。0.2 BTC 仅为假设初始资金，不是真实余额。</span></div></div>
+        <noscript><p class="error-notice">未取得数据：请开启 JavaScript，以读取已保存结果、提交回测并确认服务状态。</p></noscript>
+        <p id="connection-notice" class="connection-notice" role="status">尚未收到本地服务响应。</p>
+
+        <section class="backtest-overview" aria-label="连接与固定实验">
+          <article class="panel backtest-panel">
+            <div class="panel-topline"><h2>配置与服务能力</h2><span id="configuration-status" class="badge badge-neutral">尚未确认</span></div>
+            <p id="configuration-reason" class="body-copy">正在读取配置状态，页面不会显示凭据。</p>
+            <div class="check-action"><button id="check-connection" class="button button-secondary" type="button" disabled>检查连接与服务能力</button><span id="capability-status" class="badge badge-neutral">尚未检查</span></div>
+            <p id="capability-reason" class="body-copy">未取得确认信息。</p>
+            <dl class="backtest-facts"><div><dt>上次能力检查</dt><dd id="capability-checked">未检查</dd></div><div><dt>服务返回的时间范围</dt><dd id="coverage">未确认</dd></div></dl>
+            <h3 class="subheading">已确认能力</h3><ul id="capability-facts" class="plain-list"><li>未取得确认信息。</li></ul>
+            <h3 class="subheading">未知或限制</h3><ul id="capability-unknowns" class="plain-list"><li>等待当前服务文档与实际响应确认。</li></ul>
+            <p class="fineprint">检查动作只核对配置与回测服务，不提交回测任务。是否调用服务及失败原因以返回状态为准。</p>
+          </article>
+          <article class="panel backtest-panel">
+            <div class="panel-topline"><h2>本次固定实验</h2><span class="count-label">不扫描参数</span></div>
+            <h3 id="experiment-title" class="experiment-title">等待服务返回任务定义</h3>
+            <p id="experiment-description" class="body-copy">未取得参数，不能提交。</p>
+            <dl class="backtest-facts"><div><dt>实验标识</dt><dd id="experiment-id">未取得数据</dd></div></dl>
+            <details class="json-detail" open><summary>固定请求参数</summary><pre id="experiment-request">未取得数据</pre></details>
+            <ul id="experiment-assumptions" class="plain-list"><li>未取得假设说明。</li></ul>
+            <button id="start-run" class="button" type="button" disabled>提交一次真实回测</button>
+            <p id="submit-reason" class="fineprint">等待本地服务确认。</p>
+            <p class="fineprint">本阶段只提交一次固定实验。已有提交记录时只查看原任务；刷新、并发点击或重新启动不会重复提交该实验。</p>
+          </article>
+        </section>
+        <p id="action-message" class="action-message" role="status" hidden></p>
+
+        <section class="panel results-panel" aria-labelledby="results-title">
+          <div class="section-heading"><div><h2 id="results-title">已保存的运行记录</h2><p>结果以本地保存的真实服务响应为依据；没有数据的字段明确保留为空。</p></div><span id="run-count" class="count-label">尚未读取</span></div>
+          <p id="storage-error" class="result-error" role="status" hidden></p>
+          <div class="history-picker"><label for="run-select">查看运行</label><select id="run-select" disabled><option value="">未取得数据</option></select></div>
+          <p id="no-runs" class="result-empty">尚未读取历史记录。</p>
+          <div id="run-detail" hidden>
+            <div class="run-heading"><div><span class="field-label">本地 run_id</span><strong id="run-id" class="run-id"></strong></div><span id="run-status" class="badge badge-neutral">状态未确认</span></div>
+            <dl class="run-facts backtest-facts"><div><dt>创建时间</dt><dd id="run-created">未取得数据</dd></div><div><dt>提交时间</dt><dd id="run-submitted">尚未提交</dd></div><div><dt>完成时间</dt><dd id="run-completed">尚未完成</dd></div><div><dt>服务任务标识</dt><dd id="service-task-id">未提供</dd></div></dl>
+            <p id="run-error" class="result-error" hidden></p>
+            <details class="json-detail run-request"><summary>本次保存的实际请求参数</summary><pre id="run-request">未取得数据</pre></details>
+            <div class="btc-result-heading"><h3>模型 BTC 结果与可核对范围</h3><p id="analysis-status" class="body-copy">未取得真实服务结果。</p></div>
+            <div id="analysis-detail" hidden>
+              <div class="metrics-grid">
+                <div class="metric metric-primary"><span>模型 BTC 净盈亏</span><strong id="btc-net-pnl">无法可靠重建 BTC 净收益</strong></div>
+                <div class="metric"><span>模型权利金支出</span><strong id="premium-paid">未提供</strong></div>
+                <div class="metric"><span>模型退出收入 / 结算</span><strong id="exit-income">未提供</strong></div>
+                <div class="metric"><span>模型费用</span><strong id="fees">未提供</strong></div>
+                <div class="metric"><span>模型权利金回报率</span><strong id="premium-return">无法计算</strong></div>
+                <div class="metric"><span>假设资金回报率 · 初始 0.2 BTC</span><strong id="account-return">无法计算</strong><small>模型与假设口径，不是真实账户表现</small></div>
+              </div>
+              <dl class="analysis-facts backtest-facts"><div><dt>服务报告币种 / 模型盈亏</dt><dd id="reported-result">未提供</dd></div><div><dt>价格来源</dt><dd id="price-source">未知</dd></div><div><dt>费用与成交假设</dt><dd id="fee-assumption">未知</dd></div><div><dt>模型 BTC 计量方法</dt><dd id="analysis-method">未确认</dd></div></dl>
+              <details id="analysis-audit" class="json-detail run-request" hidden><summary>模型账本核对明细（JSON）</summary><pre id="analysis-audit-json"></pre></details>
+              <div class="gap-section"><h3>数据缺口与限制</h3><ul id="analysis-gaps" class="plain-list"></ul></div>
+              <div class="cashflow-section"><h3>模型 BTC 现金流记录</h3><div class="table-scroll" tabindex="0" role="region" aria-label="模型 BTC 现金流记录"><table class="cashflow-table"><caption class="sr-only">返回记录支持的模型 BTC 现金流，不是真实账户支出或收入</caption><thead><tr><th scope="col">时间 / 日期</th><th scope="col">说明</th><th scope="col" class="number">模型金额<span>BTC</span></th></tr></thead><tbody id="cashflow-rows"></tbody></table></div><p class="fineprint">模型现金流不是真实账户支出或收入。模型或 mark 价格不等于可成交价格，USD 汇总盈亏不会被除以期末 BTC 价格冒充 BTC 收益。</p></div>
+            </div>
+          </div>
+        </section>
+      </main>
+      <footer><span>Optimatrix · S2 回测接入与 BTC 计量</span><span>账户未接入 · 内部 Agent 未运行 · 无下单功能</span></footer>
+    </div>
+  </body>
+</html>
