@@ -42,6 +42,149 @@ def evidence_fields(evidence):
     return fields
 
 
+PRESENTATION_VERSION = 'evidence-binding-v2'
+VALIDATION_SCOPE = '仅核对结构化引用、字段与确定性金额；不验证自然语言全部正确。'
+# Explicit units, including btc_net_pnl (which has no _btc suffix). Unknown
+# scalar fields remain source records, never inferred currency amounts.
+METRICS = {
+    'accounting.btc_net_pnl': ('模型账本净损益', 'BTC'),
+    'accounting.premium_paid_btc': ('累计开仓权利金', 'BTC'),
+    'accounting.exit_income_btc': ('累计平仓收入', 'BTC'),
+    'accounting.fees_btc': ('基础假设费用', 'BTC'),
+    'accounting.hypothetical_capital_btc': ('假设资金（非真实余额）', 'BTC'),
+    'accounting.premium_return_pct': ('净损益占累计开仓权利金', '%'),
+    'accounting.hypothetical_account_return_pct': ('净损益占假设资金', '%'),
+    'fee_comparison.traded_nominal_btc': ('开平仓事件累计名义量（非余额）', 'BTC'),
+    'fee_comparison.gross_pnl_btc': ('费用前模型损益', 'BTC'),
+    'fee_comparison.base_fees_btc': ('基础费用合计', 'BTC'),
+    'fee_comparison.higher_fees_btc': ('较高费用合计', 'BTC'),
+    'fee_comparison.base_net_btc': ('基础费用后净模型损益', 'BTC'),
+    'fee_comparison.higher_net_btc': ('较高费用后净模型损益', 'BTC'),
+    'fee_comparison.incremental_cost_btc': ('提高费率新增成本', 'BTC'),
+    'fee_comparison.gross_profit_consumed_base_pct': ('基础费用占正毛模型利润', '%'),
+    'fee_comparison.gross_profit_consumed_higher_pct': ('较高费用占正毛模型利润', '%'),
+    'fee_comparison.base_cost_as_premium_pct': ('基础费用占累计开仓权利金', '%'),
+    'fee_comparison.higher_cost_as_premium_pct': ('较高费用占累计开仓权利金', '%'),
+    'fee_comparison.base_fee_bp': ('基础假设费率', 'bp'),
+    'fee_comparison.higher_fee_bp': ('较高假设费率', 'bp'),
+}
+# A small literal guard, not a natural-language fact checker. Scientific
+# notation is one token; 1e3 BTC must never be misread as 3 BTC.
+FINANCIAL_LITERAL = re.compile(r'([+-]?(?:\d[\d,]*(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)\s*(USDC|BTC|USD|美元|比特币|%|％|bp)', re.I)
+
+
+def referenced_value(ref, known):
+    run_id, field = ref.get('run_id'), ref.get('field')
+    if run_id not in known or field not in evidence_fields(known[run_id]):
+        raise ValueError('结论引用不存在或字段未提供给本任务')
+    return evidence_fields(known[run_id])[field]
+
+
+def check_claim(ref, known):
+    value = referenced_value(ref, known)
+    unit = METRICS.get(ref['field'], ('', ''))[1]
+    for match in FINANCIAL_LITERAL.finditer(ref['text']):
+        token, stated_unit = match.groups()
+        stated_unit = {'比特币':'BTC', '美元':'USD', '％':'%'}.get(stated_unit, stated_unit.upper() if stated_unit.upper() != 'BP' else 'bp')
+        try:
+            with localcontext() as context:
+                context.prec = 100
+                stated = Decimal(token.replace(',', ''))
+                actual = Decimal(str(value))
+                if stated_unit != unit or not actual.is_finite() or actual.quantize(Decimal(1).scaleb(stated.as_tuple().exponent), rounding=ROUND_HALF_EVEN) != stated:
+                    raise ValueError()
+        except Exception:
+            raise ValueError('本条声明金额或比例未匹配其自己的 run_id 和 field（按显示精度核对）') from None
+
+
+def formatted_value(value, unit):
+    if value is None:
+        return '未知'
+    if unit:
+        with localcontext() as context:
+            context.prec = 100
+            number = Decimal(str(value))
+            if not number.is_finite():
+                raise ValueError('金额字段不是有限数字')
+            places = 8 if unit == 'BTC' else 4
+            rounded = number.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_EVEN)
+            return ('≈ ' if rounded != number else '') + format(rounded, 'f')
+    return str(value)
+
+
+def computed_comparison(comparison, known):
+    if set(comparison) != {'left_run_id', 'right_run_id', 'field'}:
+        raise ValueError('比较只接受两个输入 run_id 和同一个金额字段，不接受模型计算值')
+    field = comparison['field']
+    if field not in METRICS or METRICS[field][1] not in {'BTC', '%'}:
+        raise ValueError('该字段不支持确定性差额比较')
+    left = {'run_id':comparison['left_run_id'], 'field':field}
+    right = {'run_id':comparison['right_run_id'], 'field':field}
+    left['value'], right['value'] = referenced_value(left, known), referenced_value(right, known)
+    if left['run_id'] == right['run_id']:
+        raise ValueError('跨实验比较需要两个不同的输入记录')
+    try:
+        with localcontext() as context:
+            context.prec = 100
+            a, b = Decimal(str(left['value'])), Decimal(str(right['value']))
+            if not a.is_finite() or not b.is_finite():
+                raise ValueError()
+            value = format(a-b, 'f')
+    except Exception:
+        raise ValueError('比较输入缺失或不是有限金额，不能当作零') from None
+    unit = '百分点' if METRICS[field][1] == '%' else 'BTC'
+    return {'left':left, 'right':right, 'operation':'left_minus_right', 'value':value,
+            'display_value':formatted_value(value, unit), 'unit':unit}
+
+
+def build_final_presentation(task):
+    """Pure derived view of the task's evidence snapshot; never edits history."""
+    final = task.get('final')
+    if not final:
+        return None
+    known = {e['run_id']:e for e in task['evidence']}
+    issues, facts, comparisons = [], [], []
+    for index, ref in enumerate(final['claims']):
+        location = f'claims[{index}]'
+        try:
+            value = referenced_value(ref, known)
+            label, unit = METRICS.get(ref['field'], (ref['field'], ''))
+            facts.append({'run_id':ref['run_id'], 'field':ref['field'], 'label':label, 'value':value,
+                          'display_value':formatted_value(value,unit), 'unit':unit})
+            check_claim(ref, known)
+        except ValueError as error:
+            issues.append({'location':location, 'reason':str(error)})
+    for index, comparison in enumerate(final.get('comparisons', [])):
+        try:
+            comparisons.append(computed_comparison(comparison,known))
+        except ValueError as error:
+            issues.append({'location':f'comparisons[{index}]', 'reason':str(error)})
+    def interpretation(text, location):
+        if FINANCIAL_LITERAL.search(text):
+            issues.append({'location':location, 'reason':'原文含未绑定到单条引用的金额、比例或费率；只保留在原文区，不作为事实展示。'})
+            return None
+        return text
+    narrative = {key:interpretation(final[key],key) for key in ('conclusion','hypothesis')}
+    for key in ('counterexamples','unknowns'):
+        narrative[key] = [value for i,text in enumerate(final[key]) if (value:=interpretation(text,f'{key}[{i}]')) is not None]
+    narrative['experiments'] = [{'run_id':e['run_id'], 'role':interpretation(e['role'],f'experiments[{i}].role')} for i,e in enumerate(final['experiments'])]
+    legacy = task['configuration_snapshot']['output_schema_version'] != 'research-action-v2'
+    model_fields = ('question','hypothesis','verdict','conclusion','counterexamples','unknowns','next_step','claims','experiments','suggested_experiments','comparisons')
+    original = {key:copy.deepcopy(final[key]) for key in model_fields if key in final}
+    # Bound values and annotations added by the old application are not model text.
+    for claim in original['claims']:
+        claim.pop('value',None)
+    original['question'] = final.get('model_question_summary',final['question'])
+    return {'version':PRESENTATION_VERSION, 'derived_from_legacy':legacy,
+            'source_final_sha256':digest(json.dumps(final,sort_keys=True,ensure_ascii=False)),
+            'evidence_sha256':digest(json.dumps(task['evidence'],sort_keys=True,ensure_ascii=False)),
+            'validation':{'scope':VALIDATION_SCOPE, 'status':('legacy_display_revised' if legacy else 'display_with_gaps') if issues else 'passed', 'issues':issues},
+            'question':task['question'], 'verdict':final['verdict'], 'interpretation':narrative,
+            'facts':facts, 'comparisons':comparisons,
+            'future':{'status':'未执行；未获交易授权', 'suggested_experiments':copy.deepcopy(final['suggested_experiments']), 'next_step':final['next_step']},
+            'original_model_output':original}
+
+
 def verify_action(action, task):
     name = action['action']
     required = {'run_backtest': {'plan','experiment'}, 'read_result': {'run_id'},
@@ -61,37 +204,22 @@ def verify_action(action, task):
         final = action['final']
         known = {item['run_id']: item for item in task['evidence']}
         for ref in final['claims']:
-            if ref['run_id'] not in known or ref['field'] not in evidence_fields(known[ref['run_id']]):
-                raise ValueError('结论引用不存在或字段未提供给本任务')
+            check_claim(ref, known)
+        for comparison in final.get('comparisons', []):
+            computed_comparison(comparison, known)
         executed = {a.get('run_id') for a in task['actions'] if a['action'] == 'run_backtest' and a.get('run_id')}
         declared = {e['run_id'] for e in final['experiments']}
         if not executed <= declared or not declared <= set(known):
             raise ValueError('最终实验清单缺失已执行实验或含未读取结果')
-        # Financial values render exclusively from bound fields, not free-text model numbers.
-        text = '\n'.join([final['conclusion'],final['next_step'],*final['counterexamples'],*final['unknowns']])
+        # Future proposals carry no tool authority and need not match history.
+        text = '\n'.join([action['explanation'],final['conclusion'],final['hypothesis'],final['next_step'],
+                          *final['counterexamples'],*final['unknowns'],*final['suggested_experiments'],
+                          *(r['text'] for r in final['claims']),*(e['role'] for e in final['experiments'])])
         if re.search(r'(?<!未)(?<!不)(?<!不能)保证收益|(?<!未)(?<!不)已批准实盘|(?<!不)(?<!未)批准实盘交易|长期盈利已证明', text):
             raise ValueError('研究结论超出授权范围')
-        for value in [final['conclusion'], final['hypothesis'], final['next_step'], *final['counterexamples'], *final['unknowns'], *final['suggested_experiments'], *(r['text'] for r in final['claims']), *(e['role'] for e in final['experiments'])]:
-            for match in re.finditer(r'([+-]?\d[\d,.]*)\s*(BTC|USD|USDC|美元|比特币|%|％)', value, re.I):
-                token, unit = match.groups()
-                raw = token.replace(',','')
-                places = len(raw.partition('.')[2])
-                suffix = '_pct' if unit in ('%','％') else '_btc' if unit.upper()=='BTC' or unit=='比特币' else '_usd'
-                matched = False
-                with localcontext() as context:
-                    context.prec = 100
-                    for ref in final['claims']:
-                        if not ref['field'].endswith(suffix):
-                            continue
-                        number=evidence_fields(known[ref['run_id']]).get(ref['field'])
-                        try:
-                            candidate=Decimal(str(number))
-                            if candidate.is_finite() and candidate.quantize(Decimal(1).scaleb(-places),rounding=ROUND_HALF_EVEN)==Decimal(raw):
-                                matched=True
-                        except Exception:
-                            continue
-                if not matched:
-                    raise ValueError('正文金额或比例未匹配已引用程序字段（按所展示小数位核对）')
+        for value in [final['conclusion'],final['hypothesis'],*final['counterexamples'],*final['unknowns'],*(e['role'] for e in final['experiments'])]:
+            if FINANCIAL_LITERAL.search(value):
+                raise ValueError('正文金额没有逐条归属；事实数值请使用 claims 引用，跨实验差额使用 comparisons，未来参数放入建议区')
         if task['question'] == DEFAULT_QUESTION:
             new = [a for a in task['actions'] if a['action']=='run_backtest' and a.get('created_attempt')]
             if not new or not any(known.get(a.get('run_id'),{}).get('accounting',{}).get('model_ledger_verified') for a in new):
@@ -180,6 +308,7 @@ class ResearchService:
             task['can_resume'] = self.active_id is None and (task['status'] in RESUMABLE or (task['status']=='invalid_output' and bool(task.get('pending_call'))))
             task['verified_metrics'] = [{'run_id':e['run_id'],'accounting':e.get('accounting'),
                                         'fee_comparison':e.get('fee_comparison')} for e in task['evidence']]
+            task['final_presentation'] = build_final_presentation(task)
             return task
 
     def list_runs(self):
@@ -270,7 +399,7 @@ class ResearchService:
         task['pending_call']=None
         self.stop_event=threading.Event()
         self.started=time.monotonic()
-        self._event(task,'local_revalidation','人类显式重新校验已保存结论：原问题由程序绑定，正文数值逐一匹配证据；不调用模型或远端服务')
+        self._event(task,'local_revalidation','人类显式重新校验已保存结论：检查逐条引用及本条数值，不验证自然语言全部正确；不调用模型或远端服务')
         self._execute(task,action)
         return task['research_id']
 
@@ -428,7 +557,7 @@ class ResearchService:
             final=copy.deepcopy(action['output']['final'])
             final['model_question_summary']=final['question']
             final['question']=task['question']
-            final['program_notes']=['原研究问题由程序绑定；模型概括另存于本地原始输出。正文金额/百分比仅在匹配所引用字段及显示精度后展示。', 'fees_included 只描述输入的开仓权利金/平仓价值是否已含费用；这些原始 option_value 未含费用，所以为 false。audit.fees_already_in_reported_pnl=true 描述服务 PnL 已扣费用，两者口径不同，不能重复扣除。此说明由程序提供，未改写模型原始结论。']
+            final['program_notes']=[VALIDATION_SCOPE, '事实展示从各自 run_id 与 field 取值；模型解释和未来参数建议不构成事实核验或执行授权。']
             known={e['run_id']:e for e in task['evidence']}
             for ref in final['claims']:
                 ref['value']=evidence_fields(known[ref['run_id']])[ref['field']]

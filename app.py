@@ -17,6 +17,7 @@ from waitress import create_server
 from backtest import BacktestError, BacktestService, EXPERIMENT_ID
 from market import MarketService, iso, safe_traceback
 from research import ResearchService, ResearchError
+from workspace import workspace_snapshot
 
 ROOT = Path(__file__).resolve().parent
 
@@ -67,6 +68,10 @@ def create_app(service, backtests=None, research=None):
 
     @app.get("/")
     def home():
+        return send_from_directory(ROOT / "static", "research.html")
+
+    @app.get("/market")
+    def market_page():
         return send_from_directory(ROOT / "static", "index.html")
 
     @app.get("/backtest")
@@ -198,6 +203,14 @@ def create_app(service, backtests=None, research=None):
             return jsonify(error="研究后端未启用"), 503
         return jsonify(research.config_snapshot())
 
+    @app.get("/api/workspace")
+    def workspace_state():
+        try:
+            return jsonify(workspace_snapshot(research))
+        except Exception as error:
+            logging.error("workspace state: %s", safe_traceback(error))
+            return jsonify(error="无法读取本地业务状态；详情已脱敏记录"), 500
+
     @app.get("/api/research/runs")
     def research_runs():
         if research is None:
@@ -307,7 +320,8 @@ def main():
 
     signal.signal(signal.SIGTERM, handle_stop)
     service.start()
-    print(f"公共行情只读：http://127.0.0.1:{args.port}  |  按 Ctrl+C 停止", flush=True)
+    print(f"工作台：http://127.0.0.1:{args.port}  |  按 Ctrl+C 停止", flush=True)
+    print(f"公共行情只读：http://127.0.0.1:{args.port}/market", flush=True)
     print(f"固定回测页面：http://127.0.0.1:{args.port}/backtest  |  不会自动提交回测", flush=True)
     print(f"研究页面：http://127.0.0.1:{args.port}/research  |  点击并批准预算才运行", flush=True)
     try:

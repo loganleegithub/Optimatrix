@@ -4,7 +4,7 @@
     "schema_version": {
       "type": "string",
       "enum": [
-        "research-action-v1"
+        "research-action-v2"
       ]
     },
     "action": {
@@ -263,6 +263,36 @@
                 "maxLength": 5000
               },
               "maxItems": 30
+            },
+            "comparisons": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "left_run_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "right_run_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "field": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "left_run_id",
+                  "right_run_id",
+                  "field"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 10
             }
           },
           "required": [
@@ -275,7 +305,8 @@
             "next_step",
             "claims",
             "experiments",
-            "suggested_experiments"
+            "suggested_experiments",
+            "comparisons"
           ],
           "additionalProperties": false
         },

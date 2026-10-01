@@ -4,54 +4,50 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
-    <title>Optimatrix · BTC 币本位期权</title>
+    <title>Optimatrix · 行情</title>
     <link rel="stylesheet" href="/static/style.css">
     <script defer src="/static/app.js"></script>
   </head>
-  <body>
+  <body class="support-page market-page">
     <div class="page-shell">
       <header class="masthead">
-        <div class="brand"><span class="brand-mark" aria-hidden="true">O</span><span>Optimatrix</span><span class="stage">S1</span></div>
-        <span class="environment">本机 · <a href="/backtest">回测记录</a> · <a href="/research">研究 Agent</a></span>
+        <a class="brand" href="/">Optimatrix</a>
+        <nav class="page-nav" aria-label="主导航">
+          <a class="nav-item" href="/">工作台</a>
+          <a class="nav-item is-active" href="/market" aria-current="page">行情</a>
+          <a class="nav-item" href="/backtest">回测记录</a>
+        </nav>
       </header>
-
       <main>
         <div class="page-heading">
-          <div><p class="eyebrow">DERIBIT / BTC OPTIONS</p><h1>BTC 币本位期权</h1><p class="subtitle">真实公开行情。观察市场，从可核对的数据开始。</p></div>
+          <div><h1>行情</h1><p class="subtitle">Deribit 公共 BTC 币本位期权报价</p></div>
           <div id="backend-status" class="badge badge-warning" role="status">正在确认本地服务</div>
         </div>
-
-        <div class="mode-notice"><span class="notice-dot" aria-hidden="true"></span><div><strong>公共行情只读</strong><span>交易模块尚未实现；当前没有获批策略或真实资金授权。</span></div></div>
-        <noscript><p class="error-notice">未取得数据：请开启浏览器 JavaScript，页面需要持续验证本地服务与行情状态。</p></noscript>
+        <noscript><p class="error-notice">请开启 JavaScript，以确认服务与行情状态。</p></noscript>
         <div id="connection-notice" class="connection-notice" role="status">尚未收到本地服务心跳，行情状态未确认。</div>
-
-        <section class="overview" aria-label="行情概览">
-          <article class="panel index-panel">
-            <div class="panel-topline"><h2>BTC 指数</h2><span id="index-status" class="badge badge-neutral">未取得数据</span></div>
-            <div class="index-price"><span id="index-price">—</span><span class="price-unit">USD / BTC</span></div>
-            <p class="index-subtitle">Deribit · btc_usd</p>
-            <dl class="time-facts"><div><dt>数据源时间</dt><dd id="index-source">未取得数据</dd></div><div><dt>本地接收时间</dt><dd id="index-received">未取得数据</dd></div><div><dt>数据年龄 / 接收年龄</dt><dd id="index-age">未取得数据</dd></div></dl>
-            <p class="fineprint">指数数据源时间采用 Deribit 响应时间，非指数独立事件时间。</p>
-            <p id="index-error" class="inline-error" hidden></p>
-          </article>
-          <article class="panel health-panel">
-            <div class="panel-topline"><h2>数据更新</h2><span class="live-label">UTC + 台北</span></div>
-            <dl class="health-facts"><div><dt>最后成功心跳</dt><dd id="heartbeat">尚未确认</dd></div><div><dt>最后成功采集 / 轮次</dt><dd id="collection">未取得数据</dd></div><div><dt>有效 BTC 币本位合约</dt><dd id="catalog">未取得数据</dd></div><div><dt>刷新与过时阈值</dt><dd id="refresh">等待服务配置</dd></div></dl>
-            <p id="collector-error" class="inline-error" hidden></p>
-            <p id="retry" class="fineprint" hidden></p>
-          </article>
+        <section class="panel index-panel" aria-labelledby="index-title">
+          <div class="panel-topline"><h2 id="index-title">BTC 指数</h2><span id="index-status" class="badge badge-neutral">未取得数据</span></div>
+          <div class="index-price"><span id="index-price">—</span><span class="price-unit">USD / BTC</span></div>
+          <dl class="time-facts"><div><dt>数据年龄 / 接收年龄</dt><dd id="index-age">未取得数据</dd></div></dl>
+          <p id="index-error" class="inline-error" hidden></p>
+          <details class="inline-detail"><summary>指数来源与时间</summary><dl class="time-facts"><div><dt>数据源时间</dt><dd id="index-source">未取得数据</dd></div><div><dt>本地接收时间</dt><dd id="index-received">未取得数据</dd></div></dl><p class="fineprint">btc_usd；源时间采用 Deribit 响应时间，非指数独立事件时间。时间均为 UTC。</p></details>
         </section>
-
         <section class="panel options-panel" aria-labelledby="options-title">
-          <div class="section-heading"><div><h2 id="options-title">期权买卖报价</h2><p>从当前有效合约中选择少量 Call 与 Put，仅用于展示，不是策略选股或交易信号。</p></div><span id="option-count" class="count-label">0 个展示合约</span></div>
-          <p id="table-scroll-hint" class="table-scroll-hint" hidden>↔ 左右滑动可查看卖价、数量和数据状态；键盘用户可按 Tab 聚焦表格后使用左右方向键。</p>
+          <div class="section-heading"><div><h2 id="options-title">期权报价</h2><p>所选有效合约的真实盘口</p></div><span id="option-count" class="count-label">0 个合约</span></div>
+          <p id="table-scroll-hint" class="table-scroll-hint" hidden>左右滑动查看完整报价；键盘用户可聚焦表格后使用方向键。</p>
           <div id="options-scroll" class="table-scroll" tabindex="0" role="region" aria-label="期权报价横向滚动区域" aria-describedby="table-scroll-hint"><table><caption class="sr-only">BTC 币本位期权买卖报价、数量、到期时间及数据状态</caption><thead><tr><th scope="col">合约 / 类型</th><th scope="col">到期时间</th><th scope="col" class="number">行权价<span>USD / BTC</span></th><th scope="col" class="number">Bid 买价<span>BTC / 1 BTC 标的</span></th><th scope="col" class="number">买量<span>BTC 标的</span></th><th scope="col" class="number">Ask 卖价<span>BTC / 1 BTC 标的</span></th><th scope="col" class="number">卖量<span>BTC 标的</span></th><th scope="col">数据时间 / 年龄</th><th scope="col">状态</th></tr></thead><tbody id="options-body"><tr><td colspan="9" class="empty-state">未取得数据</td></tr></tbody></table></div>
-          <div class="table-notes"><p><strong>产品：</strong>BTC 币本位反向期权（reversed）；标的、报价及结算币种均为 BTC。每张合约对应 1 BTC 标的，表内 BTC 标的数量与张数等数。</p><p>买价与卖价来自真实盘口；无盘口显示“无买盘 / 无卖盘”。报价仅供观察，不代表可成交保证。到期时间同时标注 UTC 与台北（UTC+8），其余时间使用 UTC。</p></div>
+          <details class="table-notes"><summary>产品与报价口径</summary><p>BTC 币本位反向期权（reversed），标的、报价与结算币种均为 BTC；每张对应 1 BTC 标的。表内 BTC 标的数量与张数等数。</p><p>无盘口显示“无买盘 / 无卖盘”。报价不保证成交，也不是策略信号。到期时间为 UTC；各项状态与年龄用于判断保留值是否仍然新鲜。</p></details>
         </section>
-
-        <section class="integration-section" aria-labelledby="integration-title"><div class="section-heading"><h2 id="integration-title">实际接入状态</h2><span class="count-label">行情与研究独立运行</span></div><div class="integration-grid"><article class="integration-card"><h3>账户</h3><p id="account-status">等待服务确认</p></article><article class="integration-card"><h3>回测</h3><p id="backtest-status">等待服务确认</p></article><article class="integration-card"><h3>内部 Agent</h3><p id="agent-status">等待服务确认</p></article><article class="integration-card"><h3>Codex CLI</h3><p id="codex-status">等待服务确认</p><p id="codex-checked" class="fineprint"></p></article></div></section>
+        <details class="panel service-details">
+          <summary>采集与服务状态</summary>
+          <div class="service-detail-body">
+            <dl class="health-facts"><div><dt>最后成功心跳</dt><dd id="heartbeat">尚未确认</dd></div><div><dt>最后成功采集 / 轮次</dt><dd id="collection">未取得数据</dd></div><div><dt>有效 BTC 币本位合约</dt><dd id="catalog">未取得数据</dd></div><div><dt>刷新与过时阈值</dt><dd id="refresh">等待服务配置</dd></div></dl>
+            <p id="collector-error" class="inline-error" hidden></p><p id="retry" class="fineprint" hidden></p>
+            <dl class="integration-facts"><div><dt>账户</dt><dd id="account-status">等待服务确认</dd></div><div><dt>回测</dt><dd id="backtest-status">等待服务确认</dd></div><div><dt>Agent</dt><dd id="agent-status">等待服务确认</dd></div><div><dt>Codex CLI</dt><dd><span id="codex-status">等待服务确认</span><p id="codex-checked" class="fineprint"></p></dd></div></dl>
+          </div>
+        </details>
       </main>
-      <footer><span>Optimatrix · 项目起步与真实行情首页</span><span>Deribit 公共接口 · 无账户连接 · 无下单功能</span></footer>
+      <footer><span>公共行情只读</span><span>无交易授权</span></footer>
     </div>
   </body>
 </html>

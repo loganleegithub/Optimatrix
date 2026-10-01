@@ -8,6 +8,8 @@ The artifact is software verification, never evidence of a real model run.
 """
 from contextlib import contextmanager
 import copy
+import hashlib
+import re
 import json
 from pathlib import Path
 import shutil
@@ -22,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from backtest import BacktestError, save_json, validate_experiment
 from app import create_app
-from research import ResearchService, ResearchError, DEFAULT_QUESTION
+from research import ResearchService, ResearchError, DEFAULT_QUESTION, verify_action, build_final_presentation
 from researcher_cli import CodexRunner, ModelError, validate_schema
 
 PARAMS = dict(start_date="2026-06-01", end_date="2026-06-02", session_bucket="09:00:00",
@@ -45,7 +47,7 @@ def offline_only():
         assert not thread_errors, 'Background exceptions: '+repr(thread_errors)
 
 def action(kind, **fields):
-    value = dict(schema_version="research-action-v1", action=kind, explanation="离线合成动作",
+    value = dict(schema_version="research-action-v2", action=kind, explanation="离线合成动作",
                  plan=None, experiment=None, run_id=None, higher_fee_bp=None, final=None)
     value.update(fields)
     return value
@@ -60,7 +62,7 @@ def finish(input_data, *, bad_reference=False):
     return action('finish',final=dict(question=input_data['question'],hypothesis="模型费用影响收益",
         verdict="结果不确定",conclusion="仅验证程序回路，不能证明可成交优势。",counterexamples=["没有盘口"],
         unknowns=["实际成交成本"],next_step="需要交易侧报价证据",claims=claims,
-        experiments=[dict(run_id=run_id,role="已读取的合成检查记录") for run_id in ids],suggested_experiments=[]))
+        experiments=[dict(run_id=run_id,role="已读取的合成检查记录") for run_id in ids],suggested_experiments=[],comparisons=[]))
 
 class FakeBacktests:
     def __init__(self, status='completed_with_gaps'):
@@ -169,10 +171,136 @@ def cli_output_case(path, schema, *, events, final, exit_code=0):
     except ModelError: return
     raise AssertionError('CLI process/events/final invalid combination accepted')
 
+def check_claim_attribution():
+    """One claim owns one run/field; free narrative does not borrow other facts."""
+    run_a,run_b='a'*32,'b'*32
+    field='fee_comparison.base_net_btc'
+    question='离线核对证据归属、未来建议和确定性差额'
+    task=dict(question=question,available_run_ids=[run_a,run_b],status='completed',
+        actions=[dict(action='run_backtest',run_id=run_a),dict(action='run_backtest',run_id=run_b)],
+        budget=dict(model_calls_used=6,model_calls_limit=6,backtest_creations_used=2,backtest_creations_limit=2),
+        configuration_snapshot=dict(output_schema_version='research-action-v2',allowed_tools=['read_result','run_backtest','compare_fees','finish']),
+        evidence=[dict(run_id=run_a,accounting=dict(btc_net_pnl='0.01',fees_btc='0.03',hypothetical_account_return_pct='0.049'),fee_comparison=dict(base_net_btc='0.01')),
+                  dict(run_id=run_b,accounting=dict(btc_net_pnl='0.02',fees_btc='0.04',hypothetical_account_return_pct='3.25'),fee_comparison=dict(base_net_btc='0.02'))])
+    output=finish(task)
+    output['final']['claims']=[dict(text='A 的基础净模型结果为 0.01 BTC',run_id=run_a,field=field),
+                                dict(text='B 的基础净模型结果见自身字段',run_id=run_b,field=field)]
+    schema=json.loads((ROOT/'researcher/output.schema.json').read_text())
+    cases=[]
+    def accepted(name,value,context=None):
+        validate_schema(value,schema)
+        verify_action(value,task if context is None else context)
+        cases.append(dict(name=name,expected='accepted',observed='accepted'))
+    def rejected(name,value,context=None):
+        try:
+            validate_schema(value,schema)
+            verify_action(value,task if context is None else context)
+        except (ValueError,BacktestError):
+            cases.append(dict(name=name,expected='rejected',observed='rejected'))
+            return
+        raise AssertionError(name+' unexpectedly accepted')
+    accepted('own_run_field_exact_amount',output)
+    wrong=copy.deepcopy(output);wrong['final']['claims'][0]['text']='A 的基础净模型结果为 0.02 BTC'
+    rejected('cross_run_amount_cannot_borrow_B_reference',wrong)
+    wrong=copy.deepcopy(output);wrong['final']['claims'][0]['text']='A 的基础净模型结果为 0.03 BTC'
+    wrong['final']['claims'].append(dict(text='A 的费用字段',run_id=run_a,field='accounting.fees_btc'))
+    rejected('same_run_amount_cannot_borrow_other_field',wrong)
+    rounded=copy.deepcopy(output)
+    rounded['final']['claims'].append(dict(text='假设资金回报约 0.05%',run_id=run_a,field='accounting.hypothetical_account_return_pct'))
+    accepted('own_percentage_field_rounding',rounded)
+    wrong=copy.deepcopy(rounded);wrong['final']['claims'][-1]['text']='假设资金回报约 3.25%'
+    wrong['final']['claims'].append(dict(text='B 的假设资金回报字段',run_id=run_b,field='accounting.hypothetical_account_return_pct'))
+    rejected('percentage_cannot_borrow_another_run',wrong)
+    wrong=copy.deepcopy(output);wrong['final']['claims'][0]['run_id']='f'*32
+    rejected('nonexistent_run_reference',wrong)
+    wrong=copy.deepcopy(output);wrong['final']['claims'][0]['field']='accounting.nonexistent_btc'
+    rejected('nonexistent_field_reference',wrong)
+    wrong=copy.deepcopy(output)
+    wrong['final']['claims'][0]=dict(text='已批准实盘',run_id=run_a,field='status')
+    authorized_scope=copy.deepcopy(task)
+    authorized_scope['evidence'][0]['status']='completed_with_gaps'
+    rejected('valid_status_reference_cannot_claim_live_trading_approval',wrong,authorized_scope)
+    wrong=copy.deepcopy(output);wrong['final']['claims'][0]['text']='A 的结果为 0.01%'
+    rejected('claim_unit_must_match_its_field',wrong)
+    exponent=copy.deepcopy(output);exponent['final']['claims'][0]['text']='A 的金额为 1e3 BTC'
+    exponent_task=copy.deepcopy(task);exponent_task['evidence'][0]['fee_comparison']['base_net_btc']='3'
+    rejected('scientific_notation_cannot_be_truncated_to_last_digit',exponent,exponent_task)
+    exponent_task['evidence'][0]['fee_comparison']['base_net_btc']='1000'
+    accepted('scientific_notation_matches_its_actual_value',exponent,exponent_task)
+    wrong=copy.deepcopy(output);wrong['final']['conclusion']='A 的结果为 0.02 BTC'
+    rejected('unbound_conclusion_cannot_borrow_any_reference',wrong)
+    wrong=copy.deepcopy(output);wrong['final']['experiments'].pop()
+    rejected('executed_experiment_scope_cannot_be_omitted',wrong)
+    future=copy.deepcopy(output)
+    future['final']['suggested_experiments']=['未来可以考虑 0.02 BTC 名义数量，但尚未获准或执行。']
+    future['final']['next_step']='未来可以检验 5% 参数敏感性；仅为建议，需另行批准。'
+    before=copy.deepcopy(task)
+    accepted('future_parameter_amount_and_percentage_are_not_historical_claims',future)
+    assert task==before, 'Future suggestion changed task budget or authority'
+    view_task={**copy.deepcopy(task),'final':copy.deepcopy(future['final'])}
+    view_before=copy.deepcopy(view_task)
+    view=build_final_presentation(view_task)
+    assert view_task==view_before, 'Projection mutated stored task/final'
+    assert view['future']['status'] and '0.02 BTC' in json.dumps(view['future'],ensure_ascii=False) and '5%' in json.dumps(view['future'],ensure_ascii=False)
+    assert view['validation']['issues']==[]
+    assert view_task['budget']==before['budget'] and view_task['configuration_snapshot']==before['configuration_snapshot']
+    cases.append(dict(name='future_projection_preserves_budget_and_authority',expected='accepted',observed='accepted'))
+
+    compared=copy.deepcopy(output)
+    compared['final']['comparisons']=[dict(left_run_id=run_a,right_run_id=run_b,field=field)]
+    accepted('structured_comparison_same_supported_field',compared)
+    compared_task={**copy.deepcopy(task),'final':copy.deepcopy(compared['final'])}
+    comparison=build_final_presentation(compared_task)['comparisons'][0]
+    assert comparison['operation']=='left_minus_right' and comparison['value']=='-0.01'
+    assert comparison['left']['run_id']==run_a and comparison['left']['value']=='0.01'
+    assert comparison['right']['run_id']==run_b and comparison['right']['value']=='0.02'
+    assert comparison['unit']=='BTC'
+    cases.append(dict(name='comparison_difference_comes_from_exact_program_values',expected='-0.01',observed=comparison['value']))
+    percentage_comparison=copy.deepcopy(compared)
+    percentage_comparison['final']['comparisons'][0]['field']='accounting.hypothetical_account_return_pct'
+    accepted('percentage_inputs_support_deterministic_comparison',percentage_comparison)
+    percentage_view=build_final_presentation({**copy.deepcopy(task),'final':percentage_comparison['final']})['comparisons'][0]
+    assert percentage_view['value']=='-3.201' and percentage_view['unit']=='百分点'
+    cases.append(dict(name='percentage_difference_uses_percentage_points',expected='-3.201 百分点',observed=percentage_view['value']+' '+percentage_view['unit']))
+    wrong=copy.deepcopy(compared);wrong['final']['comparisons'][0]['right_run_id']='f'*32
+    rejected('comparison_nonexistent_input',wrong)
+    unknown=copy.deepcopy(task);unknown['evidence'][1]['fee_comparison']['base_net_btc']=None
+    rejected('comparison_unknown_input_is_not_zero',compared,unknown)
+    wrong=copy.deepcopy(compared);wrong['final']['comparisons'][0]['field']='status'
+    rejected('comparison_non_numeric_or_unsupported_field',wrong)
+    wrong=copy.deepcopy(compared);wrong['final']['comparisons'][0]['value']='999'
+    rejected('comparison_model_supplied_value_forbidden',wrong)
+
+    precise=copy.deepcopy(task)
+    precise['evidence'][0]['accounting']['btc_net_pnl']='0.01234567890123456789'
+    precise['evidence'][0]['accounting']['hypothetical_account_return_pct']='0.0490123456789'
+    precise['final']=copy.deepcopy(output['final'])
+    precise['final']['claims']=[dict(text='原始净模型金额',run_id=run_a,field='accounting.btc_net_pnl',value='999'),
+                              dict(text='原始假设资金回报',run_id=run_a,field='accounting.hypothetical_account_return_pct',value='999')]
+    original=copy.deepcopy(precise)
+    display=build_final_presentation(precise)
+    assert precise==original
+    facts={(row['run_id'],row['field']):row for row in display['facts']}
+    amount=facts[(run_a,'accounting.btc_net_pnl')]
+    rate=facts[(run_a,'accounting.hypothetical_account_return_pct')]
+    assert amount['value']=='0.01234567890123456789' and rate['value']=='0.0490123456789'
+    assert amount['unit']=='BTC' and rate['unit']=='%'
+    assert '≈' in amount['display_value'] and re.search(r'0\.01234568(?:\D|$)',amount['display_value'])
+    assert '≈' in rate['display_value'] and re.search(r'0\.0490(?:\D|$)',rate['display_value'])
+    assert display['original_model_output']['claims'][0]['text']=='原始净模型金额'
+    assert 'value' not in display['original_model_output']['claims'][0]
+    cases.append(dict(name='program_fact_projection_formats_and_preserves_raw_values',expected='accepted',observed='accepted'))
+    artifact=dict(kind='offline_synthetic_claim_attribution_regression',passed=True,
+                  research_sha256=hashlib.sha256((ROOT/'research.py').read_bytes()).hexdigest(),cases=cases,
+                  live_model_calls=0,remote_calls=0)
+    save_json(ROOT/'local/s3-claim-fix/regression.json',artifact)
+    return [case['name'] for case in cases]
+
 def main():
     checks=[]
     with offline_only(),tempfile.TemporaryDirectory(prefix='optimatrix-research-check-') as temp:
         base=Path(temp)
+        checks.extend(check_claim_attribution())
         def closed_loop(i,n):
             if n==1:return action('run_backtest',plan=PLAN,experiment=PARAMS)
             if n==2:return action('compare_fees',plan=PLAN,run_id=i['evidence'][0]['run_id'],higher_fee_bp=5)
@@ -285,8 +413,8 @@ def main():
             if n==1:return action('read_result',run_id='a'*32)
             output=finish(i)
             output['final']['question']='模型费用影响的概括'
-            output['final']['claims'].append(dict(text='假设资金回报率',run_id='a'*32,field='accounting.hypothetical_account_return_pct'))
-            output['final']['conclusion']='假设资金回报约 '+('9.99%' if false_percentage else '0.05%')+'，不能保证收益。'
+            output['final']['claims'].append(dict(text='假设资金回报约 '+('9.99%' if false_percentage else '0.05%'),run_id='a'*32,field='accounting.hypothetical_account_return_pct'))
+            output['final']['conclusion']='假设资金的模型回报不能保证未来收益。'
             return output
         question='离线核对原始研究问题与已引用字段的小数显示'
         manager,rid,bt,runner,path=run_case(base,'rounded_percentage',rounded_final,question=question)
@@ -385,4 +513,5 @@ if __name__=='__main__':
         main()
     except Exception as error:
         save_json(ROOT/'local/s3-research-check/evidence.json',dict(kind='offline_synthetic_research_check',passed=False,error_type=type(error).__name__,live_model_calls=0,live_backtest_creations=0))
+        save_json(ROOT/'local/s3-claim-fix/regression.json',dict(kind='offline_synthetic_claim_attribution_regression',passed=False,error_type=type(error).__name__,live_model_calls=0,remote_calls=0))
         raise

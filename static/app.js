@@ -19,7 +19,6 @@
     return new Intl.DateTimeFormat("sv-SE", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(new Date(value));
   }
   function utc(value) { return value && Number.isFinite(Date.parse(value)) ? `${dateText(value, "UTC")} UTC` : "未取得数据"; }
-  function taipei(value) { return value && Number.isFinite(Date.parse(value)) ? `${dateText(value, "Asia/Taipei")} 台北 UTC+8` : "未取得数据"; }
   function health(session, now) {
     if (session.failure) return { ok: false, kind: "error", text: "服务不可达", detail: `本地服务不可达：${session.failure}。已保留的行情不能视为实时数据。` };
     if (session.verifying || session.heartbeatPerf === null) return { ok: false, kind: "warning", text: "正在确认本地服务", detail: "尚未确认本地服务心跳，行情状态未确认。" };
@@ -66,7 +65,7 @@
   function badge(element, state) { element.className = `badge badge-${state.kind}`; element.textContent = state.text; }
   function make(tag, text, className) { const element = document.createElement(tag); if (text !== undefined) element.textContent = text; if (className) element.className = className; return element; }
   function detail(id, text) { setText(id, text || ""); $(id).hidden = !text; }
-  function addTime(parent, value) { parent.append(make("span", utc(value))); if (value) parent.append(make("span", taipei(value), "secondary")); }
+  function addTime(parent, value) { parent.append(make("span", utc(value))); }
   function updateScrollHint() {
     const region = $("options-scroll");
     $("table-scroll-hint").hidden = region.scrollWidth <= region.clientWidth;
@@ -97,7 +96,7 @@
     detail("collector-error", !collector.running ? "行情采集未运行，保留数据不代表仍在更新。" : collector.error || (state.catalog && state.catalog.error));
     detail("retry", collector.next_retry_at ? `下次采集尝试：${utc(collector.next_retry_at)}` : null);
     const options = Array.isArray(state.options) ? state.options : [];
-    setText("option-count", `${options.length} 个展示合约`);
+    setText("option-count", `${options.length} 个合约`);
     const rows = document.createDocumentFragment();
     for (const option of options) {
       const row = make("tr");
@@ -129,7 +128,7 @@
     for (const item of ["account", "backtest", "agent"]) setText(`${item}-status`, integrations[item] || "状态未确认");
     const codex = integrations.codex;
     setText("codex-status", codex ? `${codex.installed ? codex.version || "已安装，版本未确认" : "未检测到安装"}；${codex.login_status || "登录状态未确认"}` : "状态未确认");
-    setText("codex-checked", codex && codex.checked_at ? `检查时间：${utc(codex.checked_at)}；本阶段未运行模型任务。` : "本阶段未运行模型任务。");
+    setText("codex-checked", codex && codex.checked_at ? `配置检查：${utc(codex.checked_at)}。模型任务见工作台。` : "模型任务见工作台。");
   }
 
   let pollTimer = null;
