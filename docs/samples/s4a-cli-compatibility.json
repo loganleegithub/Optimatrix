@@ -1,0 +1,178 @@
+{
+  "scope": "S4A Codex CLI compatibility; not a strategy validation",
+  "verified_at": "2026-10-01T17:42:53.644938+00:00",
+  "current_version": "0.159.2",
+  "historical_version": "0.158.0-alpha.2.1",
+  "historical_evidence": "docs/stages/S3.md",
+  "official_sources_opened": [
+    "https://learn.chatgpt.com/docs/developer-commands?surface=cli",
+    "https://learn.chatgpt.com/docs/auth",
+    "https://learn.chatgpt.com/docs/non-interactive-mode",
+    "https://learn.chatgpt.com/docs/permissions",
+    "https://learn.chatgpt.com/docs/config-file/config-reference",
+    "https://developers.openai.com/api/docs/models/gpt-6-astra"
+  ],
+  "no_model_check": {
+    "ready": true,
+    "cli_version": "0.159.2",
+    "login_status": "Logged in using ChatGPT",
+    "isolation_status": "本机沙盒检查通过",
+    "runtime_snapshot": {
+      "checked_at": "2026-10-01T17:42:53.644938+00:00",
+      "model_calls": 0,
+      "official_sources": [
+        "https://learn.chatgpt.com/docs/developer-commands?surface=cli",
+        "https://learn.chatgpt.com/docs/auth",
+        "https://learn.chatgpt.com/docs/non-interactive-mode",
+        "https://learn.chatgpt.com/docs/permissions",
+        "https://learn.chatgpt.com/docs/config-file/config-reference",
+        "https://developers.openai.com/api/docs/models/gpt-6-astra"
+      ],
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high",
+      "service_tier": "default",
+      "authentication": "chatgpt_subscription",
+      "evidence_reference": "docs/samples/s4a-cli-compatibility.json",
+      "cli_version": "0.159.2",
+      "login_status": "Logged in using ChatGPT",
+      "compatibility_profile": "s4a-named-permissions-v1",
+      "exec_flags": [
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--ephemeral",
+        "--skip-git-repo-check",
+        "--json",
+        "--color",
+        "--model",
+        "--cd",
+        "--output-schema",
+        "--output-last-message"
+      ],
+      "exec_help_sha256": "0e82cfde0122715250e93dc65866caa956b2ac5b9d0b20ec4ad4f9e81486509e",
+      "sandbox_help_sha256": "6f07d12fb0614fbca21988b0e2a9165f33d341dbd0899728fcd3b67e19ac7660",
+      "model_catalog": {
+        "source": "codex debug models --bundled",
+        "slug": "gpt-6-astra",
+        "reasoning_levels": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max",
+          "ultra"
+        ],
+        "live_entitlement_verified": false
+      },
+      "overrides": [
+        "default_permissions=\"researcher\"",
+        "permissions.researcher.filesystem={\":root\"=\"deny\",\":minimal\"=\"read\",\"<prepared_input>\"=\"read\",\":tmpdir\"=\"deny\",\":slash_tmp\"=\"deny\"}",
+        "permissions.researcher.network.enabled=false",
+        "approval_policy=\"never\"",
+        "model_reasoning_effort=\"high\"",
+        "service_tier=\"default\"",
+        "model_instructions_file=\"<prepared_input>/prompt.md\"",
+        "project_doc_max_bytes=0",
+        "web_search=\"disabled\"",
+        "mcp_servers={}",
+        "shell_environment_policy.inherit=\"none\"",
+        "shell_environment_policy.set={PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\"}",
+        "features.skip_host_skill_discovery=true",
+        "skills.max_context_tokens=1",
+        "features.fast_mode=false",
+        "model_provider=\"openai\"",
+        "forced_login_method=\"chatgpt\"",
+        "agents.enabled=false",
+        "allow_login_shell=false",
+        "features.apps=false",
+        "features.plugins=false",
+        "features.hooks=false",
+        "features.memories=false",
+        "features.goals=false",
+        "features.multi_agent=false",
+        "features.multi_agent_v2=false",
+        "features.browser_use=false",
+        "features.browser_use_external=false",
+        "features.computer_use=false",
+        "features.image_generation=false",
+        "features.in_app_browser=false",
+        "features.shell_snapshot=false",
+        "features.skill_mcp_dependency_install=false",
+        "features.skill_search=false",
+        "features.tool_suggest=false",
+        "features.unbounded_connection_retries=false",
+        "features.view_image=false",
+        "features.workspace_dependencies=false"
+      ],
+      "isolation": {
+        "passed": true,
+        "checks": [
+          "input_readable",
+          "input_write_denied",
+          "network_denied",
+          "outside_read_denied",
+          "outside_write_denied",
+          "symlink_read_denied"
+        ],
+        "exit_code": 0,
+        "network_control_before_exit": 0,
+        "network_control_after_exit": 0,
+        "network_control_expected_body": true,
+        "network_sandbox_exit": 7,
+        "network_sandbox_diagnostic": "curl: (7) Failed to connect to 127.0.0.1 port 53422 after 0 ms: Couldn't connect to server\n",
+        "mechanism": "Codex named permissions profile; root deny, minimal runtime read, input read, network disabled",
+        "fake_data_only": true
+      }
+    },
+    "reason": "固定 CLI、ChatGPT 登录、模型目录与本机隔离检查已确认"
+  },
+  "live_probe": {
+    "model_calls_started": 1,
+    "model_calls_completed": 1,
+    "remote_backtest_creations": 0,
+    "requested_model": "gpt-6-astra",
+    "reasoning_effort": "high",
+    "service_tier": "default",
+    "authentication": "ChatGPT subscription",
+    "final_output": {
+      "status": "compatibility_ok"
+    },
+    "process": {
+      "exit_code": 0,
+      "elapsed_seconds": 21.742
+    },
+    "event_types": [
+      "thread.started",
+      "item.completed",
+      "turn.started",
+      "item.completed",
+      "item.completed",
+      "turn.completed"
+    ],
+    "usage": [
+      {
+        "input_tokens": 3396,
+        "cached_input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 17,
+        "reasoning_output_tokens": 0
+      }
+    ],
+    "raw_local_directory": "local/s4a-validation/compatibility-probe",
+    "raw_sha256": {
+      "authorization.json": "38c9eb43f948dae828f1ab56b87fd427703cac22b2e33bc973753ba5ff552ce4",
+      "input.json": "873e7b6a7405bf3faf95f157544213d8b97a41dc8535166c6f6f18c25d1b5a94",
+      "invocation.json": "08d450411bae6f986264911b0d3df3eb257fdb856b959ade14d9127238516dce",
+      "events.jsonl": "1781c319b50c436d9688bfa608b31546e1547bbc0912669afc1f93b9748169ff",
+      "stderr.txt": "c9a093964ff85a766ae0ac3f78abcb2b45150dd73b5b22426b18b8563dd1729b",
+      "process.json": "7927682ea7b051f545a91eb2b3de5b773c5275a2311a5c73a3a91f95efb552bc",
+      "final.json": "961a09c535851c28918a39f7be1f8f1d39882526f6290b530e3b2ae651ee9698",
+      "validated.json": "5a3a167271bead08c424b0166b0d45bd2edfa0747334c1c6702fbd6e7408497c"
+    }
+  },
+  "limitations": [
+    "Bundled catalog is metadata only; the separate successful probe established access at its recorded time.",
+    "Local runtime checks do not establish strategy edge or Greeks.live compatibility.",
+    "Future CLI versions remain blocked pending a new explicit compatibility review.",
+    "Old tasks keep their original CLI snapshot; resuming with a different installed version is blocked."
+  ]
+}

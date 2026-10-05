@@ -1,0 +1,195 @@
+{
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": [
+        "strategy-proposal-v1"
+      ]
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "propose"
+      ]
+    },
+    "explanation": {
+      "type": "string",
+      "maxLength": 5000
+    },
+    "proposal": {
+      "type": "object",
+      "properties": {
+        "economic_hypothesis": {
+          "type": "string",
+          "maxLength": 5000
+        },
+        "failure_mechanisms": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "maxItems": 30
+        },
+        "data_requirements": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "maxItems": 30
+        },
+        "candidate_spec": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "greeks_single_long",
+                "unimplemented"
+              ]
+            },
+            "rules": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "session_bucket": {
+                      "type": "string",
+                      "maxLength": 5000
+                    },
+                    "entry_weekdays": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 6
+                      },
+                      "maxItems": 7
+                    },
+                    "option_type": {
+                      "type": "string",
+                      "enum": [
+                        "call",
+                        "put"
+                      ]
+                    },
+                    "delta": {
+                      "type": "number",
+                      "minimum": 0.01,
+                      "maximum": 0.99
+                    },
+                    "expiry": {
+                      "type": "integer",
+                      "minimum": 2,
+                      "maximum": 90
+                    },
+                    "quantity": {
+                      "type": "number",
+                      "minimum": 0.01,
+                      "maximum": 1
+                    }
+                  },
+                  "required": [
+                    "session_bucket",
+                    "entry_weekdays",
+                    "option_type",
+                    "delta",
+                    "expiry",
+                    "quantity"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "contract_selection": {
+              "type": "string",
+              "maxLength": 5000
+            },
+            "entry": {
+              "type": "string",
+              "maxLength": 5000
+            },
+            "exit": {
+              "type": "string",
+              "maxLength": 5000
+            },
+            "position_constraints": {
+              "type": "string",
+              "maxLength": 5000
+            },
+            "decision_frequency": {
+              "type": "string",
+              "maxLength": 5000
+            },
+            "data_requirements": {
+              "type": "string",
+              "maxLength": 5000
+            },
+            "clock": {
+              "type": "string",
+              "maxLength": 5000
+            }
+          },
+          "required": [
+            "kind",
+            "rules",
+            "contract_selection",
+            "entry",
+            "exit",
+            "position_constraints",
+            "decision_frequency",
+            "data_requirements",
+            "clock"
+          ],
+          "additionalProperties": false
+        },
+        "validation_method": {
+          "type": "string",
+          "maxLength": 5000
+        },
+        "unknowns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "maxItems": 30
+        },
+        "disposition": {
+          "type": "string",
+          "enum": [
+            "draft",
+            "reject"
+          ]
+        },
+        "implementation_task": {
+          "type": "string",
+          "maxLength": 5000
+        }
+      },
+      "required": [
+        "economic_hypothesis",
+        "failure_mechanisms",
+        "data_requirements",
+        "candidate_spec",
+        "validation_method",
+        "unknowns",
+        "disposition",
+        "implementation_task"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "action",
+    "explanation",
+    "proposal"
+  ],
+  "additionalProperties": false
+}

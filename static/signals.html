@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light">
+<title>Optimatrix · 公开信号研究</title>
+<link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/signals.css">
+<script defer src="/static/signals.js"></script>
+</head>
+<body><div class="page-shell signal-shell">
+<header class="masthead"><a class="brand" href="/">Optimatrix <span class="stage">公共信号研究</span></a><nav class="page-nav" aria-label="主导航"><a class="nav-item" href="/">策略</a><a class="nav-item is-active" href="/signals">公开信号</a><a class="nav-item" href="/operations">运行 / 数据</a></nav></header>
+<div class="mode-notice"><strong>只读公共观察</strong>Deribit 主网公开行情 · 不读取账户 · 不下单</div>
+<main>
+<noscript>请开启 JavaScript 读取已保存的公共观察状态。</noscript>
+<div class="page-heading"><div><p class="eyebrow">先把指标说清，再检查真实数据</p><h1>公开信号研究</h1><p class="subtitle">固定观察两套 4 小时规则：Supertrend 与校正版 Squeeze Momentum。只检查完整 K 线，尚无期权合约映射或可交易优势证据。</p></div><span id="study-status" class="badge badge-neutral">连接未确认</span></div>
+<p id="connection-notice" class="connection-notice" role="status" aria-live="polite">正在读取本机公共观察记录…</p>
+<section class="study-context panel" aria-label="数据来源与时间"><dl id="study-times" class="context-facts"></dl><p class="fineprint">页面每 15 秒读取缓存；后台每 60 秒检查公共行情。打开或刷新页面不会启动线程。所有时间均为 UTC。</p></section>
+<section aria-labelledby="candidates-title" class="study-section"><div class="signal-section-heading"><div><h2 id="candidates-title">两套固定观察规则</h2><p>条件成立表示研究规则的状态，不是下单指令。首次载入的历史条件不会补发为新事件。</p></div></div><div id="candidate-list" class="candidate-grid"><p class="empty-state">尚未取得候选规则及信号。</p></div></section>
+<section class="panel study-section" aria-labelledby="catalog-title"><div class="section-heading"><div><h2 id="catalog-title">12 个指标分别在看什么</h2><p>按机制、连续亏损情形和本轮采用判断逐项核对；不按历史回报排名。</p></div><span id="catalog-count" class="count-label">目录待取得</span></div><div class="table-scroll" tabindex="0" aria-label="指标解释表，可横向滚动"><table class="indicator-table"><thead><tr><th scope="col">指标</th><th scope="col">大白话解释</th><th scope="col">会连续亏损的情形</th><th scope="col">本轮判断</th></tr></thead><tbody id="catalog-rows"><tr><td colspan="4" class="empty-state">指标目录尚未取得；不填入占位结果。</td></tr></tbody></table></div></section>
+<section class="panel source-panel study-section"><h2>来源与边界</h2><div id="study-sources"><p class="fineprint">来源记录尚未取得。</p></div><p class="fineprint">链接本身不代表已取得内容。曲线规则的历史诊断、当前公共观察与测试网成交是三种不同证据，分别保存。这个页面不会创建研究、调用模型或变更执行权限。</p><p class="fineprint">20/60 日均线 Testnet 策略仍由<a href="/operations">原运行工作台</a>独立管理；本页两套观察规则不会接入其订单循环。</p><details id="raw-study"><summary>核对完整缓存记录与原始字段</summary><pre id="raw-study-content">尚未取得</pre></details></section>
+</main><footer><span>Optimatrix · 公共信号研究</span><span>完整 K 线 → 确定性计算 → 只读观察</span></footer>
+</div></body></html>

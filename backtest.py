@@ -20,6 +20,7 @@ import requests
 
 from market import iso, safe_traceback
 from btc_accounting import analyze_report
+from configuration import ConfigurationError, GREEKS_FIELDS, read_secrets
 
 BASE_URL = "https://backtest.greeks.live"
 EXPERIMENT_ID = "S2_BTC_LONG_CALL_V1"
@@ -116,21 +117,7 @@ def parameters_from_request(request):
 
 def load_config(root):
     """Consume only the two named fields. No env evaluation, interpolation or global changes."""
-    result = {}
-    try:
-        with (Path(root) / ".env").open() as source:
-            for line in source:
-                key, separator, value = line.partition("=")
-                key = key.strip()
-                if separator and key in {"GREEKS_LIVE_AUTH_TOKEN", "GREEKS_LIVE_DATA_API_KEY"}:
-                    value = value.strip()
-                    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                        value = value[1:-1]
-                    if value and len(value) <= 16384 and not any(c in value for c in "\r\n\x00"):
-                        result[key] = value
-    except FileNotFoundError:
-        pass
-    return result
+    return read_secrets(root, GREEKS_FIELDS)
 
 
 def atomic_write(path, content):
@@ -244,8 +231,8 @@ class BacktestService:
     def configuration(self):
         try:
             values = load_config(self.root)
-        except OSError:
-            return {"configured": False, "reason": "无法读取本地 Greeks.live 配置"}
+        except ConfigurationError:
+            return {"configured": False, "reason": "本机 .env 格式或权限无效；Greeks.live 配置未启用"}
         present = bool(values.get("GREEKS_LIVE_AUTH_TOKEN"))
         return {"configured": present, "reason": "回测会话字段已填写，仍需检查服务能力" if present else
                 ("已配置 CSV Data API Key；它不是已验证的回测会话。缺少 GREEKS_LIVE_AUTH_TOKEN。" if values.get("GREEKS_LIVE_DATA_API_KEY") else "缺少 .env 中的 GREEKS_LIVE_AUTH_TOKEN；公共行情不受影响")}
@@ -258,7 +245,10 @@ class BacktestService:
                     "tool_capabilities": self.tool_capabilities()}
 
     def _client(self):
-        config = load_config(self.root)
+        try:
+            config = load_config(self.root)
+        except ConfigurationError:
+            raise BacktestError(self.configuration()["reason"]) from None
         token = config.get("GREEKS_LIVE_AUTH_TOKEN")
         if not token:
             raise BacktestError(self.configuration()["reason"])

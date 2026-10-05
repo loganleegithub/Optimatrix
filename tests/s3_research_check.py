@@ -487,8 +487,9 @@ def main():
         assert client.post('/api/research/start',json={**payload,'model_calls':999},headers=headers).status_code==400
         assert not runner.calls and bt.creations==0
         accepted=client.post('/api/research/start',json=payload,headers=headers)
-        assert accepted.status_code==202
-        rid=accepted.get_json()['research_id'];wait_idle(manager)
+        assert accepted.status_code==409  # New S4A work needs a strategy/version association.
+        assert not runner.calls
+        rid=manager.start(**payload);wait_idle(manager)  # Legacy service regression, not the new UI entry.
         assert client.get('/api/research/runs/'+rid).get_json()['status']=='completed'
         assert len(client.get('/api/research/runs').get_json()['runs'])==1
         assert client.get('/research').status_code==200

@@ -16,7 +16,7 @@ import uuid
 from backtest import BacktestError, save_json, validate_experiment, request_fingerprint
 from btc_accounting import compare_fee_scenario
 from market import iso, safe_traceback
-from researcher_cli import CodexRunner, ModelError, validate_schema, check_isolation
+from researcher_cli import CodexRunner, ModelError, validate_schema, check_isolation, check_cli_compatibility
 
 DEFAULT_QUESTION = '在当前 Greeks.live 能表达的数据和策略范围内，选择一个简单 BTC inverse 期权买方实验，比较基础费用与较高费用假设下的 BTC 模型结果。回答结果有多少被成本消耗，以及为什么这仍不能证明可成交优势。'
 ACTIVE = {'preparing','model_running','requesting_experiment','waiting_backtest','reading_result','forming_conclusion'}
@@ -186,6 +186,11 @@ def build_final_presentation(task):
 
 
 def verify_action(action, task):
+    context = task.get('strategy_context') or {}
+    if context.get('purpose') in {'proposal', 'revision'}:
+        if action.get('action') != 'propose':
+            raise ValueError('形成提案只返回结构化草案，不执行回测或改写版本')
+        return
     name = action['action']
     required = {'run_backtest': {'plan','experiment'}, 'read_result': {'run_id'},
                 'compare_fees': {'plan','run_id','higher_fee_bp'}, 'finish': {'final'}}[name]
@@ -194,6 +199,8 @@ def verify_action(action, task):
             raise ValueError('动作参数与动作名称不匹配')
     if name == 'run_backtest':
         validate_experiment(action['experiment'])
+        if context and action['experiment'] != context.get('approved_experiment'):
+            raise ValueError('回测参数不等于本次批准的版本与验证条件；改变目标或规则需要新的明确批准')
     if name in {'read_result','compare_fees'} and action['run_id'] not in task['available_run_ids']:
         raise ValueError('run_id 不属于本任务可用证据')
     if name == 'compare_fees':
@@ -228,6 +235,8 @@ def verify_action(action, task):
                 raise ValueError('示范任务尚未完成预先计划的费用比较')
         if executed and not final['claims']:
             raise ValueError('执行过实验的结论必须包含可验证证据引用')
+        if context.get('purpose') == 'validation' and not executed:
+            raise ValueError('本次验证必须实际执行或明确复用已批准请求，不能用其他历史总结代替')
 
 
 class ResearchService:
@@ -265,18 +274,7 @@ class ResearchService:
                 self.storage_error = '部分研究历史损坏；保留原文件，修复前不能新建任务'
 
     def _availability(self, cli):
-        version = cli.get('version','未检测到')
-        ready = version == self.configuration['cli_version_verified'] and 'ChatGPT' in cli.get('login_status','')
-        try:
-            checked = check_isolation(shutil.which('codex')) if ready else {'passed':False}
-            verified = checked.get('passed') is True
-            save_json(self.root/'local/s3-validation/isolation-latest.json', checked)
-        except Exception:
-            verified = False
-        return {'ready': ready and verified, 'cli_version':version, 'login_status':cli.get('login_status','未检查'),
-                'isolation_status':'本机沙盒检查通过' if verified else '尚未通过本机权限检查',
-                'reason':'固定 CLI / ChatGPT 登录与本机隔离检查已确认' if ready and verified else
-                    '需要已核实 CLI 版本、ChatGPT 登录及本机权限检查；不会自动切换模型或付费 API'}
+        return check_cli_compatibility(shutil.which('codex'), self.configuration, self.root/'local/s4a-validation')
 
     def config_snapshot(self):
         return {'server_time':iso(),'csrf_token':self.csrf_token,'configuration':copy.deepcopy(self.configuration),
@@ -315,7 +313,7 @@ class ResearchService:
         with self.lock:
             return {'runs':[self.detail(t['research_id']) for t in sorted(self.tasks.values(),key=lambda t:t['created_at'],reverse=True)]}
 
-    def start(self, question, approved, idempotency_key):
+    def start(self, question, approved, idempotency_key, *, context=None, defer_launch=False):
         if approved is not True or not isinstance(question,str) or not 5 <= len(question.strip()) <= 3000:
             raise ResearchError('请填写研究问题并明确批准本次预算')
         if not isinstance(idempotency_key,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,100}', idempotency_key):
@@ -323,28 +321,57 @@ class ResearchService:
         with self.lock:
             existing = next((t for t in self.tasks.values() if t['idempotency_key']==idempotency_key), None)
             if existing:
-                if existing['question'] != question.strip():
+                if existing['question'] != question.strip() or existing.get('strategy_context') != context:
                     raise ResearchError('同一提交标识不能替换问题')
                 return existing['research_id']
             if self.active_id or self.storage_error:
                 raise ResearchError(self.storage_error or '一次只能运行一个研究任务')
             if not self.availability['ready']:
                 raise ResearchError(self.availability['reason'])
+            if context and sum(bool(t.get('strategy_context')) for t in self.tasks.values()) >= 2:
+                raise ResearchError('本轮 S4A 两项研究任务上限已用完；已有证据可继续查看，不能自动扩大预算')
             configuration = copy.deepcopy(self.configuration)
             limits = configuration['limits']
             runs = self.backtests.snapshot()['runs']
             historical = [r['run_id'] for r in runs if r.get('analysis')][:5]
+            prompt, schema = self.prompt, self.schema
+            if context:
+                if context.get('purpose') not in {'proposal', 'validation', 'revision'} or not context.get('strategy_id') or not context.get('version_id'):
+                    raise ResearchError('新研究需要明确策略、版本和目的')
+                # Unrelated runs are never silently admitted as this version's evidence.
+                historical = list(context.get('available_run_ids', []))
+                if context['purpose'] in {'proposal', 'revision'}:
+                    prompt = (self.root/'researcher/proposal-prompt.md').read_text()
+                    schema = json.loads((self.root/'researcher/proposal.schema.json').read_text())
+                    configuration.update(prompt_version='btc-proposal-v1', output_schema_version='strategy-proposal-v1', allowed_tools=['propose'])
+                configuration.update(prompt_sha256=digest(prompt), schema_sha256=digest(json.dumps(schema, sort_keys=True)))
+            configuration['runtime_compatibility'] = copy.deepcopy(self.availability)
+            configuration['cli_runtime_snapshot'] = copy.deepcopy(self.availability.get('runtime_snapshot'))
             task = {'research_id':uuid.uuid4().hex,'idempotency_key':idempotency_key,'question':question.strip(),
                 'created_at':iso(),'approved_at':iso(),'status':'preparing','configuration_snapshot':configuration,
-                'prompt_snapshot':self.prompt,'schema_snapshot':self.schema,'capabilities_snapshot':self.backtests.tool_capabilities(),
+                'prompt_snapshot':prompt,'schema_snapshot':schema,'capabilities_snapshot':self.backtests.tool_capabilities(),
                 'budget':{'model_calls_used':0,'backtest_creations_used':0,'model_calls_limit':limits['model_calls'],
                           'backtest_creations_limit':limits['backtest_creations'],'corrections_used':0},
                 'available_run_ids':historical, 'events':[], 'actions':[], 'evidence':[], 'final':None,'error':None,
                 'input_references':[], 'pending_call':None, 'elapsed_seconds':0}
+            if context:
+                task['strategy_context'] = copy.deepcopy(context)
             self.tasks[task['research_id']] = task
             self._save(task)
-            self._launch(task)
+            if not defer_launch:
+                self._launch(task)
             return task['research_id']
+
+    def launch_prepared(self, research_id):
+        """Called only after the workbench association has been durably saved."""
+        with self.lock:
+            task = self.tasks[research_id]
+            if self.active_id == research_id:
+                return research_id
+            if self.active_id or task['status'] != 'preparing' or task['budget']['model_calls_used']:
+                raise ResearchError('任务已启动或需要显式恢复，不能重复启动')
+            self._launch(task)
+            return research_id
 
     def _launch(self, task):
         self.stop_event = threading.Event()
@@ -449,12 +476,14 @@ class ResearchService:
             summary['summary_scope'] = '完整确定性汇总；逐事件原始行未送入模型，保存在关联 run 的本地文件。read_result 读取相同核对汇总，不冒充完整明细。'
             evidence.append(summary)
         return {'research_id':task['research_id'],'question':task['question'],'configuration':task['configuration_snapshot'],
+                'strategy_context':task.get('strategy_context'),
                 'budget':task['budget'],'remaining_model_calls':task['budget']['model_calls_limit']-task['budget']['model_calls_used'],
                 'remaining_backtest_creations':task['budget']['backtest_creations_limit']-task['budget']['backtest_creations_used'],
                 'workflow_requirements':{'new_real_experiment_and_verified_btc_ledger':task['question']==DEFAULT_QUESTION, 'cost_comparison':task['question']==DEFAULT_QUESTION},
                 'capabilities':task['capabilities_snapshot'],'related_history':histories,'actions':task['actions'],
                 'evidence':evidence,'evidence_updates':task.get('evidence_updates',[]),'correction':task.get('correction'),
-                'instructions':'按当前 schema 只返回一个动作；最后一次模型调用请 finish。远端结果由程序轮询，无需询问进度。费用比较可以 compare_fees，金额文字用字段引用。'}
+                'instructions':('只按当前 schema 返回 propose 草案；不要调用回测或修改版本。' if (task.get('strategy_context') or {}).get('purpose') in {'proposal','revision'} else
+                    '按当前 schema 只返回一个动作；最后一次模型调用请 finish。远端结果由程序轮询，无需询问进度。费用比较可以 compare_fees，金额文字用字段引用。')}
 
     def _model(self, task):
         budget=task['budget']
@@ -496,7 +525,11 @@ class ResearchService:
     def _execute(self, task, action):
         self._check_stop(task)
         name=action['action']
-        if name=='run_backtest':
+        if name=='propose':
+            task['model_proposal'] = copy.deepcopy(action['output']['proposal'])
+            task['status'] = 'completed'
+            self._event(task,'completed','结构化提案已保存；需人类检查后应用到草案，未修改规则或批准策略')
+        elif name=='run_backtest':
             self._state(task,'requesting_experiment','普通程序校验实验参数与预算；实验假设已先保存')
             def reserve():
                 with self.lock:
@@ -587,7 +620,8 @@ class ResearchService:
                         task['pending_call']=None
                         self._event(task,'accounting_refreshed',note)
             # First authorized run checks current capability before its first model call.
-            if task['budget']['model_calls_used']==0 and not task['actions'] and self.backtests.snapshot()['capabilities']['status'] != 'ready':
+            purpose = (task.get('strategy_context') or {}).get('purpose')
+            if purpose not in {'proposal','revision'} and task['budget']['model_calls_used']==0 and not task['actions'] and self.backtests.snapshot()['capabilities']['status'] != 'ready':
                 self._ensure_capabilities(task)
             while task['status']!='completed':
                 self._check_stop(task)
@@ -611,8 +645,8 @@ class ResearchService:
                         raise ModelError('invalid_output',str(error)) from None
                     raise
                 action={'step':len(task['actions'])+1,'action':output['action'],'model_explanation':output['explanation'],
-                    'output':output,'plan':output['plan'],'request':output['experiment'],'run_id':output['run_id'],
-                    'higher_fee_bp':output['higher_fee_bp'],'status':'pending','created_at':iso()}
+                    'output':output,'plan':output.get('plan'),'request':output.get('experiment'),'run_id':output.get('run_id'),
+                    'higher_fee_bp':output.get('higher_fee_bp'),'status':'pending','created_at':iso()}
                 with self.lock:
                     task['actions'].append(action)
                     task['pending_call']=None

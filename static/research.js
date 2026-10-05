@@ -28,7 +28,7 @@
   else root.OptimatrixResearchView = helpers;
 })(globalThis);
 
-/* Polling is read-only. Research starts or resumes only after an explicit click. */
+/* Polling is read-only. This history page can stop/resume existing tasks; new research belongs to a strategy version. */
 (function () {
   "use strict";
   if (typeof document === "undefined") return;
@@ -37,8 +37,7 @@
   const state = {
     config: null, workspace: null, runs: [], detail: null,
     selected: new URLSearchParams(location.search).get("research_id"),
-    posting: false, online: false, lastReceived: null, startKey: null,
-    questionInitialized: false, renderedDetailSignature: null
+    posting: false, online: false, lastReceived: null, renderedDetailSignature: null
   };
   const labels = {
     local_revalidation: "本地结论重新校验", model_ledger_verified: "模型账本已核对",
@@ -77,11 +76,7 @@
     "fee_comparison.base_cost_as_premium_pct": "%", "fee_comparison.higher_cost_as_premium_pct": "%",
     "fee_comparison.base_fee_bp": "bp", "fee_comparison.higher_fee_bp": "bp"
   };
-  let pollTimer = null, polling = false, forcePoll = false, pendingSubmission = null;
-  try {
-    const saved = JSON.parse(sessionStorage.getItem("optimatrix-pending-research") || "null");
-    if (saved && typeof saved.question === "string" && typeof saved.key === "string" && /^[A-Za-z0-9_-]{8,100}$/.test(saved.key)) pendingSubmission = saved;
-  } catch (_) { /* Backend remains authoritative when storage is unavailable. */ }
+  let pollTimer = null, polling = false, forcePoll = false;
 
   function make(tag, value, className) {
     const node = document.createElement(tag);
@@ -170,11 +165,6 @@
     history.replaceState(null, "", url);
   }
   function amount(value) { return present(value) ? `${value} BTC` : "未知"; }
-  function clearPending() {
-    state.startKey = null;
-    pendingSubmission = null;
-    try { sessionStorage.removeItem("optimatrix-pending-research"); } catch (_) {}
-  }
   function evidenceField(evidence, path) {
     if (typeof path !== "string" || !/^[a-zA-Z0-9_.]+$/.test(path)) return undefined;
     let value = evidence;
@@ -270,20 +260,6 @@
   }
 
   function controls() {
-    const ready = state.online && state.config && state.config.availability && state.config.availability.ready === true;
-    const active = state.runs.some((run) => run.can_stop === true || ["queued", "preparing", "running", "model_running", "requesting_experiment", "waiting_backtest", "reading_result", "forming_conclusion", "finalizing", "stopping"].includes(run.status));
-    const question = $("research-question"), approved = $("approve-budget");
-    if (question) question.disabled = !state.config || state.posting;
-    if ($("use-example")) $("use-example").disabled = !state.config || state.posting;
-    if (approved) approved.disabled = !ready || active || state.posting;
-    if ($("start-research")) $("start-research").disabled = !ready || active || state.posting || !approved || !approved.checked || !question || !question.value.trim();
-    text("start-reason", !state.online ? "连接未确认，暂时不能开始或恢复。"
-      : !ready ? (state.config.availability && state.config.availability.reason) || "配置尚未就绪。"
-      : active ? "已有研究正在运行。"
-      : state.posting ? "正在提交，请勿重复点击。"
-      : !question.value.trim() ? "请填写研究问题。"
-      : !approved.checked ? "核对问题与预算后，勾选本次授权。"
-      : "预算上限由程序执行；关闭页面不会停止任务。");
     if ($("stop-research")) {
       $("stop-research").hidden = !state.detail || state.detail.can_stop !== true;
       $("stop-research").disabled = !state.online || state.posting || !state.detail || state.detail.can_stop !== true;
@@ -296,7 +272,7 @@
 
   function renderConfig() {
     const config = configSnapshot(), availability = state.config.availability || {}, limits = config.limits || {}, capability = state.config.capabilities || {};
-    badge($("researcher-availability"), availability.ready ? "可开始研究" : "尚未就绪", availability.ready === true);
+    badge($("researcher-availability"), availability.ready ? "研究配置可用" : "尚未就绪", availability.ready === true);
     text("availability-reason", availability.reason || "可用性未确认。");
     text("config-model", `${display(config.model)} / ${display(config.reasoning_effort)} · ${display(config.speed, "速度未记录")}`);
     text("config-prompt", `${display(config.prompt_version)} / ${display(config.output_schema_version)}`);
@@ -316,11 +292,7 @@
     text("capabilities-pricing", [capability.price_source, capability.fee_basis].filter(present).join("；") || "价格与费用来源未确认。");
     text("config-json", display(config));
     text("budget-summary", `最多 ${display(limits.model_calls)} 次模型调用 / ${display(limits.backtest_creations)} 次新远端回测创建尝试。\n单次模型超时 ${display(limits.model_timeout_seconds)} 秒；任务超时 ${display(limits.task_timeout_seconds)} 秒。`);
-    if (!state.questionInitialized && typeof state.config.default_question === "string") {
-      $("research-question").value = pendingSubmission ? pendingSubmission.question : state.config.default_question;
-      if (pendingSubmission) state.startKey = pendingSubmission.key;
-      state.questionInitialized = true;
-    }
+
   }
 
   function renderHistory() {
@@ -638,32 +610,13 @@
       if (!result.research_id && !result.status) throw new Error("操作响应不完整，请先查看历史记录");
       if (result.research_id) { state.selected = result.research_id; updateUrl(); }
       message.textContent = "操作已受理，以保存的任务状态为准。";
-      if (path === "/api/research/start") { $("approve-budget").checked = false; clearPending(); }
     } catch (error) {
       message.className = "action-message is-error";
       message.textContent = error.name === "AbortError" || error instanceof TypeError
-        ? "操作结果未知，请先查看历史。相同问题保留本次提交标识，不自动重发或扩大预算。" : `操作未完成：${error.message}`;
+        ? "操作结果未知，请先核对任务状态；不会自动重发或扩大预算。" : `操作未完成：${error.message}`;
     } finally { state.posting = false; controls(); poll(); }
   }
 
-  const setup = $("setup-details");
-  if (setup) setup.addEventListener("toggle", () => text("setup-toggle-badge", setup.open ? "收起" : "展开"));
-  $("research-question").addEventListener("input", () => { clearPending(); $("approve-budget").checked = false; controls(); });
-  $("approve-budget").addEventListener("change", controls);
-  $("use-example").addEventListener("click", () => {
-    if (!state.config) return;
-    $("research-question").value = state.config.default_question || "";
-    $("approve-budget").checked = false;
-    clearPending();
-    controls();
-  });
-  $("start-research").addEventListener("click", () => {
-    if ($("start-research").disabled) return;
-    state.startKey = state.startKey || (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    const question = $("research-question").value.trim();
-    try { sessionStorage.setItem("optimatrix-pending-research", JSON.stringify({key: state.startKey, question})); } catch (_) {}
-    post("/api/research/start", {question, approved: true, idempotency_key: state.startKey});
-  });
   $("research-select").addEventListener("change", () => selectResearch($("research-select").value));
   $("stop-research").addEventListener("click", () => { if (!$("stop-research").disabled) post(`/api/research/runs/${encodeURIComponent(state.selected)}/stop`, {}); });
   $("resume-research").addEventListener("click", () => { if (!$("resume-research").disabled) post(`/api/research/runs/${encodeURIComponent(state.selected)}/resume`, {}); });

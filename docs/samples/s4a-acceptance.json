@@ -1,0 +1,184 @@
+{
+  "stage": "S4A",
+  "recorded_at": "2026-10-01T18:10:17.819578+00:00",
+  "baseline_commit": "f6264db01f7a36a4a3a49040d900453e28a779ac",
+  "status": "implementation_and_offline_browser_flow_complete; real_new_research_and_human_decision_pending_page_approval",
+  "authorization": {
+    "s4b": false,
+    "trading": false,
+    "commit_or_push": false
+  },
+  "consumption": {
+    "compatibility_probe_calls": 1,
+    "compatibility_probe_limit": 1,
+    "new_real_research_tasks": 0,
+    "new_real_research_limit": 2,
+    "research_model_calls": 0,
+    "new_remote_backtest_creations": 0,
+    "per_task_limits": {
+      "model_calls": 6,
+      "remote_creations": 2
+    }
+  },
+  "historical_integrity": {
+    "baseline_files": 98,
+    "unchanged": 96,
+    "changed_capability_cache_files": [
+      "local/backtests/capabilities.json",
+      "local/backtests/metadata.raw.json"
+    ],
+    "original_research_and_run_records_unchanged": true
+  },
+  "real_historical_association": {
+    "name": "S3 单腿 Call 成本研究 · 历史项",
+    "strategy_id": "b642aea042da49178bed95c0fb8d96fd",
+    "version_id": "e75b8d8182854f01924839ebc44ce02d",
+    "version_label": "v1",
+    "version_status": "frozen",
+    "validation_id": "f69dd16cd17d4e0aadf6b39af3d97037",
+    "research_id": "bde2026f95b24da5bea7ce8ca80755e8",
+    "run_ids": [
+      "47244e3c2dc44c5981cb145708c53e5d"
+    ],
+    "data_role": "already_seen",
+    "date_range": [
+      "2026-08-31",
+      "2026-09-27"
+    ],
+    "evidence_type": "model_backtest",
+    "currency": "BTC",
+    "price_basis": "SABR/WV4 理论模型价；7 天目标期限与行权价由曲面确定，不是可成交 bid/ask。",
+    "quantity_btc": 0.01,
+    "closed_lots": 20,
+    "daily_chart_points": 28,
+    "daily_source_sha256": "4827d5d5d1baf58b3c46cac757df54bb1d8207c99e563689a481b436284dbfa6",
+    "raw_daily_last_cumulative_btc": "0.00002482659608703262",
+    "ledger_base_net_btc": "0.00002482659608703263",
+    "ledger_higher_fee_net_btc": "-0.00013517340391296737",
+    "base_fee_bp": "1",
+    "higher_fee_bp": "5",
+    "chart_math": "Daily CSV and event ledger reconciled within the existing decimal tolerance. Fee pressure uses the same ledger; no stress daily curve is fabricated.",
+    "human_decisions": [],
+    "executable_edge_established": false
+  },
+  "h1": {
+    "strategy_id": "9506f7b60f4149cdb9f2117b00446294",
+    "version_id": "98d98add4b324af8bdafd918b6041bbe",
+    "source_content_status": "provided",
+    "source_content_sha256": "9c08a87caf1340febccb037c9750fd54e0c96cdc9276cd3eec6ff54e40e143b8",
+    "state": "draft_incomplete_pending_implementation",
+    "real_research_started": false,
+    "validation_records": 0,
+    "human_decisions": 0,
+    "scope": "BTC inverse; needs trade direction and synchronous neighboring order books; surface-model backtest cannot validate H1"
+  },
+  "offline_browser_flow": {
+    "classification": "synthetic_software_acceptance_only_not_strategy_improvement",
+    "url": "http://127.0.0.1:8766/strategies?strategy_id=b0e9dcdd9df24ccbbf314f24da5ae059",
+    "strategy_id": "b0e9dcdd9df24ccbbf314f24da5ae059",
+    "versions": [
+      {
+        "version_id": "de094fe41eeb472aba0c4dba25b5418a",
+        "label": "v1",
+        "parent_version": null,
+        "status": "frozen"
+      },
+      {
+        "version_id": "d56597af515a469f9c17337b482dbcc7",
+        "label": "v2",
+        "parent_version": "de094fe41eeb472aba0c4dba25b5418a",
+        "status": "frozen"
+      }
+    ],
+    "validations": [
+      {
+        "validation_id": "ea31fdae3b1b4163bda32c699bf491ce",
+        "version_id": "de094fe41eeb472aba0c4dba25b5418a",
+        "run_ids": [
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        "research_id": null,
+        "data_role": "already_seen"
+      },
+      {
+        "validation_id": "ce7438b786de451e98d7845072b8d3c2",
+        "version_id": "d56597af515a469f9c17337b482dbcc7",
+        "run_ids": [
+          "00000000000000000000000000000001"
+        ],
+        "research_id": "058a045101b9403996388e3acad39ba9",
+        "data_role": "research"
+      }
+    ],
+    "decisions": [
+      {
+        "decision_id": "67249ca1c18e4d4d9644619007ef2335",
+        "version_id": "de094fe41eeb472aba0c4dba25b5418a",
+        "action": "continue_validation",
+        "review_kind": "engineering_repair",
+        "actor": "离线验收程序（非真实人类决定）",
+        "evidence_refs": [
+          "ea31fdae3b1b4163bda32c699bf491ce"
+        ]
+      }
+    ],
+    "steps": [
+      "save engineering review",
+      "create v2 with only Delta changed from 0.4 to 0.3",
+      "reject seen range relabeled unseen",
+      "approve synthetic retest as research segment",
+      "show v2 result and comparable-condition chart",
+      "reload and reopen history"
+    ],
+    "real_model_calls": 0,
+    "real_remote_creations": 0,
+    "temporary_store": true,
+    "temporary_store_deleted_after_export": true
+  },
+  "browser_acceptance": {
+    "desktop_viewport": [
+      1365,
+      900
+    ],
+    "narrow_viewport": [
+      390,
+      844
+    ],
+    "narrow_document_width_px": 390,
+    "narrow_overflow_fixed": true,
+    "screenshots": [
+      "docs/evidence/s4a-strategies-desktop.jpg",
+      "docs/evidence/s4a-history-desktop.jpg",
+      "docs/evidence/s4a-history-narrow.jpg",
+      "docs/evidence/s4a-offline-revision.jpg",
+      "docs/evidence/s4a-proposal-approval.jpg"
+    ],
+    "limitations": [
+      "No new real research was approved by the human during this acceptance session.",
+      "Saved real human decision remains pending; synthetic decision is not counted."
+    ]
+  },
+  "service_checks": {
+    "greeks_live": [
+      {
+        "at": "2026-10-01T17:57:55.573Z",
+        "status": "connection_failed_or_timeout"
+      },
+      {
+        "at": "2026-10-01T18:01:11.462Z",
+        "status": "ready",
+        "coverage": [
+          "2019-06-15",
+          "2026-09-30"
+        ]
+      }
+    ],
+    "remote_creations": 0
+  },
+  "pending": [
+    "Human page approval for a new real research task",
+    "A real validation tied to the selected fixed version in the new workflow",
+    "Human review and saved decision; no automatic profitable revision"
+  ],
+  "s4b_attachment": "future observation/shadow evidence refers to existing strategy_id, frozen version_id and implementation; findings use existing revision evidence entry; no Shadow records created"
+}

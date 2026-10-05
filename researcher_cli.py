@@ -1,6 +1,7 @@
 """Noninteractive ChatGPT CLI adapter. No credential files are opened here."""
 from __future__ import annotations
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -8,6 +9,7 @@ import signal
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timezone
 
 from backtest import save_json, atomic_write
 
@@ -16,6 +18,25 @@ DISABLED_FEATURES = ('apps', 'plugins', 'hooks', 'memories', 'goals', 'multi_age
                      'in_app_browser', 'shell_snapshot', 'skill_mcp_dependency_install',
                      'skill_search', 'tool_suggest', 'unbounded_connection_retries', 'view_image',
                      'workspace_dependencies')
+
+# Explicitly reviewed releases, never a range or a caller-provided allowlist.
+# The previous release remains documented; it is not silently substituted for
+# the CLI configuration saved with a running task.
+VERIFIED_CLI_RELEASES = {
+    '0.158.0-alpha.2.1': 's3-named-permissions-v1',
+    '0.159.2': 's4a-named-permissions-v1',
+}
+REQUIRED_EXEC_FLAGS = ('--ignore-user-config', '--ignore-rules', '--ephemeral',
+                       '--skip-git-repo-check', '--json', '--color', '--model',
+                       '--cd', '--output-schema', '--output-last-message')
+OFFICIAL_COMPATIBILITY_SOURCES = [
+    'https://learn.chatgpt.com/docs/developer-commands?surface=cli',
+    'https://learn.chatgpt.com/docs/auth',
+    'https://learn.chatgpt.com/docs/non-interactive-mode',
+    'https://learn.chatgpt.com/docs/permissions',
+    'https://learn.chatgpt.com/docs/config-file/config-reference',
+    'https://developers.openai.com/api/docs/models/gpt-6-astra',
+]
 
 
 class ModelError(Exception):
@@ -92,6 +113,89 @@ def cli_overrides(workspace, prompt_path, config):
     return values
 
 
+def _cli_read(executable, arguments, workspace):
+    result = subprocess.run([executable, *arguments], capture_output=True, text=True,
+                            timeout=20, cwd=workspace, env=clean_environment(workspace))
+    if result.returncode != 0:
+        raise ValueError('CLI 只读检查未成功：' + ' '.join(arguments[:3]))
+    return result.stdout + result.stderr
+
+
+def check_cli_identity(executable, config):
+    """No inference: fail closed on version/login drift before every model call."""
+    if not executable:
+        raise ValueError('未找到 Codex CLI')
+    raw = _cli_read(executable, ['--version'], tempfile.gettempdir())
+    match = re.fullmatch(r'codex-cli ([0-9A-Za-z.+-]+)', raw.strip())
+    actual = match.group(1) if match else 'unrecognized'
+    if actual not in VERIFIED_CLI_RELEASES or actual != config.get('cli_version_verified'):
+        raise ValueError('CLI 版本未核实或与任务配置不同：' + actual)
+    if (config.get('model'), config.get('reasoning_effort'), config.get('service_tier')) != ('gpt-6-astra', 'high', 'default'):
+        raise ValueError('固定 researcher 模型、推理或速度配置不匹配')
+    login = _cli_read(executable, ['login', 'status'], tempfile.gettempdir())
+    if login.strip() != 'Logged in using ChatGPT':
+        raise ValueError('需要 ChatGPT 订阅登录；不接受 API key 或其他认证')
+    return {'cli_version': actual, 'login_status': 'Logged in using ChatGPT',
+            'compatibility_profile': VERIFIED_CLI_RELEASES[actual]}
+
+
+def check_cli_compatibility(executable, config, evidence_dir=None):
+    """Check exact CLI capabilities and real sandbox, without a model request.
+
+    Catalog presence is metadata evidence only, not proof of live entitlement.
+    Startup failure disables research while callers can keep history available.
+    """
+    snapshot = {'checked_at': datetime.now(timezone.utc).isoformat(),
+                'model_calls': 0, 'official_sources': OFFICIAL_COMPATIBILITY_SOURCES,
+                'model': config.get('model'), 'reasoning_effort': config.get('reasoning_effort'),
+                'service_tier': config.get('service_tier'), 'authentication': 'chatgpt_subscription',
+                'evidence_reference': 'docs/samples/s4a-cli-compatibility.json'}
+    status = {'ready': False, 'cli_version': '未检测到', 'login_status': '未检查',
+              'isolation_status': '尚未通过本机权限检查', 'runtime_snapshot': snapshot}
+    try:
+        identity = check_cli_identity(executable, config)
+        status.update(cli_version=identity['cli_version'], login_status=identity['login_status'])
+        snapshot.update(identity)
+        with tempfile.TemporaryDirectory(prefix='optimatrix-compat-') as temporary:
+            workspace = Path(temporary).resolve()
+            prompt_path = workspace / 'prompt.md'
+            prompt_path.write_text('Compatibility metadata check only. No research.\n')
+            help_text = _cli_read(executable, ['exec', '--help'], workspace)
+            if not all(flag in help_text for flag in REQUIRED_EXEC_FLAGS):
+                raise ValueError('CLI 缺少必要的非交互参数')
+            sandbox_help = _cli_read(executable, ['sandbox', '--help'], workspace)
+            if '--permission-profile' not in sandbox_help or '--cd' not in sandbox_help:
+                raise ValueError('CLI 缺少已验证的命名权限机制')
+            overrides = cli_overrides(workspace, prompt_path, config)
+            args = ['debug', 'models', '--bundled']
+            for value in overrides:
+                args += ['-c', value]
+            # Uses bundled catalog, never refreshes through a paid model API.
+            catalog = json.loads(_cli_read(executable, args, workspace))
+            models = catalog.get('models', []) if isinstance(catalog, dict) else catalog
+            model = next((m for m in models if isinstance(m, dict) and m.get('slug') == config['model']), None)
+            if not model or config['reasoning_effort'] not in [v['effort'] for v in model.get('supported_reasoning_levels', [])]:
+                raise ValueError('本机目录未确认固定模型及推理级别')
+            snapshot.update(exec_flags=list(REQUIRED_EXEC_FLAGS),
+                exec_help_sha256=hashlib.sha256(help_text.encode()).hexdigest(),
+                sandbox_help_sha256=hashlib.sha256(sandbox_help.encode()).hexdigest(),
+                model_catalog={'source': 'codex debug models --bundled', 'slug': model['slug'],
+                    'reasoning_levels': [v['effort'] for v in model['supported_reasoning_levels']],
+                    'live_entitlement_verified': False},
+                overrides=[v.replace(str(workspace), '<prepared_input>') for v in overrides])
+        isolation = check_isolation(executable)
+        snapshot['isolation'] = isolation
+        if isolation.get('passed') is not True:
+            raise ValueError('本机实际沙盒检查未通过')
+        status.update(ready=True, isolation_status='本机沙盒检查通过',
+                      reason='固定 CLI、ChatGPT 登录、模型目录与本机隔离检查已确认')
+    except (OSError, ValueError, KeyError, TypeError, StopIteration, subprocess.SubprocessError) as error:
+        status['reason'] = str(error)[:240] or 'CLI 兼容检查失败；不会切换模型或认证方式'
+    if evidence_dir is not None:
+        save_json(Path(evidence_dir) / 'compatibility-latest.json', status)
+    return status
+
+
 def terminate_owned(process):
     if process.poll() is None:
         try:
@@ -112,6 +216,10 @@ class CodexRunner:
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         save_json(directory / 'input.json', input_data)
+        try:
+            identity = check_cli_identity(self.executable, config)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            raise ModelError('cli_incompatible', str(error)[:240]) from None
         # Do not inherit project AGENTS, ~/.agents, cwd, shell startup files or app environment.
         with tempfile.TemporaryDirectory(prefix='optimatrix-research-') as temporary:
             workspace = Path(temporary).resolve()
@@ -126,6 +234,7 @@ class CodexRunner:
                 args += ['-c', value]
             args += ['-']
             save_json(directory / 'invocation.json', {'argv': args, 'configuration': config,
+                'actual_cli_identity': identity,
                 'environment_keys': sorted(clean_environment(workspace)), 'workspace': str(workspace)})
             started = time.monotonic()
             with (directory / 'events.jsonl').open('w') as events, (directory / 'stderr.txt').open('w') as errors:

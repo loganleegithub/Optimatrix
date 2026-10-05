@@ -129,7 +129,7 @@ class WorkspaceTests(unittest.TestCase):
         research.storage_error = "fixture damaged history"
         client = create_app(self.market, self.backtests, research).test_client()
         self.assertEqual(client.get("/api/workspace").json["agents"]["storage_error"], research.storage_error)
-        for url, name in (("/", "research.html"), ("/research", "research.html"), ("/market", "index.html"), ("/backtest", "backtest.html")):
+        for url, name in (("/", "strategies.html"), ("/research", "research.html"), ("/market", "index.html"), ("/backtest", "backtest.html")):
             with client.get(url) as response:
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(response.data, (Path(__file__).parents[1] / "static" / name).read_bytes())

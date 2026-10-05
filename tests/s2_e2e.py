@@ -353,6 +353,7 @@ def check_corrupt_history():
     with TemporaryDirectory(prefix="optimatrix-s2-corrupt-") as directory, FixtureService("success_with_gaps") as fixture:
         root = Path(directory)
         (root / ".env").write_text("GREEKS_LIVE_AUTH_TOKEN=" + FIXTURE_TOKEN + "\n", encoding="utf-8")
+        (root / ".env").chmod(0o600)
         history = root / "local" / "backtests" / "corrupted-run" / "run.json"
         history.parent.mkdir(parents=True)
         history.write_text('{"run_id":"interrupted-write",', encoding="utf-8")
@@ -381,6 +382,7 @@ def check_scenario(scenario):
     with TemporaryDirectory(prefix="optimatrix-s2-run-") as directory, FixtureService(scenario) as fixture:
         root = Path(directory)
         (root / ".env").write_text("GREEKS_LIVE_AUTH_TOKEN=" + FIXTURE_TOKEN + "\n", encoding="utf-8")
+        (root / ".env").chmod(0o600)
         manager = BacktestService(root, client_factory=fixture.factory, poll_seconds=0.05)
         try:
             with local_app(manager) as (session, base):

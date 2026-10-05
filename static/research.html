@@ -2,18 +2,18 @@
 <html lang="zh-Hans">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light">
-<title>Optimatrix · 工作台</title>
+<title>Optimatrix · 研究历史</title>
 <link rel="stylesheet" href="/static/style.css"><link rel="stylesheet" href="/static/research.css">
 <script defer src="/static/research.js"></script>
 </head>
 <body>
 <div class="page-shell workbench-shell">
 <header class="masthead">
-<a class="brand" href="/">Optimatrix <span class="stage">S3 · 本机研究</span></a>
-<nav class="page-nav" aria-label="主导航"><span class="nav-item is-active" aria-current="page">工作台</span><a class="nav-item" href="/market">行情</a><a class="nav-item" href="/backtest">回测记录</a></nav>
+<a class="brand" href="/">Optimatrix <span class="stage">S4A · 研究历史工具</span></a>
+<nav class="page-nav" aria-label="主导航"><a class="nav-item" href="/">策略</a><span class="nav-item is-active" aria-current="page">研究历史</span><a class="nav-item" href="/market">行情</a><a class="nav-item" href="/backtest">回测记录</a></nav>
 </header>
 <main>
-<div class="page-heading"><div><h1>BTC 研究</h1><p class="subtitle">单 researcher · 未连接账户 · 无交易授权</p></div><span id="backend-status" class="badge badge-warning" role="status">正在确认服务</span></div>
+<div class="page-heading"><div><h1>BTC 研究历史</h1><p class="subtitle">单 researcher · 未连接账户 · 无交易授权</p></div><span id="backend-status" class="badge badge-warning" role="status">正在确认服务</span></div>
 <noscript><p class="error-notice">请开启 JavaScript，以读取真实业务状态。</p></noscript>
 <p id="connection-notice" class="connection-notice" role="status">尚未收到本地服务响应。</p>
 <p id="action-message" class="action-message" role="status" hidden></p>
@@ -33,24 +33,18 @@
 <section class="business-section approvals-section" aria-labelledby="approvals-title">
 <div class="business-heading"><h2 id="approvals-title">待批准事项</h2><span class="section-context">由人类决定</span></div>
 <div id="workspace-approvals"><p class="muted-copy">尚未取得待批准事项。</p></div>
-<details id="setup-details" class="business-disclosure"><summary>发起研究 · 批准调用预算</summary>
+<p class="body-copy">新研究需要明确策略、版本和本次目的。请在策略详情中批准有限研究预算。</p>
+<a class="button" href="/">前往策略工作台</a>
+<details id="config-details" class="business-disclosure"><summary>固定研究配置与工具范围</summary>
 <div class="setup-body">
-<label for="research-question" class="question-label">本次问题</label>
-<textarea id="research-question" rows="5" maxlength="3000" placeholder="输入本次要验证的问题" disabled></textarea>
-<button id="use-example" class="button button-secondary" type="button" disabled>使用示范问题</button>
 <dl class="configuration-facts"><div><dt>固定模型</dt><dd id="config-model">未取得</dd></div></dl>
 <div id="budget-summary" class="budget-box">等待后端预算。</div>
-<label class="approval-label"><input id="approve-budget" type="checkbox" disabled><span>批准此问题与研究调用预算。</span></label>
-<p class="fineprint">批准后只启动本次研究，不改变策略、持仓或交易权限。关闭页面不会停止已启动的任务。</p>
-<button id="start-research" class="button" type="button" disabled>批准并开始研究</button>
-<p id="start-reason" class="fineprint">等待配置与服务确认。</p>
-<details class="business-disclosure"><summary>工具范围与运行环境</summary>
 <span id="researcher-availability" class="badge badge-neutral">未确认</span><p id="availability-reason" class="body-copy"></p>
 <dl class="configuration-facts"><div><dt>Prompt / 结构</dt><dd id="config-prompt">未取得</dd></div><div><dt>CLI / 登录</dt><dd id="config-cli">未取得</dd></div><div><dt>权限检查</dt><dd id="config-isolation">未确认</dd></div><div><dt>研究工具</dt><dd id="config-tools">未取得</dd></div></dl>
 <ul id="capabilities-readable" class="plain-list"><li>范围未取得。</li></ul><p id="capabilities-pricing" class="fineprint"></p>
 <details class="json-detail"><summary>完整工具范围</summary><pre id="config-capabilities"></pre></details>
 <details class="json-detail"><summary>固定配置</summary><pre id="config-json"></pre></details>
-</details></div></details>
+</div></details>
 </section>
 <section class="business-section agents-section" aria-labelledby="agents-title">
 <div class="business-heading"><h2 id="agents-title">Agent 工作</h2><span id="research-count" class="section-context">尚未读取</span></div>
@@ -67,7 +61,7 @@
 </div></section>
 </div>
 </main>
-<footer><span>Optimatrix · S3</span><span id="workspace-updated">状态尚未确认</span></footer>
+<footer><span>Optimatrix · S4A 历史工具</span><span id="workspace-updated">状态尚未确认</span></footer>
 </div>
 </body>
 </html>

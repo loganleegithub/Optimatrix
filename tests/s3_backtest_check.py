@@ -59,6 +59,7 @@ def main():
     checked.append("parameter_allowlist")
     with tempfile.TemporaryDirectory() as temp:
         root=Path(temp);(root/".env").write_text("GREEKS_LIVE_AUTH_TOKEN=offline-fixture\n")
+        (root/".env").chmod(0o600)
         client=FixtureClient();service=BacktestService(root,client_factory=lambda _:client,poll_seconds=.01)
         service.check_connection();wait(service)
         legacy=service.submit(EXPERIMENT_ID);wait(service)

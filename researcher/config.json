@@ -4,9 +4,31 @@
   "reasoning_effort": "high",
   "speed": "standard",
   "service_tier": "default",
-  "prompt_version": "btc-researcher-v2",
+  "prompt_version": "btc-researcher-v3",
   "output_schema_version": "research-action-v2",
-  "allowed_tools": ["read_result", "run_backtest", "compare_fees", "finish"],
-  "limits": {"model_calls": 6, "backtest_creations": 2, "model_timeout_seconds": 240, "task_timeout_seconds": 1200},
-  "cli_version_verified": "0.158.0-alpha.2.1"
+  "allowed_tools": [
+    "read_result",
+    "run_backtest",
+    "compare_fees",
+    "finish"
+  ],
+  "limits": {
+    "model_calls": 6,
+    "backtest_creations": 2,
+    "model_timeout_seconds": 240,
+    "task_timeout_seconds": 1200
+  },
+  "cli_version_verified": "0.159.2",
+  "cli_compatibility_history": [
+    {
+      "version": "0.158.0-alpha.2.1",
+      "evidence": "docs/stages/S3.md",
+      "status": "historically_verified"
+    },
+    {
+      "version": "0.159.2",
+      "evidence": "docs/samples/s4a-cli-compatibility.json",
+      "status": "current_verified"
+    }
+  ]
 }
